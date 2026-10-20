@@ -7,11 +7,17 @@ import dev.t2u.media.StreamEntry
 import dev.t2u.media.StreamSource
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
+import java.net.URI
 
 /**
  * SPK-05 instrument: the Ktor media server and the youtubedl-android ffmpeg on the phone.
@@ -26,7 +32,7 @@ import java.io.File
  */
 class MediaFeature : SpikeFeature {
     override val name = "media"
-    override val commands: Set<String> = setOf("media-start", "media-stop")
+    override val commands: Set<String> = setOf("media-start", "media-stop", "pipe-test")
 
     private val jobLock = Mutex()
     private var host: SpikeHost? = null
@@ -51,6 +57,7 @@ class MediaFeature : SpikeFeature {
 
     override fun handle(cmd: String, args: Map<String, String>): CommandReply = when (cmd) {
         "media-start" -> startJob("media-start") { runMediaStart() }
+        "pipe-test" -> handlePipeTest(args)
         "media-stop" -> {
             stopServer()
             CommandReply(true, """{"stopped":true}""")
@@ -76,7 +83,7 @@ class MediaFeature : SpikeFeature {
         val srv = ensureServer(h)
         val sine = ensureSine(h)
         val path = srv.register(StreamEntry(StreamSource.FileSource(sine), "mp4", "audio/mp4", "sine-file"))
-        writeTokens(h, "sine", srv, listOf(Token("sine-file", path, "mp4", "audio/mp4")))
+        writeTokens(h, "sine", srv, listOf(Token("sine-file", path, "mp4", "audio/mp4", "file")))
         h.evidence.event("cmd-done", mapOf("cmd" to "media-start", "base" to base(srv), "tokens" to 1))
     }
 
@@ -125,16 +132,130 @@ class MediaFeature : SpikeFeature {
         h?.evidence?.event("media-server", mapOf("state" to "stopped"))
     }
 
+
+    // ----- pipe-test -----------------------------------------------------------------------------------
+
+    /** What an input contributes: the ffmpeg input side and, when it is already an AAC-in-MP4 file, a direct file token. */
+    private class PipeInput(val name: String, val args: List<String>, val m4aFile: File?, val source: String?)
+
+    /** Replies at once with the reason when the input cannot be built; ffmpeg is never started in that case. */
+    private fun handlePipeTest(args: Map<String, String>): CommandReply {
+        val h = host ?: return reply("not started")
+        val input = args["input"] ?: "sine"
+        if (input != "sine" && input != "download" && input != "url") return reply("input must be sine, download or url")
+        val built = when (input) {
+            "download" -> buildDownloadInput(h)
+            "url" -> buildUrlInput(h)
+            else -> PipeInputResult(null, null)
+        }
+        built.error?.let { return CommandReply(false, it) }
+        return startJob("pipe-test:$input") { runPipeTest(h, input, built.input) }
+    }
+
+    private class PipeInputResult(val input: PipeInput?, val error: String?)
+
+    private fun fail(message: String) = PipeInputResult(null, buildJsonObject { put("error", message) }.toString())
+
+    private fun readJson(file: File): JsonObject? = try {
+        if (file.isFile) Json.parseToJsonElement(file.readText()).jsonObject else null
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun fileInputArgs(file: File) = listOf("-hide_banner", "-loglevel", "error", "-i", file.absolutePath, "-vn")
+
+    private fun buildDownloadInput(h: SpikeHost): PipeInputResult {
+        val json = readJson(File(h.spikeDir, "last-download.json"))
+        val path = json?.get("path")?.jsonPrimitive?.contentOrNull
+        if (path.isNullOrEmpty()) return fail("no download yet")
+        val file = File(path)
+        if (!file.isFile) return fail("no download yet")
+        // The path must canonicalise under app storage (threat T-01-15).
+        val canonical = file.canonicalFile.toPath()
+        val roots = listOf(h.context.filesDir, h.context.cacheDir).map { it.canonicalFile.toPath() }
+        if (roots.none { canonical.startsWith(it) }) return fail("path outside app storage")
+        val m4a = file.takeIf { it.extension.lowercase() in setOf("m4a", "mp4") }
+        return PipeInputResult(PipeInput("download", fileInputArgs(file), m4a, null), null)
+    }
+
+    private fun buildUrlInput(h: SpikeHost): PipeInputResult {
+        val json = readJson(File(h.spikeDir, "last-resolve.json"))
+        val url = json?.get("url")?.jsonPrimitive?.contentOrNull
+        if (url.isNullOrEmpty()) return fail("no resolve result yet")
+        val uri = try {
+            URI(url)
+        } catch (_: Exception) {
+            return fail("url rejected")
+        }
+        val hostName = uri.host?.lowercase()
+        if (uri.scheme != "https" || hostName == null || !hostName.endsWith(".googlevideo.com")) return fail("url rejected")
+        val headers = (json["httpHeaders"] as? JsonObject)
+            ?.entries?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { "$k: $it\r\n" } }
+            ?.joinToString("")
+            .orEmpty()
+        // urlInputArgs of mediaServer.js
+        val args = buildList {
+            addAll(listOf("-hide_banner", "-loglevel", "error"))
+            if (headers.isNotEmpty()) addAll(listOf("-headers", headers))
+            addAll(listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"))
+            addAll(listOf("-i", url, "-vn"))
+        }
+        return PipeInputResult(PipeInput("url", args, null, "https://$hostName"), null)
+    }
+
+    /**
+     * Registers every way of serving [pipe] (RESEARCH Pattern 7, inputs 1-3 reported separately):
+     * a direct file token when the source is an m4a, pipe tokens for ADTS (offered as three MIME types, since the
+     * Sonos sink list has no AAC type, Pitfall 7) and MP3, and file-backed ADTS and MP3 tokens (complete file
+     * first, Content-Length and Range) so a renderer that needs them can be tested whatever its HTTP version.
+     */
+    private fun runPipeTest(h: SpikeHost, input: String, pipe: PipeInput?) {
+        val srv = ensureServer(h)
+        val ff = runner ?: error("ffmpeg runner not ready")
+        val dir = File(h.spikeDir, "media").also { it.mkdirs() }
+        val source = pipe ?: ensureSine(h).let { PipeInput("sine", fileInputArgs(it), it, null) }
+        val tokens = ArrayList<Token>()
+
+        fun reg(src: StreamSource, format: String, mime: String, label: String, kind: String) {
+            tokens.add(Token(label, srv.register(StreamEntry(src, format, mime, label)), format, mime, kind))
+        }
+
+        source.m4aFile?.let { reg(StreamSource.FileSource(it), "mp4", "audio/mp4", "$input-file", "file") }
+        reg(StreamSource.PipeSource(source.args), "adts", "audio/aac", "$input-adts-aac", "pipe")
+        reg(StreamSource.PipeSource(source.args), "adts", "audio/x-aac", "$input-adts-xaac", "pipe")
+        reg(StreamSource.PipeSource(source.args), "adts", "audio/mp4", "$input-adts-mp4", "pipe")
+        reg(StreamSource.PipeSource(source.args), "mp3", "audio/mpeg", "$input-mp3", "pipe")
+
+        val aac = File(dir, "$input.aac")
+        val mp3 = File(dir, "$input.mp3")
+        val builds = listOf(
+            Triple(aac, listOf("-c:a", "copy", "-f", "adts"), Triple("adts", "audio/aac", "$input-adts-file")),
+            Triple(mp3, listOf("-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"), Triple("mp3", "audio/mpeg", "$input-mp3-file")),
+        )
+        val results = ArrayList<Map<String, Any?>>()
+        for ((file, outArgs, meta) in builds) {
+            file.delete()
+            val code = ff.runToCompletion(listOf("-y") + source.args + outArgs + file.absolutePath, FILE_BUILD_TIMEOUT_SEC)
+            val ok = code == 0 && file.length() > 0
+            results.add(mapOf("label" to meta.third, "ok" to ok, "exitCode" to code, "bytes" to file.length()))
+            if (ok) reg(StreamSource.FileSource(file), meta.first, meta.second, meta.third, "file")
+        }
+        writeTokens(h, input, srv, tokens, source.source)
+        h.evidence.event("cmd-done", mapOf("cmd" to "pipe-test", "input" to input, "base" to base(srv), "tokens" to tokens.size, "fileBuilds" to results))
+    }
+
     // ----- evidence ------------------------------------------------------------------------------------
 
-    private data class Token(val label: String, val path: String, val format: String, val mime: String)
+    private data class Token(val label: String, val path: String, val format: String, val mime: String, val kind: String)
 
     private fun base(srv: MediaServer): String = "http://${boundIp}:${srv.resolvedPort()}"
 
-    private fun writeTokens(h: SpikeHost, input: String, srv: MediaServer, tokens: List<Token>) {
+    private fun writeTokens(h: SpikeHost, input: String, srv: MediaServer, tokens: List<Token>, source: String? = null) {
         val json = buildJsonObject {
             put("base", base(srv))
             put("input", input)
+            // URL inputs are recorded by host only: the signed URL stays in files/spike (threat T-01-12)
+            if (source != null) put("source", source)
             put(
                 "tokens",
                 buildJsonArray {
@@ -145,6 +266,7 @@ class MediaFeature : SpikeFeature {
                                 put("path", t.path)
                                 put("format", t.format)
                                 put("mime", t.mime)
+                                put("kind", t.kind)
                             },
                         )
                     }
@@ -210,6 +332,7 @@ class MediaFeature : SpikeFeature {
 
     private companion object {
         const val PORT = 8100
+        const val FILE_BUILD_TIMEOUT_SEC = 180L
         const val ERR_UNKNOWN = """{"error":"unknown command"}"""
         const val ERR_BUSY = """{"error":"busy"}"""
     }

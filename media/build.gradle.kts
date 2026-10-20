@@ -36,3 +36,13 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+// tools/media-check.sh --local: the same token labels as the phone's pipe-test input=sine, served from WSL.
+tasks.register<JavaExec>("serveLocal") {
+    group = "verification"
+    description = "Serves tone, ADTS and MP3 tokens on 127.0.0.1:8100 using /usr/bin/ffmpeg until killed."
+    dependsOn("testClasses")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.t2u.media.LocalServeMainKt")
+    args(layout.buildDirectory.dir("media-local").get().asFile.path)
+}
