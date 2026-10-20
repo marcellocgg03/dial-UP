@@ -36,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -338,16 +339,54 @@ class Renderer(
         startPolling()
     }
 
-    // Controls follow in the next commit (pause, resume, stop, seek, volume, polling).
-    override suspend fun doPause(): Boolean = false
+    override suspend fun doPause(): Boolean = ok(AV_TRANSPORT, "Pause", "InstanceID" to 0)
 
-    override suspend fun doResume(): Boolean = false
+    override suspend fun doResume(): Boolean = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
 
-    override suspend fun doStop(): Boolean = false
+    /**
+     * Stops the speaker and forgets the track. CAST-06 seam (Phase 3): on cast disconnect the speaker's
+     * current track must also be cleared (Stop plus an emptied SetAVTransportURI); that reset belongs
+     * next to this method, not here yet.
+     */
+    override suspend fun doStop(): Boolean {
+        loadSeq.incrementAndGet() // cancel any pending load
+        position = null
+        transport = "STOPPED"
+        current = null
+        stopPolling()
+        expectStop = true
+        val stopped = ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+        nowPlaying = null
+        return stopped
+    }
 
-    override suspend fun doSeek(position: Double): Boolean = false
+    override suspend fun doSeek(position: Double): Boolean {
+        val c = current ?: return false
+        if (FORMATS[c.format]?.seekable != true) {
+            // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
+            // has to reconnect), but works on every speaker.
+            note("info", "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream")
+            return load(c.video, position, c.format)
+        }
+        return ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
+    }
 
-    override suspend fun doSetVolume(volume: Volume): Boolean = false
+    /**
+     * The only place that changes the speaker's volume (PLAY-05, T-02-36): a sender asked for it. Nothing
+     * in init, load, play, poll or stop sends SetVolume or SetMute.
+     */
+    override suspend fun doSetVolume(volume: Volume): Boolean {
+        val levelSet = ok(
+            RENDERING_CONTROL,
+            "SetVolume",
+            "InstanceID" to 0,
+            "Channel" to "Master",
+            "DesiredVolume" to volume.level,
+        )
+        // SetMute is optional in RenderingControl; do not fail the whole call if it is absent.
+        safeCall(RENDERING_CONTROL, "SetMute", "InstanceID" to 0, "Channel" to "Master", "DesiredMute" to if (volume.muted) 1 else 0)
+        return levelSet
+    }
 
     override suspend fun doGetVolume(): Volume {
         val level = safeCall(RENDERING_CONTROL, "GetVolume", "InstanceID" to 0, "Channel" to "Master")
@@ -425,10 +464,110 @@ class Renderer(
         return false
     }
 
-    // Polling arrives with the controls.
-    private fun startPolling() {}
+    // Polling instead of GENA eventing: many cheap speakers have broken event subscriptions, and eventing
+    // needs an inbound callback port. One sequential loop, so a slow speaker never stacks polls.
+    private val pollLock = Any()
+    private var pollJob: Job? = null
+    private var pollGen = 0
 
-    private fun stopPolling() {}
+    @Volatile private var polls = 0
+
+    private fun startPolling() {
+        stopPolling()
+        if (destroyed) return
+        synchronized(pollLock) {
+            val gen = ++pollGen
+            pollJob = scope.launch {
+                while (isActive && !destroyed && gen == pollGenSnapshot()) {
+                    delay(config.pollIntervalMs)
+                    if (gen != pollGenSnapshot()) break
+                    try {
+                        poll()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        note("debug", "Poll failed: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun pollGenSnapshot(): Int = synchronized(pollLock) { pollGen }
+
+    private fun stopPolling() {
+        synchronized(pollLock) {
+            pollGen++
+            pollJob?.cancel()
+            pollJob = null
+        }
+    }
+
+    private suspend fun poll() {
+        if (expectStop) return
+        polls++
+        val state = transportState()
+        if (state == null || destroyed) return
+        transport = state
+        if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
+            val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+            if (r != null) {
+                val uri = r["TrackURI"]
+                val startAt = current?.startAt ?: 0
+                // Do not take position or duration from a speaker still on the previous track.
+                val stale = isOnOtherStream(uri)
+                position = PollPosition(
+                    rel = if (stale) position?.rel ?: startAt.toDouble() else parseHms(r["RelTime"]) + startAt,
+                    dur = nowPlaying?.duration?.takeIf { it != 0.0 } ?: if (stale) 0.0 else parseHms(r["TrackDuration"]),
+                    uri = uri,
+                    at = deps.clock(),
+                )
+            }
+        }
+        if (destroyed) return
+
+        // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
+        val c = current
+        if (!sawPlaying && state != "PLAYING" && c != null && status == PlayerStatus.PLAYING &&
+            deps.clock() - c.loadedAt > config.startTimeoutMs
+        ) {
+            handleStartFailure(c)
+            return
+        }
+
+        when {
+            state == "PLAYING" -> {
+                sawPlaying = true
+                if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
+            }
+            state == "PAUSED_PLAYBACK" -> {
+                if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
+            }
+            (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING -> {
+                // The track ended on the speaker (or someone pressed stop on it): advance the YouTube queue.
+                // next() runs in its own coroutine because it stops and restarts polling, which would
+                // cancel this one in the middle of the call.
+                stopPolling()
+                note("info", "Track finished on renderer - advancing queue")
+                scope.launch { next() }
+            }
+        }
+    }
+
+    /**
+     * The speaker accepted the URL but never started playing. Phase 2 has a single fixed format, so there
+     * is no next format to try (renderer.js with OUTPUT_FORMAT=adts): stop and say why.
+     */
+    private fun handleStartFailure(c: Current) {
+        val why = if (c.fetched) "fetched the stream but never started playing" else "never requested the stream"
+        lastError = "Renderer $why"
+        note(
+            "error",
+            lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
+        )
+        stopPolling()
+        scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
+    }
 
     /** Reports through the evidence sink (kind "renderer"); never carries signed URLs, and never throws. */
     private fun note(level: String, message: String, vararg fields: Pair<String, Any?>) {
