@@ -1,0 +1,44 @@
+{
+  "source": "yt-cast-receiver 2.1.0 via tools/lounge-capture",
+  "node_commit": "5bd3025cee730d3f5464ae585917af3d90e1dfc6",
+  "captured_at": "2026-10-20T22:06:24Z",
+  "files": [
+    "generate-screen-id-2.txt",
+    "generate-screen-id.txt",
+    "handshake-cl.txt",
+    "handshake-m.txt",
+    "handshake.txt",
+    "manifest.json",
+    "outgoing.jsonl",
+    "requests.jsonl",
+    "rpc-cl.txt",
+    "rpc-m.txt",
+    "token-batch-2.json",
+    "token-batch.json"
+  ],
+  "incoming_names": [
+    "S",
+    "c",
+    "getDiscoveryDeviceId",
+    "getNowPlaying",
+    "getPartyGamesMode",
+    "getVolume",
+    "loungeStatus",
+    "noop",
+    "pause",
+    "play",
+    "remoteConnected",
+    "remoteDisconnected",
+    "seekTo",
+    "setPlaylist",
+    "setVolume"
+  ],
+  "outgoing_names": [
+    "autoplayUpNext",
+    "nowPlaying",
+    "onAutoplayModeChanged",
+    "onHasPreviousNextChanged",
+    "onStateChange",
+    "onVolumeChanged"
+  ]
+}
