@@ -1,7 +1,11 @@
 // Owner: Plan 01-04 (SSDP responder and DIAL servers).
+// Phase 2 (plan 02-01): the access gate (SVC-09, D-01) is wired in here only so plan 02-06 can measure on the phone
+// whether YouTube still lists phone-only receivers (D-03). This class is removed in plan 02-13.
 package dev.t2u.app
 
 import android.os.Build
+import dev.t2u.dial.DialAccessMode
+import dev.t2u.dial.DialAccessPolicy
 import dev.t2u.dial.DialConfig
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.DialServer
@@ -15,6 +19,7 @@ import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -55,17 +60,19 @@ class DiscoveryFeature : SpikeFeature {
         val iface: String,
     )
 
-    private data class Settings(val join: String, val appState: String, val skipNextRebind: Boolean)
+    private data class VariantSettings(val join: String, val appState: String, val skipNextRebind: Boolean)
 
     private val lock = Any()
     private var host: SpikeHost? = null
     private var monitor: NetworkMonitor? = null
     private var rebindJob: Job? = null
     private var variants: List<DialVariant> = emptyList()
+    private var dialSettings: Settings? = null
+    private var accessPolicy: DialAccessPolicy? = null
 
     @Volatile private var running: Running? = null
 
-    @Volatile private var settings = Settings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
+    @Volatile private var settings = VariantSettings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
 
     /** Last Wi-Fi address we were (or tried to be) bound to; used for the rebind log. */
     @Volatile private var lastIp: String? = null
@@ -76,11 +83,30 @@ class DiscoveryFeature : SpikeFeature {
     private val replies = AtomicInteger()
     private val httpReqs = AtomicInteger()
     private val launches = AtomicInteger()
+    private val denied = AtomicInteger()
+    private val ssdpDenied = AtomicInteger()
+
+    /** Last time a denial was logged per source IP (one event per source per minute, T-02-05). */
+    private val deniedLogged = ConcurrentHashMap<String, Long>()
+    private val ssdpDeniedLogged = ConcurrentHashMap<String, Long>()
 
     // ----- SpikeFeature --------------------------------------------------------------------------
 
     override fun start(host: SpikeHost) {
         this.host = host
+        val appSettings = AppSettings.of(host.context)
+        dialSettings = appSettings
+        // mode and phone addresses are read per request, so a change applies to the next request
+        accessPolicy = DialAccessPolicy(
+            mode = { appSettings.dialAccess.value },
+            phoneAddresses = { setOfNotNull(running?.wifiIp, lastIp, "127.0.0.1", "::1") },
+        )
+        host.scope.launch {
+            appSettings.dialAccess.drop(1).collect { mode ->
+                host.evidence.event("settings", mapOf("dialAccess" to mode.wire, "source" to "change"))
+                if (mode == DialAccessMode.LAN) running?.responder?.announce()
+            }
+        }
         settings = readSettings(host)
         // UUIDs of A, B, D are random per service start (Node parity) but stay fixed across restarts of the servers
         variants = spikeVariants(System.getProperty("os.version").orEmpty(), Build.VERSION.RELEASE) { UUID.randomUUID().toString() }
@@ -132,6 +158,9 @@ class DiscoveryFeature : SpikeFeature {
             put("replies", replies.get())
             put("httpReqs", httpReqs.get())
             put("launches", launches.get())
+            put("dialAccess", dialSettings?.dialAccess?.value?.wire)
+            put("denied", denied.get())
+            put("ssdpDenied", ssdpDenied.get())
             put(
                 "variants",
                 JsonArray(
@@ -211,11 +240,14 @@ class DiscoveryFeature : SpikeFeature {
         lastIp = wifiIp
         val nif = NetworkInterface.getByName(ifaceName)
         val s = settings
+        val policy = checkNotNull(accessPolicy) { "access policy not initialised" }
 
         val servers = mutableListOf<Pair<DialVariant, DialServer>>()
         val devices = mutableListOf<SsdpDevice>()
         for (v in variants) {
-            val server = DialServer(DialConfig(v.name, v.uuid, resolve(v.bindHost, wifiIp), v.port, appState = s.appState)) { onHttp(v.name, it) }
+            val server = DialServer(
+                DialConfig(v.name, v.uuid, resolve(v.bindHost, wifiIp), v.port, appState = s.appState, accessPolicy = policy::allowsHttp),
+            ) { onHttp(v.name, it) }
             try {
                 server.start()
             } catch (t: Throwable) {
@@ -238,7 +270,14 @@ class DiscoveryFeature : SpikeFeature {
             )
         }
 
-        val responder = SsdpResponder(listenSpecs(s.join, ip, nif), ip, nif, ssdpEvents(wifiIp))
+        val responder = SsdpResponder(
+            listenSpecs(s.join, ip, nif),
+            ip,
+            nif,
+            ssdpEvents(wifiIp),
+            replyPolicy = policy::allowsSsdp,
+            announcePolicy = policy::announceAllowed,
+        )
         devices.forEach { responder.register(it) }
         responder.start()
         running = Running(responder, servers, devices, wifiIp, ifaceName)
@@ -296,13 +335,13 @@ class DiscoveryFeature : SpikeFeature {
 
     private fun settingsFile(h: SpikeHost) = File(h.spikeDir, "variant-state.json")
 
-    private fun readSettings(h: SpikeHost): Settings {
-        val defaults = Settings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
+    private fun readSettings(h: SpikeHost): VariantSettings {
+        val defaults = VariantSettings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
         return try {
             val f = settingsFile(h)
             if (!f.exists()) return defaults
             val o = Json.parseToJsonElement(f.readText()).jsonObject
-            Settings(
+            VariantSettings(
                 join = o["join"]?.jsonPrimitive?.contentOrNull?.takeIf { it in JOIN_MODES } ?: DEFAULT_JOIN,
                 appState = o["appState"]?.jsonPrimitive?.contentOrNull?.takeIf { it in APP_STATES } ?: DEFAULT_APP_STATE,
                 skipNextRebind = o["skipNextRebind"]?.jsonPrimitive?.booleanOrNull ?: false,
@@ -313,7 +352,7 @@ class DiscoveryFeature : SpikeFeature {
         }
     }
 
-    private fun writeSettings(h: SpikeHost, s: Settings) {
+    private fun writeSettings(h: SpikeHost, s: VariantSettings) {
         try {
             val json = buildJsonObject {
                 put("join", s.join)
@@ -382,6 +421,10 @@ class DiscoveryFeature : SpikeFeature {
         }
 
         override fun onDrop(src: InetSocketAddress, reason: String) {
+            if (reason == "access") {
+                ssdpDenied.incrementAndGet()
+                if (!firstInWindow(ssdpDeniedLogged, src.address.hostAddress.orEmpty())) return
+            }
             host?.evidence?.event("ssdp-drop", mapOf("src" to "${src.address.hostAddress}:${src.port}", "reason" to reason))
         }
 
@@ -392,8 +435,40 @@ class DiscoveryFeature : SpikeFeature {
 
     private fun isSelf(addr: InetAddress, wifiIp: String): Boolean = addr.hostAddress == wifiIp
 
+    /** True when [key] has not been logged in the last [DENIED_LOG_WINDOW_NS]; marks it logged. */
+    private fun firstInWindow(logged: ConcurrentHashMap<String, Long>, key: String): Boolean {
+        val now = System.nanoTime()
+        if (logged.size > 1024) logged.clear()
+        var first = false
+        logged.compute(key) { _, last ->
+            if (last == null || now - last >= DENIED_LOG_WINDOW_NS) {
+                first = true
+                now
+            } else {
+                last
+            }
+        }
+        return first
+    }
+
     private fun onHttp(device: String, req: DialRequest) {
         httpReqs.incrementAndGet()
+        if (req.status == 403) {
+            denied.incrementAndGet()
+            if (firstInWindow(deniedLogged, req.remoteHost)) {
+                host?.evidence?.event(
+                    "dial-denied",
+                    mapOf(
+                        "device" to device,
+                        "src" to "${req.remoteHost}:${req.remotePort}",
+                        "method" to req.method,
+                        "uri" to req.uri,
+                        "ua" to req.headers["User-Agent"],
+                    ),
+                )
+            }
+            return
+        }
         if (req.method == "POST" && req.uri.substringBefore('?').endsWith("/apps/YouTube")) launches.incrementAndGet()
         // the phone's own apps reach a receiver either through its Wi-Fi address or through loopback (variant D)
         val self = req.remoteHost == running?.wifiIp || req.remoteHost == lastIp ||
@@ -421,6 +496,7 @@ class DiscoveryFeature : SpikeFeature {
         const val DEFAULT_JOIN = "explicit"
         const val DEFAULT_APP_STATE = "running"
         const val REBIND_DEBOUNCE_MS = 2000L
+        const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
         val JOIN_MODES = listOf("explicit", "default-route", "bind-ip", "all")
         val APP_STATES = listOf("running", "stopped")
     }
