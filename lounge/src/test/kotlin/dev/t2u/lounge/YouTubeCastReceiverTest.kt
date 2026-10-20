@@ -28,51 +28,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** A Player that records what it was asked to do and answers true; shared by the YouTubeApp and receiver tests. */
-internal class FakePlayer : Player() {
-    val played = CopyOnWriteArrayList<Pair<String, Double>>()
-    val calls = CopyOnWriteArrayList<String>()
-
-    @Volatile
-    var volume = Volume(30, false)
-
-    @Volatile
-    var positionNow = 0.0
-
-    @Volatile
-    var durationNow = 200.0
-
-    override suspend fun doPlay(video: Video, position: Double): Boolean {
-        played.add(video.id to position)
-        calls.add("play:${video.id}")
-        return true
-    }
-
-    override suspend fun doPause(): Boolean = calls.add("pause")
-
-    override suspend fun doResume(): Boolean = calls.add("resume")
-
-    override suspend fun doStop(): Boolean = calls.add("stop")
-
-    override suspend fun doSeek(position: Double): Boolean {
-        calls.add("seek:${jsNumber(position)}")
-        positionNow = position
-        return true
-    }
-
-    override suspend fun doSetVolume(volume: Volume): Boolean {
-        calls.add("volume:${volume.level}:${volume.muted}")
-        this.volume = volume
-        return true
-    }
-
-    override suspend fun doGetVolume(): Volume = volume
-
-    override suspend fun doGetPosition(): Double = positionNow
-
-    override suspend fun doGetDuration(): Double = durationNow
-}
-
 internal class MemoryDataStore : DataStore {
     val map = ConcurrentHashMap<String, JsonElement>()
 
@@ -223,7 +178,7 @@ class YouTubeCastReceiverTest {
             ((it as JsonObject)["videoId"] as JsonPrimitive).content
         }
         fake.replayRecorded("cl")
-        awaitUntil { player.played.any { it.first == recordedVideo } }
+        awaitUntil { "play:$recordedVideo" in player.calls }
 
         // and the player's state goes back to the sender
         awaitUntil { fake.sentNames("cl").flatten().let { "nowPlaying" in it && "onStateChange" in it } }
