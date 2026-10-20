@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import dev.t2u.dial.DialAccessMode
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
@@ -17,7 +18,7 @@ import java.util.concurrent.TimeoutException
  * android.permission.DUMP, which only the adb shell holds (threat T-01-01); `am broadcast` is
  * ordered, so the reply travels back as the broadcast's result data.
  *
- * Built-in commands: ping, dump-state, stop, payloads. Anything else goes to the feature whose
+ * Built-in commands: ping, dump-state, stop, payloads, dial-access. Anything else goes to the feature whose
  * `commands` contain it.
  */
 class CommandReceiver : BroadcastReceiver() {
@@ -80,6 +81,7 @@ class CommandReceiver : BroadcastReceiver() {
                 startPayloads(service)
                 CommandReply(true, """{"started":true}""")
             }
+            "dial-access" -> dialAccess(context, service, args)
             else -> {
                 val feature = service.features.firstOrNull { cmd in it.commands }
                     ?: return CommandReply(false, """{"error":"unknown command"}""")
@@ -95,6 +97,19 @@ class CommandReceiver : BroadcastReceiver() {
             }
         }
     }
+
+    /** `dial-access [mode=phone|lan]` (D-02): sets or reports who may reach the DIAL receivers. */
+    private fun dialAccess(context: Context, service: BridgeService, args: Map<String, String>): CommandReply {
+        val settings = AppSettings.of(context)
+        val raw = args["mode"] ?: return CommandReply(true, accessJson(settings.dialAccess.value))
+        val mode = DialAccessMode.fromWire(raw)
+            ?: return CommandReply(false, """{"error":"mode must be phone or lan"}""")
+        settings.setDialAccess(mode)
+        service.evidence.event("settings", mapOf("dialAccess" to mode.wire, "source" to "adb"))
+        return CommandReply(true, accessJson(mode))
+    }
+
+    private fun accessJson(mode: DialAccessMode) = """{"ok":true,"dialAccess":"${mode.wire}"}"""
 
     private fun startPayloads(service: BridgeService) {
         service.scope.launch {

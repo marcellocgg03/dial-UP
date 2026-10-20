@@ -1,3 +1,7 @@
+// DIAL receiver HTTP routes ported from peer-dial (@patrickkfkan/peer-dial, a fork of the original).
+// Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS, All rights reserved.
+// peer-dial is licensed under the GNU Lesser General Public License, version 3.0 or later;
+// fork by Patrick Kan; ported to Kotlin for Tube2U[PnP] and conveyed under GPL-3.0-only.
 package dev.t2u.dial
 
 import io.ktor.http.ContentType
@@ -27,6 +31,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.util.AttributeKey
 import io.ktor.utils.io.readBuffer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.readByteArray
 import java.util.UUID
@@ -40,6 +45,10 @@ data class DialConfig(
     val modelName: String = "UPnP Renderer",
     val prefix: String = "/ytcr",
     val appState: String = "running",
+    /** Persisted pid for the run link and the launch LOCATION; null means a random pid per server. */
+    val pid: String? = null,
+    /** Decides per request, from the remote address string, whether a call is served (SVC-09). */
+    val accessPolicy: (String) -> Boolean = { true },
 )
 
 /** One handled HTTP call, reported after the response was produced (404s included). */
@@ -59,13 +68,25 @@ data class DialRequest(
  * server per instance. The host in Application-URL and LOCATION always comes from the request Host
  * header (peer-dial uses req.hostname). Content-Length is never set by hand (RESEARCH Pitfall 4).
  */
-class DialServer(private val config: DialConfig, private val onRequest: (DialRequest) -> Unit) {
+class DialServer(
+    private val config: DialConfig,
+    private val onRequest: (DialRequest) -> Unit,
+    /**
+     * Called for POST /apps/YouTube with the app name and the capped body (pairing code included).
+     * The returned pid becomes the LOCATION; null or empty sends no LOCATION; an exception answers 503.
+     * Null (the Phase 1 behaviour) answers with the server's own pid.
+     */
+    private val onLaunch: (suspend (appName: String, body: String) -> String?)?,
+) {
+    /** Without a launch callback; keeps `DialServer(config) { request -> ... }` working. */
+    constructor(config: DialConfig, onRequest: (DialRequest) -> Unit) : this(config, onRequest, null)
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var boundPort: Int = config.port
 
     /** Pid handed out in the run link and in the POST LOCATION header; fixed for this server's lifetime. */
-    private val pid: String = UUID.randomUUID().toString()
+    private val pid: String = config.pid ?: UUID.randomUUID().toString()
 
     fun start() {
         check(server == null) { "already started" }
@@ -104,6 +125,14 @@ class DialServer(private val config: DialConfig, private val onRequest: (DialReq
             }
         }
 
+        // Plugins runs before routing: a refused call never reads its body and never reaches onLaunch.
+        app.intercept(ApplicationCallPipeline.Plugins) {
+            if (!config.accessPolicy(call.request.local.remoteAddress)) {
+                sendStatus(call, HttpStatusCode.Forbidden)
+                finish()
+            }
+        }
+
         app.routing {
             route(prefix) {
                 get("/ssdp/device-desc.xml") {
@@ -136,8 +165,22 @@ class DialServer(private val config: DialConfig, private val onRequest: (DialReq
                             sendStatus(call, HttpStatusCode.PayloadTooLarge)
                             return@post
                         }
-                        call.attributes.put(BODY_KEY, body)
-                        call.response.header("LOCATION", "${baseUrl(call)}/apps/$APP/$pid")
+                        // the pairing code must never reach the request report
+                        redactLaunchBody(body)?.let { call.attributes.put(BODY_KEY, it) }
+                        val launch = onLaunch
+                        val locationPid: String? = if (launch == null) {
+                            pid
+                        } else {
+                            try {
+                                launch(name, body)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                sendStatus(call, HttpStatusCode.ServiceUnavailable)
+                                return@post
+                            }
+                        }
+                        if (!locationPid.isNullOrEmpty()) call.response.header("LOCATION", "${baseUrl(call)}/apps/$APP/$locationPid")
                         sendStatus(call, if (state == "stopped") HttpStatusCode.Created else HttpStatusCode.OK)
                     }
                     post("/{appName}/dial_data") {
@@ -151,7 +194,7 @@ class DialServer(private val config: DialConfig, private val onRequest: (DialReq
                             sendStatus(call, HttpStatusCode.PayloadTooLarge)
                             return@post
                         }
-                        call.attributes.put(BODY_KEY, body)
+                        redactLaunchBody(body)?.let { call.attributes.put(BODY_KEY, it) }
                         sendStatus(call, HttpStatusCode.NotImplemented)
                     }
                     delete("/{appName}/{pid}") {

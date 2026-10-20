@@ -86,7 +86,7 @@ class DiscoveryLoopbackTest {
             val loc = launch.headers().firstValue("LOCATION").orElseThrow()
             assertTrue(loc.startsWith("http://127.0.0.1:$dialPort/ytcr/apps/YouTube/"), loc)
             val post = seen.first { it.method == "POST" }
-            assertEquals("pairingCode=abc&theme=cl", post.body)
+            assertEquals("pairingCode=<redacted len 3>&theme=cl", post.body)
             assertEquals("t2u-test", post.headers["User-Agent"])
             assertTrue(seen.size >= 3, "every request reported")
         } finally {

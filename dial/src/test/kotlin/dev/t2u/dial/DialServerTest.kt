@@ -107,7 +107,7 @@ class DialServerTest {
             assertTrue(loc.startsWith("http://192.168.50.239:3000/ytcr/apps/YouTube/"), loc)
         }
         val post = seen.single { it.method == "POST" }
-        assertEquals("pairingCode=abc&theme=cl", post.body)
+        assertEquals("pairingCode=<redacted len 3>&theme=cl", post.body)
         assertEquals(200, post.status)
         assertEquals("/ytcr/apps/YouTube", post.uri)
         assertEquals("t2u-test", post.headers["User-Agent"])
