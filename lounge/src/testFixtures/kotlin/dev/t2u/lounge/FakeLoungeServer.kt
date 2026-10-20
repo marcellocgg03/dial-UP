@@ -76,6 +76,9 @@ class FakeLoungeServer : AutoCloseable {
     @Volatile
     var refusePairing: Boolean = false
 
+    /** The next this many message POSTs (bind with count >= 1) answer 500 and are not recorded in [sent]. */
+    val failNextSends = AtomicInteger(0)
+
     private val screenIdCalls = AtomicInteger(0)
     private val freshCounter = AtomicInteger(0)
     private val rpcStates = ConcurrentHashMap<String, RpcState>()
@@ -166,6 +169,8 @@ class FakeLoungeServer : AutoCloseable {
                     val theme = call.request.queryParametersFirst("theme") ?: "cl"
                     if ((form["count"] ?: "0") == "0") {
                         call.respondText(handshake(theme), PLAIN)
+                    } else if (failNextSends.getAndUpdate { if (it > 0) it - 1 else it } > 0) {
+                        call.respondText("", PLAIN, HttpStatusCode.InternalServerError)
                     } else {
                         sent.getOrPut(theme) { CopyOnWriteArrayList() }.add(form)
                         call.respondText("7\n[1,4,0]", PLAIN)

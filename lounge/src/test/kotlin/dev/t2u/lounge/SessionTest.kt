@@ -8,6 +8,8 @@ import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -116,5 +118,64 @@ class SessionTest {
         awaitUntil { received.size >= expected.size }
         assertEquals(expected, received.map { it.name })
         assertTrue(fake.requests.all { it.userAgent == "node" }, "every request carries User-Agent node")
+    }
+
+    private fun volume(level: Int, aid: Int? = null) = OutgoingMessage.onVolumeChanged(aid, Volume(level, false))
+
+    @Test
+    fun messagesArePostedInQueueOrderWithGrowingOfs() = run {
+        val s = session()
+        s.begin()
+        assertTrue(s.sendMessage(listOf(volume(30))))
+        assertTrue(s.sendMessage(listOf(OutgoingMessage.autoplayUpNext(null, null), volume(31))))
+        val sent = fake.sent.getValue("cl")
+        assertEquals(2, sent.size)
+        assertEquals(mapOf("count" to "1", "ofs" to "0", "req0__sc" to "onVolumeChanged", "req0_volume" to "30", "req0_muted" to "false"), sent[0])
+        assertEquals("2", sent[1]["count"])
+        assertEquals("1", sent[1]["ofs"])
+        assertEquals(listOf("count", "ofs", "req0__sc", "req1__sc", "req1_volume", "req1_muted"), sent[1].keys.toList())
+        val post = fake.requests.last { it.method == "POST" && it.form["count"] == "2" }
+        assertEquals("SECRET", post.query.getValue("SID").take(6))
+        assertTrue(post.query.containsKey("AID") && post.query.containsKey("gsessionid"))
+    }
+
+    @Test
+    fun deferredVolumeMessagesCollapseToTheLastOne() = run {
+        val s = session()
+        s.begin()
+        val results = listOf(10, 20, 30).map { level ->
+            val r = async { s.sendMessage(listOf(volume(level)), deferKey = "volume") }
+            delay(15)
+            r
+        }
+        assertEquals(listOf(false, false, true), results.awaitAll())
+        val sent = fake.sent.getValue("cl")
+        assertEquals(1, sent.size)
+        assertEquals("30", sent[0]["req0_volume"])
+    }
+
+    @Test
+    fun aFailedPostIsRetriedOnceAfterRefreshingTheToken() = run {
+        val s = session()
+        s.begin()
+        fake.failNextSends.set(1)
+        val tokens = fake.requests.count { it.path.endsWith("get_lounge_token_batch") }
+        assertTrue(s.sendMessage(listOf(volume(12))))
+        assertEquals(tokens + 1, fake.requests.count { it.path.endsWith("get_lounge_token_batch") })
+        val sent = fake.sent.getValue("cl")
+        assertEquals(1, sent.size)
+        assertEquals("0", sent[0]["ofs"], "a refreshed session counts from zero again")
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun aSecondFailureEndsTheSessionWithThatError() = run {
+        val s = session()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        s.onTerminate = { terminated.add(it) }
+        s.begin()
+        fake.failNextSends.set(2)
+        assertEquals(false, s.sendMessage(listOf(volume(12))))
+        awaitUntil { s.status == SessionStatus.STOPPED && terminated.isNotEmpty() }
     }
 }
