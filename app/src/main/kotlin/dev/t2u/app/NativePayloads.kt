@@ -51,6 +51,9 @@ object NativePayloads {
     @Volatile
     private var cached: Paths? = null
 
+    /** True once [ensure] has completed in this process (a later [ensure] is then free). */
+    val isReady: Boolean get() = cached != null
+
     @Synchronized
     fun ensure(context: Context, evidence: EvidenceLog): Paths {
         check(Looper.myLooper() != Looper.getMainLooper()) { "NativePayloads.ensure must not run on the main thread" }
