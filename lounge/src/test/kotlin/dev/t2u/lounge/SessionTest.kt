@@ -243,7 +243,7 @@ class SessionTest {
         s.begin()
         fake.refuseNextRpc.set(3)
         fake.closeRpc("cl")
-        awaitUntil { count("get_lounge_token_batch") >= 2 && fake.rpcOpen("cl") == 1 }
+        awaitUntil { count("get_lounge_token_batch") >= 2 && fake.rpcOpen("cl") == 1 && s.status == SessionStatus.RUNNING }
         assertEquals(2, count("bc/bind", "POST"), "a new bind init")
         assertEquals(5, fake.requests.count { it.method == "GET" && it.query["RID"] == "rpc" })
         assertEquals(SessionStatus.RUNNING, s.status)

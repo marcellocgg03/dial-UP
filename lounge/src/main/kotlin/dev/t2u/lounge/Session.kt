@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -60,6 +61,7 @@ class SessionException(message: String, cause: Throwable? = null) : Exception(me
  * the bind init POST and opens the RPC long-poll; incoming messages go to [onMessages], one batch at a time, in order.
  */
 private const val FAREWELL_TIMEOUT_MS = 2000L
+private const val MIN_STREAM_MS = 1000L
 
 class Session(
     val client: Client,
@@ -95,6 +97,8 @@ class Session(
 
     private val bind = BindParams(UUID.randomUUID().toString(), screenName, LoungeConstants.SCREEN_APP, client.theme, brand, model, random)
 
+    private val log = LoungeLog(sink, client.theme)
+
     private val formType = "application/x-www-form-urlencoded;charset=UTF-8".toMediaType()
 
     private class RpcHandle(var job: Job? = null, @Volatile var call: Call? = null) {
@@ -112,6 +116,7 @@ class Session(
     suspend fun begin() {
         if (status != SessionStatus.STOPPED) return
         status = SessionStatus.STARTING
+        log.session("begin")
         try {
             connect(useStore = true)
         } catch (e: Exception) {
@@ -168,6 +173,8 @@ class Session(
             getLoungeToken()
         }
         bind.updateWithLoungeToken(token.token)
+        registerSecrets()
+        startRefreshTimer(token.refreshIntervalMs ?: LoungeConstants.TOKEN_REFRESH_FALLBACK_MS)
         for (message in getInitSessionMessages()) {
             if (message.name == "c" || message.name == "S") {
                 bind.updateWithMessage(message)
@@ -187,7 +194,9 @@ class Session(
     suspend fun end(error: Throwable? = null) {
         if (status == SessionStatus.STOPPED || status == SessionStatus.STOPPING) return
         status = SessionStatus.STOPPING
+        log.session("end", "error" to error?.let { it::class.simpleName })
         try {
+            refreshTimer?.cancel()
             rpc?.close()
             rpc = null
             clearQueuedSends()
@@ -215,6 +224,8 @@ class Session(
         try {
             if (status != SessionStatus.RUNNING) return
             status = SessionStatus.REFRESHING
+            log.session("refresh")
+            refreshTimer?.cancel()
             val old = rpc
             try {
                 sendLock.withLock {
@@ -238,6 +249,49 @@ class Session(
         } finally {
             refreshMutex.unlock()
         }
+    }
+
+    // ---- lounge token refresh timer
+
+    @Volatile
+    private var refreshTimer: Job? = null
+
+    /** Refreshes the token when it expires (Session.js: a timer set from refreshIntervalInMillis, 13 days as fallback). */
+    private fun startRefreshTimer(intervalMs: Long) {
+        refreshTimer?.cancel()
+        refreshTimer = scope.launch {
+            delay(intervalMs)
+            // a separate coroutine: the refresh replaces this timer
+            scope.launch {
+                try {
+                    refreshLoungeToken()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    // refreshLoungeToken already ended the session and called onTerminate
+                }
+            }
+        }
+    }
+
+    // ---- pairing code
+
+    /** Registers a TV pairing code with this screen (Session.js registerPairingCode). Never logs the code. */
+    suspend fun registerPairingCode(code: String) {
+        val screen = screenId ?: throw IncompleteLoungeDataException("Missing data required to register pairing code", listOf("screenId"))
+        log.addSecret(code)
+        val form = formEncode(
+            listOf(
+                "access_type" to "permanent",
+                "app" to LoungeConstants.SCREEN_APP,
+                "pairing_code" to code,
+                "screen_id" to screen,
+                "screen_name" to screenName,
+                "device_id" to bind.id,
+            ),
+        )
+        val request = Request.Builder().url(endpoints.registerPairingCode).header("User-Agent", LoungeConstants.USER_AGENT)
+            .post(form.toRequestBody(formType)).build()
+        execute(request).use { checkOk(it, request) }
     }
 
     // ---- sending
@@ -335,9 +389,10 @@ class Session(
         val url = endpoints.bind + "?" + bind.toQueryString(BindType.SEND_MESSAGE, aid)
         val pairs = sendMessagePostData(task.messages, ofs)
         ofs += task.messages.size
+        log.tx(task.messages)
         val request = Request.Builder().url(url).header("User-Agent", LoungeConstants.USER_AGENT)
             .post(formEncode(pairs).toRequestBody(formType)).build()
-        http.newCall(request).await().use { checkOk(it, request) }
+        execute(request).use { checkOk(it, request) }
     }
 
     private fun clearQueuedSends() {
@@ -358,7 +413,7 @@ class Session(
 
     private suspend fun generateScreenId(): String {
         val request = Request.Builder().url(endpoints.generateScreenId).header("User-Agent", LoungeConstants.USER_AGENT).build()
-        val text = http.newCall(request).await().use { r ->
+        val text = execute(request).use { r ->
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
         }
@@ -370,7 +425,7 @@ class Session(
     private suspend fun getLoungeToken(): LoungeToken {
         val body = formEncode(listOf("screen_ids" to screenId!!)).toRequestBody(formType)
         val request = Request.Builder().url(endpoints.getLoungeTokenBatch).header("User-Agent", LoungeConstants.USER_AGENT).post(body).build()
-        val text = http.newCall(request).await().use { r ->
+        val text = execute(request).use { r ->
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
         }
@@ -389,20 +444,34 @@ class Session(
         val url = endpoints.bind + "?" + bind.toQueryString(BindType.INIT_SESSION)
         val request = Request.Builder().url(url).header("User-Agent", LoungeConstants.USER_AGENT)
             .post(formEncode(listOf("count" to "0")).toRequestBody(formType)).build()
-        val text = http.newCall(request).await().use { r ->
+        val text = execute(request).use { r ->
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
         }
         val messages = ArrayList<IncomingMessage>()
         lateinit var decoder: ChunkDecoder
-        decoder = ChunkDecoder(onPayload = { messages.addAll(decoder.parseMessages(it)) })
+        decoder = ChunkDecoder(
+            onPayload = {
+                log.raw(it)
+                messages.addAll(decoder.parseMessages(it))
+            },
+            onGarbage = { log.problem("decode", it) },
+        )
         decoder.feed(text)
+        log.rx(messages)
         return messages
     }
 
+    /** Updates the bind parameters (AID, SID, gsessionid) and hands the batch to the listener. A listener failure is reported, never fatal. */
     private suspend fun handleMessages(messages: List<IncomingMessage>) {
         bind.updateWithMessages(messages)
-        onMessages(messages, this)
+        registerSecrets()
+        try {
+            onMessages(messages, this)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            log.error("onMessages", e)
+        }
     }
 
     // ---- RPC long-poll
@@ -414,8 +483,10 @@ class Session(
             val request = Request.Builder().url(endpoints.bind + "?" + bind.toQueryString(BindType.RPC))
                 .header("User-Agent", LoungeConstants.USER_AGENT).get().build()
             val call = rpcClient.newCall(request)
+            val started = System.nanoTime()
             try {
                 val response = call.await()
+                log.http("GET", request.url.encodedPath, response.code, (System.nanoTime() - started) / 1_000_000)
                 if (response.isSuccessful) return Opened(call, response)
                 val status = response.code
                 response.close()
@@ -424,6 +495,7 @@ class Session(
             } catch (e: IOException) {
                 lastError = e
                 if (e is LoungeHttpException && e.status < 500) throw e
+                if (e !is LoungeHttpException) log.http("GET", request.url.encodedPath, -1, (System.nanoTime() - started) / 1_000_000)
             }
             if (attempt < LoungeConstants.RPC_MAX_RETRIES) delay(rpcRetryDelayMs)
         }
@@ -439,7 +511,45 @@ class Session(
     private fun startRpcReader(opened: Opened) {
         val handle = RpcHandle(call = opened.call)
         rpc = handle
-        handle.job = scope.launch(Dispatchers.IO) { readStream(opened.response, handle) }
+        handle.job = scope.launch(Dispatchers.IO) { rpcLoop(opened, handle) }
+    }
+
+    /** True while the RPC stream is open or being reopened. */
+    internal fun rpcOpen(): Boolean = rpc?.job?.isActive == true
+
+    /**
+     * Reads the stream; when it ends (the lounge closes it every few minutes) or times out, opens a new one. When
+     * reopening fails after [LoungeConstants.RPC_MAX_RETRIES] connects the lounge token is refreshed (RPCConnection.js
+     * 'terminate' then Session.js refreshLoungeToken).
+     */
+    private suspend fun rpcLoop(first: Opened, handle: RpcHandle) {
+        var opened = first
+        while (true) {
+            val started = System.nanoTime()
+            handle.call = opened.call
+            readStream(opened.response, handle)
+            currentCoroutineContext().ensureActive()
+            if (rpc !== handle) return
+            // a stream that dies at once must not turn into a busy loop
+            if ((System.nanoTime() - started) / 1_000_000 < MIN_STREAM_MS) delay(rpcRetryDelayMs)
+            log.session("rpc-reconnect")
+            opened = try {
+                openRpcStream()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (rpc !== handle) return
+                log.error("rpc-connect", e)
+                scope.launch {
+                    try {
+                        refreshLoungeToken()
+                    } catch (r: Exception) {
+                        if (r is CancellationException) throw r
+                        // refreshLoungeToken already ended the session and called onTerminate
+                    }
+                }
+                return
+            }
+        }
     }
 
     /** Reads one RPC response to its end, delivering each decoded batch before reading on. */
@@ -448,7 +558,7 @@ class Session(
             val utf8 = Utf8StreamDecoder()
             val pending = ArrayList<String>()
             lateinit var decoder: ChunkDecoder
-            decoder = ChunkDecoder(onPayload = { pending.add(it) })
+            decoder = ChunkDecoder(onPayload = { pending.add(it) }, onGarbage = { log.problem("decode", it) })
             val source = r.body.source()
             val buf = ByteArray(8192)
             try {
@@ -468,8 +578,12 @@ class Session(
                             if (n < 0) break
                             decoder.feed(utf8.decode(buf, 0, n))
                             for (payload in pending.toList()) {
+                                log.raw(payload)
                                 val batch = decoder.parseMessages(payload)
-                                if (batch.isNotEmpty()) handleMessages(batch)
+                                if (batch.isNotEmpty()) {
+                                    log.rx(batch)
+                                    handleMessages(batch)
+                                }
                             }
                             pending.clear()
                         }
@@ -484,6 +598,24 @@ class Session(
     }
 
     // ---- helpers
+
+    /** Runs [request] through [http] and reports method, path (no query), status and time. */
+    private suspend fun execute(request: Request): Response {
+        val started = System.nanoTime()
+        try {
+            val response = http.newCall(request).await()
+            log.http(request.method, request.url.encodedPath, response.code, (System.nanoTime() - started) / 1_000_000)
+            return response
+        } catch (e: IOException) {
+            log.http(request.method, request.url.encodedPath, -1, (System.nanoTime() - started) / 1_000_000)
+            throw e
+        }
+    }
+
+    private fun registerSecrets() {
+        bind.secrets().forEach { log.addSecret(it) }
+        log.addSecret(screenId)
+    }
 
     private fun checkOk(response: Response, request: Request) {
         if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)

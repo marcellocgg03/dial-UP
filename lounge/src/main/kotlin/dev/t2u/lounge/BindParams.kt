@@ -60,6 +60,10 @@ class BindParams(
     private var sid: String? = null
     private var gsessionid: String? = null
 
+    /** The credential values currently held, so the logger can scrub them from any text. */
+    @Synchronized
+    fun secrets(): List<String> = listOfNotNull(id, loungeIdToken, sid, gsessionid)
+
     @Synchronized
     fun reset() {
         sid = null
