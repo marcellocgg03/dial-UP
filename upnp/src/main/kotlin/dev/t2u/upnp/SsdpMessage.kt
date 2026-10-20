@@ -70,3 +70,21 @@ fun buildSearchReply(location: String, st: String, server: String, usn: String, 
         append("DATE: ").append(date).append(CRLF)
         append(CRLF)
     }.toByteArray(Charsets.UTF_8)
+/**
+ * NOTIFY in peer-ssdp order: NT, USN, SERVER, LOCATION, NTS, then HOST, CACHE-CONTROL, EXT, DATE.
+ * [nts] is "ssdp:alive" or "ssdp:byebye".
+ */
+fun buildNotify(nts: String, nt: String, usn: String, server: String, location: String, date: String): ByteArray =
+    buildString {
+        append("NOTIFY * HTTP/1.1").append(CRLF)
+        append("NT: ").append(nt).append(CRLF)
+        append("USN: ").append(usn).append(CRLF)
+        append("SERVER: ").append(server).append(CRLF)
+        append("LOCATION: ").append(location).append(CRLF)
+        append("NTS: ").append(nts).append(CRLF)
+        append("HOST: ").append(SsdpConstants.GROUP).append(':').append(SsdpConstants.PORT).append(CRLF)
+        append("CACHE-CONTROL: max-age=1800").append(CRLF)
+        append("EXT: ").append(CRLF)
+        append("DATE: ").append(date).append(CRLF)
+        append(CRLF)
+    }.toByteArray(Charsets.UTF_8)

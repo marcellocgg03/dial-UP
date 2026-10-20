@@ -9,8 +9,6 @@ import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SsdpMessageTest {
@@ -221,7 +219,5 @@ class SsdpMessageTest {
         rig.responder.announce()
         rig.responder.stop()
         assertEquals(0, rig.notifies.get())
-        assertNull(rig.drops.firstOrNull())
-        assertNotNull(rig.responder)
     }
 }

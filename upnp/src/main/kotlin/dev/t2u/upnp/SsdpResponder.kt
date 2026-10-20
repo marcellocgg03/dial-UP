@@ -50,6 +50,7 @@ class SsdpResponder(
     private val replyInterface: NetworkInterface?,
     private val events: SsdpEvents,
     private val groupPort: Int = SsdpConstants.PORT,
+    private val clockNanos: () -> Long = System::nanoTime,
 ) {
     private class Listener(val spec: ListenSpec, val socket: MulticastSocket) {
         lateinit var thread: Thread
@@ -58,6 +59,9 @@ class SsdpResponder(
     private val devices = CopyOnWriteArrayList<SsdpDevice>()
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val bound = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Reply timestamps per source IP for the reflection cap (T-01-05). */
+    private val replyTimes = java.util.concurrent.ConcurrentHashMap<String, java.util.ArrayDeque<Long>>()
 
     @Volatile private var replySocket: MulticastSocket? = null
 
@@ -116,8 +120,30 @@ class SsdpResponder(
         }
     }
 
+    /** Sends ssdp:alive for every registered device and every service type to the SSDP group. */
+    fun announce() = sendNotifies("ssdp:alive")
+
+    private fun sendNotifies(nts: String) {
+        // JVM tests bind the reply socket to loopback and must never put multicast on a real network
+        if (replyBind.isLoopbackAddress) return
+        val sock = replySocket ?: return
+        val group = InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), groupPort)
+        for (device in devices) {
+            for (nt in SsdpConstants.dialServiceTypes(device.uuid)) {
+                val bytes = buildNotify(nts, nt, "uuid:${device.uuid}::$nt", device.serverHeader, device.location, httpDate())
+                try {
+                    sock.send(DatagramPacket(bytes, bytes.size, group))
+                    events.onNotify(nts, nt, device.name)
+                } catch (t: Throwable) {
+                    events.onError("notify", t)
+                }
+            }
+        }
+    }
+
     fun stop() {
         if (!running) return
+        sendNotifies("ssdp:byebye")
         running = false
         for (l in listeners) runCatching { l.socket.close() }
         for (l in listeners) runCatching { l.thread.join(3000) }
@@ -158,7 +184,25 @@ class SsdpResponder(
         val st = msg.headers["ST"] ?: return
         for (device in devices) {
             if (st !in SsdpConstants.dialServiceTypes(device.uuid)) continue
+            if (!allowReply(src)) {
+                events.onDrop(src, "rate")
+                continue
+            }
             sendReply(src, device, st)
+        }
+    }
+
+    /** At most [MAX_REPLIES_PER_SECOND] replies in any rolling second to one source IP. */
+    private fun allowReply(src: InetSocketAddress): Boolean {
+        if (replyTimes.size > 4096) replyTimes.clear()
+        val key = src.address.hostAddress
+        val times = replyTimes.computeIfAbsent(key) { java.util.ArrayDeque() }
+        val now = clockNanos()
+        synchronized(times) {
+            while (times.isNotEmpty() && now - times.peekFirst() >= WINDOW_NANOS) times.pollFirst()
+            if (times.size >= MAX_REPLIES_PER_SECOND) return false
+            times.addLast(now)
+            return true
         }
     }
 
@@ -172,5 +216,10 @@ class SsdpResponder(
         } catch (t: Throwable) {
             events.onError("reply", t)
         }
+    }
+
+    private companion object {
+        const val MAX_REPLIES_PER_SECOND = 32
+        const val WINDOW_NANOS = 1_000_000_000L
     }
 }
