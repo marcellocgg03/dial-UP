@@ -1,0 +1,297 @@
+package dev.t2u.app
+
+import android.annotation.SuppressLint
+import android.app.ActivityManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.io.File
+import java.net.Inet4Address
+
+/** Process-level handle so the command receiver can reach the running service. */
+object ServiceHub {
+    @Volatile
+    var service: BridgeService? = null
+}
+
+/**
+ * The spike's foreground service (type connectedDevice). Holds a MulticastLock, a WifiLock and a
+ * partial WakeLock for its whole lifetime (SPK-02), writes a heartbeat every 30 s and a state.json
+ * snapshot that `tools/spike.sh dump-state` reads. START_NOT_STICKY on purpose: a kill must show up
+ * as a heartbeat gap plus an exit-info entry, not as a silent restart.
+ */
+class BridgeService : Service() {
+    private lateinit var scope: CoroutineScope
+    lateinit var evidence: EvidenceLog
+        private set
+    lateinit var evidenceDir: File
+        private set
+    lateinit var spikeDir: File
+        private set
+
+    private lateinit var mcastLock: WifiManager.MulticastLock
+    private lateinit var wifiLock: WifiManager.WifiLock
+    private lateinit var wakeLock: PowerManager.WakeLock
+    private var wifiLockMode = ""
+    private val startedAtMs = SystemClock.elapsedRealtime()
+    private var lastNotifiedIp: String? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        // Pitfall 12: channel first, startForeground before anything slow.
+        createChannel()
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(wifiIpv4()?.hostAddress),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
+        lastNotifiedIp = wifiIpv4()?.hostAddress
+
+        evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
+        spikeDir = File(filesDir, "spike").also { it.mkdirs() }
+        evidence = EvidenceLog(evidenceDir)
+        ServiceHub.service = this
+        evidence.event(
+            "service-start",
+            mapOf("pid" to android.os.Process.myPid(), "sdk" to Build.VERSION.SDK_INT, "version" to BuildConfigFacts.versionName(this)),
+        )
+
+        acquireLocks()
+        logExitInfo()
+        scope.launch { heartbeatLoop() }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
+            stopSelf()
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        evidence.event("service-stop")
+        releaseLocks()
+        scope.cancel()
+        ServiceHub.service = null
+        evidence.flush()
+        super.onDestroy()
+    }
+
+    // ----- locks ---------------------------------------------------------------------------------
+
+    @SuppressLint("WakelockTimeout")
+    @Suppress("DEPRECATION")
+    private fun acquireLocks() {
+        val wifi = applicationContext.getSystemService(WifiManager::class.java)
+        val power = getSystemService(PowerManager::class.java)
+
+        mcastLock = wifi.createMulticastLock("t2u:mcast").apply { setReferenceCounted(false) }
+        val (mode, modeName) =
+            if (Build.VERSION.SDK_INT >= 29) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY to "FULL_LOW_LATENCY"
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF to "FULL_HIGH_PERF"
+            }
+        wifiLockMode = modeName
+        wifiLock = wifi.createWifiLock(mode, "t2u:wifi").apply { setReferenceCounted(false) }
+        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "t2u:cpu").apply { setReferenceCounted(false) }
+
+        mcastLock.acquire()
+        wifiLock.acquire()
+        wakeLock.acquire()
+
+        evidence.event("lock", mapOf("name" to "t2u:mcast", "mode" to "multicast", "isHeld" to mcastLock.isHeld))
+        evidence.event("lock", mapOf("name" to "t2u:wifi", "mode" to modeName, "isHeld" to wifiLock.isHeld))
+        evidence.event("lock", mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld))
+    }
+
+    private fun releaseLocks() {
+        releaseOne("t2u:mcast", { mcastLock.isHeld }, { mcastLock.release() })
+        releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() })
+        releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
+    }
+
+    private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit) {
+        try {
+            if (isHeld()) release()
+        } catch (t: Throwable) {
+            evidence.event("feature-error", mapOf("where" to "release:$name", "error" to t.javaClass.name, "message" to t.message))
+        }
+        evidence.event("lock", mapOf("name" to name, "isHeld" to isHeld()))
+    }
+
+    // ----- wifi helpers --------------------------------------------------------------------------
+
+    @Suppress("DEPRECATION")
+    private fun wifiLinkProperties(): Pair<Inet4Address?, String?> {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return null to null
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+            val props = cm.getLinkProperties(network) ?: continue
+            val v4 = props.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>().firstOrNull()
+            return v4 to props.interfaceName
+        }
+        return null to null
+    }
+
+    fun wifiIpv4(): Inet4Address? = wifiLinkProperties().first
+
+    fun wifiInterfaceName(): String? = wifiLinkProperties().second
+
+    // ----- heartbeat and state -------------------------------------------------------------------
+
+    private suspend fun heartbeatLoop() {
+        while (scope.isActive) {
+            try {
+                val state = currentState()
+                evidence.event("heartbeat", heartbeatFields())
+                writeStateFile(state)
+                refreshNotificationIfIpChanged()
+            } catch (t: Throwable) {
+                evidence.event("feature-error", mapOf("where" to "heartbeat", "error" to t.javaClass.name, "message" to t.message))
+            }
+            delay(HEARTBEAT_MS)
+        }
+    }
+
+    private fun heartbeatFields(): Map<String, Any?> {
+        val power = getSystemService(PowerManager::class.java)
+        return mapOf(
+            "mcast" to mcastLock.isHeld,
+            "wifi" to wifiLock.isHeld,
+            "wake" to wakeLock.isHeld,
+            "wifiIp" to wifiIpv4()?.hostAddress,
+            "iface" to wifiInterfaceName(),
+            "idle" to power.isDeviceIdleMode,
+            "interactive" to power.isInteractive,
+            "ignoringBatteryOpt" to power.isIgnoringBatteryOptimizations(packageName),
+            "uptimeMs" to (SystemClock.elapsedRealtime() - startedAtMs),
+        )
+    }
+
+    /** Live state snapshot; also the content of evidence/state.json and the dump-state reply. */
+    fun currentState(): JsonObject {
+        val power = getSystemService(PowerManager::class.java)
+        val ip = wifiIpv4()?.hostAddress
+        val iface = wifiInterfaceName()
+        return buildJsonObject {
+            put("mcast", mcastLock.isHeld)
+            put("wifi", wifiLock.isHeld)
+            put("wake", wakeLock.isHeld)
+            put("wifiLockMode", wifiLockMode)
+            put("ip", ip?.let { JsonPrimitive(it) } ?: JsonPrimitive(null as String?))
+            put("iface", iface?.let { JsonPrimitive(it) } ?: JsonPrimitive(null as String?))
+            put("idle", power.isDeviceIdleMode)
+            put("interactive", power.isInteractive)
+            put("ignoringBatteryOpt", power.isIgnoringBatteryOptimizations(packageName))
+            put("uptimeMs", SystemClock.elapsedRealtime() - startedAtMs)
+            put("pid", android.os.Process.myPid())
+        }
+    }
+
+    private fun writeStateFile(state: JsonObject) {
+        // temp file then rename, so a reader never sees a half-written state.json
+        val tmp = File(evidenceDir, "state.json.tmp")
+        tmp.writeText(state.toString())
+        tmp.renameTo(File(evidenceDir, "state.json"))
+    }
+
+    // ----- exit info and notification ------------------------------------------------------------
+
+    private fun logExitInfo() {
+        if (Build.VERSION.SDK_INT < 30) return
+        try {
+            val am = getSystemService(ActivityManager::class.java)
+            for (info in am.getHistoricalProcessExitReasons(packageName, 0, 5)) {
+                evidence.event(
+                    "exit-info",
+                    mapOf(
+                        "reason" to info.reason,
+                        "status" to info.status,
+                        "timestamp" to info.timestamp,
+                        "description" to info.description,
+                    ),
+                )
+            }
+        } catch (t: Throwable) {
+            evidence.event("feature-error", mapOf("where" to "exit-info", "error" to t.javaClass.name, "message" to t.message))
+        }
+    }
+
+    private fun createChannel() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "T2U spike", NotificationManager.IMPORTANCE_LOW))
+    }
+
+    private fun buildNotification(ip: String?): Notification {
+        val stop = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("T2U spike")
+            .setContentText("listening on ${ip ?: "no Wi-Fi"}")
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setOngoing(true)
+            .addAction(0, "Stop", stop)
+            .build()
+    }
+
+    private fun refreshNotificationIfIpChanged() {
+        val ip = wifiIpv4()?.hostAddress
+        if (ip == lastNotifiedIp) return
+        lastNotifiedIp = ip
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(ip))
+    }
+
+    companion object {
+        const val ACTION_STOP = "dev.t2u.spike.STOP"
+        const val CHANNEL_ID = "t2u-spike"
+        const val NOTIFICATION_ID = 1
+        const val HEARTBEAT_MS = 30_000L
+    }
+}
+
+/** Tiny helper kept out of the service body so BuildConfig (disabled) is not needed. */
+internal object BuildConfigFacts {
+    fun versionName(context: Context): String? =
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (_: Throwable) {
+            null
+        }
+}
