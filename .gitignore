@@ -1,1 +1,9 @@
 reference/
+.gradle/
+build/
+*/build/
+.kotlin/
+local.properties
+.t2u/
+.idea/
+*.iml

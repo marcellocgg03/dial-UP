@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Sonos SOAP and device descriptions are plain HTTP to private LAN IPs. -->
+    <!-- Do not set the native-library extraction attribute here: AGP injects it from
+         useLegacyPackaging = true (Pitfall 10). Plan 01-03 adds the activity, service, receiver. -->
+    <application
+        android:allowBackup="false"
+        android:label="T2U spike"
+        android:usesCleartextTraffic="true" />
+
+</manifest>
