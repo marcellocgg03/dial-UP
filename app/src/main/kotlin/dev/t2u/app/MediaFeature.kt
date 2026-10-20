@@ -32,7 +32,7 @@ import java.net.URI
  */
 class MediaFeature : SpikeFeature {
     override val name = "media"
-    override val commands: Set<String> = setOf("media-start", "media-stop", "pipe-test")
+    override val commands: Set<String> = setOf("media-start", "media-stop", "pipe-test", "media-bind")
 
     private val jobLock = Mutex()
     private var host: SpikeHost? = null
@@ -40,6 +40,9 @@ class MediaFeature : SpikeFeature {
     private var server: MediaServer? = null
 
     @Volatile private var boundIp: String? = null
+
+    /** Diagnostic override (hotspot test): serve on this local interface address instead of the Wi-Fi client address. */
+    @Volatile private var bindOverride: String? = null
 
     @Volatile private var busyWith: String? = null
 
@@ -58,6 +61,7 @@ class MediaFeature : SpikeFeature {
     override fun handle(cmd: String, args: Map<String, String>): CommandReply = when (cmd) {
         "media-start" -> startJob("media-start") { runMediaStart() }
         "pipe-test" -> handlePipeTest(args)
+        "media-bind" -> handleMediaBind(args)
         "media-stop" -> {
             stopServer()
             CommandReply(true, """{"stopped":true}""")
@@ -105,7 +109,7 @@ class MediaFeature : SpikeFeature {
     private fun ensureServer(h: SpikeHost): MediaServer {
         val paths = h.payloads()
         if (runner == null) runner = FfmpegRunner(paths, h.context.cacheDir, h.evidence)
-        val ip = h.wifiIpv4()?.hostAddress ?: error("no Wi-Fi IPv4 address")
+        val ip = bindOverride ?: h.wifiIpv4()?.hostAddress ?: error("no Wi-Fi IPv4 address")
         server?.let { running ->
             if (running.isRunning() && ip == boundIp) return running
             running.stop()
@@ -137,6 +141,27 @@ class MediaFeature : SpikeFeature {
 
     /** What an input contributes: the ffmpeg input side and, when it is already an AAC-in-MP4 file, a direct file token. */
     private class PipeInput(val name: String, val args: List<String>, val m4aFile: File?, val source: String?)
+
+    /**
+     * `media-bind ip=<addr>` serves on another local interface (for example the hotspot swlan0). The address must be
+     * private IPv4 and belong to one of this phone's own interfaces; `ip=` (empty) clears the override.
+     */
+    private fun handleMediaBind(args: Map<String, String>): CommandReply {
+        val ip = args["ip"].orEmpty()
+        if (ip.isEmpty()) {
+            bindOverride = null
+            stopServer()
+            return CommandReply(true, """{"bind":null}""")
+        }
+        val addr = try { java.net.InetAddress.getByName(ip) } catch (_: Exception) { return reply("bad ip") }
+        if (addr !is java.net.Inet4Address || !addr.isSiteLocalAddress) return reply("ip must be private IPv4")
+        val local = java.net.NetworkInterface.getNetworkInterfaces().toList().any { nif -> nif.inetAddresses.toList().any { it == addr } }
+        if (!local) return reply("ip is not a local interface address")
+        bindOverride = addr.hostAddress
+        stopServer()
+        host?.evidence?.event("media-bind", mapOf("ip" to addr.hostAddress))
+        return CommandReply(true, """{"bind":"${addr.hostAddress}"}""")
+    }
 
     /** Replies at once with the reason when the input cannot be built; ffmpeg is never started in that case. */
     private fun handlePipeTest(args: Map<String, String>): CommandReply {
