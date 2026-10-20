@@ -85,10 +85,10 @@ class RendererRegistryTest {
 
         // the fake speaker: any M-SEARCH is answered with a MediaRenderer 200 reply
         val speakerSock = DatagramSocket(0, loopback).apply { soTimeout = 200 }
-        @Volatile var running = true
+        val running = java.util.concurrent.atomic.AtomicBoolean(true)
         val speakerThread = Thread {
             val buf = ByteArray(2048)
-            while (running) {
+            while (running.get()) {
                 val p = DatagramPacket(buf, buf.size)
                 try {
                     speakerSock.receive(p)
@@ -132,7 +132,7 @@ class RendererRegistryTest {
             assertTrue(File(dataDir, "ports.json").readText().contains("fake-renderer"))
         } finally {
             ssdp.stop()
-            running = false
+            running.set(false)
             speakerSock.close()
             speakerThread.join(2000)
         }
