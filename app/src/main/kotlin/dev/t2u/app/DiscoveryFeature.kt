@@ -1,131 +1,338 @@
 // Owner: Plan 01-04 (SSDP responder and DIAL servers).
 package dev.t2u.app
 
+import android.os.Build
 import dev.t2u.dial.DialConfig
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.DialServer
+import dev.t2u.dial.DialVariant
+import dev.t2u.dial.LocationHost
+import dev.t2u.dial.spikeVariants
 import dev.t2u.upnp.ListenSpec
 import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.File
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Makes the phone discoverable as a DIAL receiver and logs every step: one SsdpResponder plus DIAL
- * servers, every datagram and request written to the evidence log with its source, a self flag and
- * the USER-AGENT (RESEARCH Open Question 2).
+ * Makes the phone discoverable as a DIAL receiver and logs every step. Runs the four diagnostic
+ * variants (A-D) at once on one [SsdpResponder]; every datagram and request is written to the
+ * evidence log with its source, a self flag and the USER-AGENT (RESEARCH Open Question 2).
+ *
+ * Diagnostic mode (join mode, app state, skip-next-rebind) is persisted in variant-state.json so a
+ * process restart keeps it, and is changed from adb with `variant`; `reannounce` re-sends NOTIFY alive.
  */
 class DiscoveryFeature : SpikeFeature {
     override val name = "discovery"
-    override val commands: Set<String> = emptySet()
+    override val commands: Set<String> = setOf("variant", "reannounce")
+
+    private class Running(
+        val responder: SsdpResponder,
+        val servers: List<Pair<DialVariant, DialServer>>,
+        val devices: List<SsdpDevice>,
+        val wifiIp: String,
+        val iface: String,
+    )
+
+    private data class Settings(val join: String, val appState: String, val skipNextRebind: Boolean)
 
     private val lock = Any()
     private var host: SpikeHost? = null
-    private var responder: SsdpResponder? = null
-    private val servers = mutableListOf<DialServer>()
-    private val devices = mutableListOf<SsdpDevice>()
-    private val bindResults = LinkedHashMap<String, String>()
-    private var wifiIp: String? = null
-    private var iface: String? = null
+    private var monitor: NetworkMonitor? = null
+    private var rebindJob: Job? = null
+    private var variants: List<DialVariant> = emptyList()
+
+    @Volatile private var running: Running? = null
+
+    @Volatile private var settings = Settings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
+
+    /** Last Wi-Fi address we were (or tried to be) bound to; used for the rebind log. */
+    @Volatile private var lastIp: String? = null
+    private val bindResults = ConcurrentHashMap<String, String>()
 
     private val ssdpRx = AtomicInteger()
     private val ssdpRxSelf = AtomicInteger()
     private val replies = AtomicInteger()
     private val httpReqs = AtomicInteger()
+    private val launches = AtomicInteger()
+
+    // ----- SpikeFeature --------------------------------------------------------------------------
 
     override fun start(host: SpikeHost) {
         this.host = host
-        host.scope.launch { synchronized(lock) { startAll(host) } }
+        settings = readSettings(host)
+        // UUIDs of A, B, D are random per service start (Node parity) but stay fixed across restarts of the servers
+        variants = spikeVariants(System.getProperty("os.version").orEmpty(), Build.VERSION.RELEASE) { UUID.randomUUID().toString() }
+        val mon = NetworkMonitor(host.context, host.evidence) { reason -> scheduleRebind(reason) }
+        monitor = mon
+        mon.seed(host.wifiIpv4()?.hostAddress)
+        mon.start()
+        host.scope.launch {
+            synchronized(lock) {
+                startAll(host)
+                running?.responder?.announce()
+            }
+        }
     }
 
     /** Runs the shutdown off the calling thread: sockets must not be touched on the main thread. */
     override fun stop() {
+        runCatching { monitor?.stop() }
+        monitor = null
+        rebindJob?.cancel()
         val t = Thread({ synchronized(lock) { stopAll() } }, "t2u-discovery-stop").apply { isDaemon = true }
         t.start()
         t.join(8000)
     }
 
-    override fun handle(cmd: String, args: Map<String, String>) = CommandReply(false, """{"error":"unknown command"}""")
-
-    override fun state(): JsonObject = buildJsonObject {
-        put("running", responder != null)
-        put("wifiIp", wifiIp)
-        put("iface", iface)
-        put("join", "explicit")
-        put("ssdpRx", ssdpRx.get())
-        put("ssdpRxSelf", ssdpRxSelf.get())
-        put("replies", replies.get())
-        put("httpReqs", httpReqs.get())
-        put("devices", JsonArray(devices.zip(servers).map { (d, s) ->
-            buildJsonObject {
-                put("name", d.name)
-                put("port", s.resolvedPort())
-                put("uuid", d.uuid)
-            }
-        }))
-        put("bind", JsonObject(bindResults.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }))
+    override fun handle(cmd: String, args: Map<String, String>): CommandReply = when (cmd) {
+        "reannounce" -> {
+            val r = running
+            r?.responder?.announce()
+            host?.evidence?.event("variant", mapOf("reannounce" to true, "running" to (r != null)))
+            CommandReply(true, """{"ok":true}""")
+        }
+        "variant" -> handleVariant(args)
+        else -> CommandReply(false, """{"error":"unknown command"}""")
     }
 
+    override fun state(): JsonObject {
+        val r = running
+        val s = settings
+        return buildJsonObject {
+            put("running", r != null)
+            put("wifiIp", r?.wifiIp)
+            put("iface", r?.iface)
+            put("join", s.join)
+            put("appState", s.appState)
+            put("skipNextRebind", s.skipNextRebind)
+            put("ssdpRx", ssdpRx.get())
+            put("ssdpRxSelf", ssdpRxSelf.get())
+            put("replies", replies.get())
+            put("httpReqs", httpReqs.get())
+            put("launches", launches.get())
+            put(
+                "variants",
+                JsonArray(
+                    (r?.servers.orEmpty()).zip(r?.devices.orEmpty()).map { (pair, device) ->
+                        val (variant, server) = pair
+                        buildJsonObject {
+                            put("id", variant.id)
+                            put("name", variant.name)
+                            put("port", server.resolvedPort())
+                            put("uuid", device.uuid)
+                            put("server", device.serverHeader)
+                            put("location", device.location)
+                        }
+                    },
+                ),
+            )
+            put("bind", JsonObject(bindResults.toSortedMap().mapValues { JsonPrimitive(it.value) }))
+        }
+    }
+
+    // ----- commands ------------------------------------------------------------------------------
+
+    private fun handleVariant(args: Map<String, String>): CommandReply {
+        val h = host ?: return CommandReply(false, """{"error":"not started"}""")
+        var next = settings
+        for ((key, value) in args) {
+            when (key) {
+                "join" -> {
+                    if (value !in JOIN_MODES) return error("join must be one of ${JOIN_MODES.joinToString("|")}")
+                    next = next.copy(join = value)
+                }
+                "appState" -> {
+                    if (value !in APP_STATES) return error("appState must be one of ${APP_STATES.joinToString("|")}")
+                    next = next.copy(appState = value)
+                }
+                "skipNextRebind" -> {
+                    if (value != "1" && value != "0") return error("skipNextRebind must be 1 or 0")
+                    next = next.copy(skipNextRebind = value == "1")
+                }
+                else -> return error("unknown argument $key")
+            }
+        }
+        if (args.isEmpty()) return CommandReply(true, state().toString())
+
+        synchronized(lock) {
+            val joinOrAppChanged = next.join != settings.join || next.appState != settings.appState
+            settings = next
+            writeSettings(h, next)
+            if (joinOrAppChanged || running == null) {
+                stopAll()
+                startAll(h)
+                running?.responder?.announce()
+            }
+        }
+        h.evidence.event("variant", mapOf("join" to next.join, "appState" to next.appState, "skipNextRebind" to next.skipNextRebind))
+        return CommandReply(true, state().toString())
+    }
+
+    private fun error(message: String) = CommandReply(false, buildJsonObject { put("error", message) }.toString())
+
     // ----- lifecycle -----------------------------------------------------------------------------
+
+    private fun resolve(h: LocationHost, wifiIp: String): String = when (h) {
+        LocationHost.WifiIp -> wifiIp
+        is LocationHost.Fixed -> h.host
+    }
 
     private fun startAll(host: SpikeHost) {
         val ip = host.wifiIpv4()
         val ifaceName = host.wifiInterfaceName()
         if (ip == null || ifaceName == null) {
+            lastIp = null
             host.evidence.event("net", mapOf("wifi" to false))
             return
         }
-        wifiIp = ip.hostAddress
-        iface = ifaceName
+        val wifiIp = ip.hostAddress!!
+        lastIp = wifiIp
         val nif = NetworkInterface.getByName(ifaceName)
+        val s = settings
 
-        val uuid = UUID.randomUUID().toString()
-        val dial = DialServer(DialConfig("T2U-SPIKE A base", uuid, ip.hostAddress!!, 3100)) { onHttp("T2U-SPIKE A base", it) }
-        try {
-            dial.start()
-        } catch (t: Throwable) {
-            host.evidence.event("feature-error", mapOf("where" to "dial-start", "error" to t.javaClass.name, "message" to t.message))
-            return
+        val servers = mutableListOf<Pair<DialVariant, DialServer>>()
+        val devices = mutableListOf<SsdpDevice>()
+        for (v in variants) {
+            val server = DialServer(DialConfig(v.name, v.uuid, resolve(v.bindHost, wifiIp), v.port, appState = s.appState)) { onHttp(v.name, it) }
+            try {
+                server.start()
+            } catch (t: Throwable) {
+                bindResults["dial:${v.id}"] = "error:${t.javaClass.simpleName}: ${t.message}"
+                host.evidence.event(
+                    "feature-error",
+                    mapOf("where" to "dial-start:${v.id}", "error" to t.javaClass.name, "message" to t.message),
+                )
+                continue
+            }
+            bindResults["dial:${v.id}"] = "ok:${server.resolvedPort()}"
+            servers.add(v to server)
+            devices.add(
+                SsdpDevice(
+                    v.name,
+                    v.uuid,
+                    v.serverHeader,
+                    "http://${resolve(v.locationHost, wifiIp)}:${server.resolvedPort()}/ytcr/ssdp/device-desc.xml",
+                ),
+            )
         }
-        servers.add(dial)
-        val location = "http://${ip.hostAddress}:${dial.resolvedPort()}/ytcr/ssdp/device-desc.xml"
-        val device = SsdpDevice("T2U-SPIKE A base", uuid, "Linux/${System.getProperty("os.version")} UPnP/1.1 famium/0.0.1", location)
-        devices.add(device)
 
-        val r = SsdpResponder(
-            listOf(ListenSpec("explicit", null, 1900, nif, false)),
-            ip,
-            nif,
-            ssdpEvents(),
-        )
-        r.register(device)
-        r.start()
-        responder = r
+        val responder = SsdpResponder(listenSpecs(s.join, ip, nif), ip, nif, ssdpEvents(wifiIp))
+        devices.forEach { responder.register(it) }
+        responder.start()
+        running = Running(responder, servers, devices, wifiIp, ifaceName)
+    }
+
+    private fun listenSpecs(join: String, ip: Inet4Address, nif: NetworkInterface?): List<ListenSpec> {
+        val explicit = ListenSpec("explicit", null, 1900, nif, false)
+        val defaultRoute = ListenSpec("default-route", null, 1900, null, true)
+        val bindIp = ListenSpec("bind-ip", ip, 1900, nif, false)
+        return when (join) {
+            "default-route" -> listOf(defaultRoute)
+            "bind-ip" -> listOf(bindIp)
+            "all" -> listOf(explicit, defaultRoute, bindIp)
+            else -> listOf(explicit)
+        }
     }
 
     private fun stopAll() {
-        runCatching { responder?.stop() }
-        responder = null
-        for (s in servers) runCatching { s.stop() }
-        servers.clear()
-        devices.clear()
+        val r = running
+        running = null
+        if (r != null) {
+            runCatching { r.responder.stop() }
+            for ((_, server) in r.servers) runCatching { server.stop() }
+        }
+    }
+
+    // ----- rebind on Wi-Fi change ----------------------------------------------------------------
+
+    private fun scheduleRebind(reason: String) {
+        val h = host ?: return
+        rebindJob?.cancel()
+        rebindJob = h.scope.launch {
+            delay(REBIND_DEBOUNCE_MS)
+            rebind(h, reason)
+        }
+    }
+
+    private fun rebind(h: SpikeHost, reason: String) {
+        synchronized(lock) {
+            if (settings.skipNextRebind) {
+                settings = settings.copy(skipNextRebind = false)
+                writeSettings(h, settings)
+                h.evidence.event("net", mapOf("rebind" to false, "skipped" to true, "reason" to reason))
+                return
+            }
+            val oldIp = lastIp
+            stopAll()
+            startAll(h)
+            running?.responder?.announce()
+            h.evidence.event("net", mapOf("rebind" to true, "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+        }
+    }
+
+    // ----- persistence ---------------------------------------------------------------------------
+
+    private fun settingsFile(h: SpikeHost) = File(h.spikeDir, "variant-state.json")
+
+    private fun readSettings(h: SpikeHost): Settings {
+        val defaults = Settings(DEFAULT_JOIN, DEFAULT_APP_STATE, false)
+        return try {
+            val f = settingsFile(h)
+            if (!f.exists()) return defaults
+            val o = Json.parseToJsonElement(f.readText()).jsonObject
+            Settings(
+                join = o["join"]?.jsonPrimitive?.contentOrNull?.takeIf { it in JOIN_MODES } ?: DEFAULT_JOIN,
+                appState = o["appState"]?.jsonPrimitive?.contentOrNull?.takeIf { it in APP_STATES } ?: DEFAULT_APP_STATE,
+                skipNextRebind = o["skipNextRebind"]?.jsonPrimitive?.booleanOrNull ?: false,
+            )
+        } catch (t: Throwable) {
+            h.evidence.event("feature-error", mapOf("where" to "variant-state:read", "error" to t.javaClass.name, "message" to t.message))
+            defaults
+        }
+    }
+
+    private fun writeSettings(h: SpikeHost, s: Settings) {
+        try {
+            val json = buildJsonObject {
+                put("join", s.join)
+                put("appState", s.appState)
+                put("skipNextRebind", s.skipNextRebind)
+            }.toString()
+            val f = settingsFile(h)
+            val tmp = File(f.parentFile, "variant-state.json.tmp")
+            f.parentFile?.mkdirs()
+            tmp.writeText(json)
+            if (!tmp.renameTo(f)) f.writeText(json)
+        } catch (t: Throwable) {
+            h.evidence.event("feature-error", mapOf("where" to "variant-state:write", "error" to t.javaClass.name, "message" to t.message))
+        }
     }
 
     // ----- evidence mapping ----------------------------------------------------------------------
 
-    private fun isSelf(addr: InetAddress): Boolean = addr.hostAddress == wifiIp
-
-    private fun ssdpEvents() = object : SsdpEvents {
+    private fun ssdpEvents(wifiIp: String) = object : SsdpEvents {
         override fun onBind(specId: String, ok: Boolean, boundPort: Int, error: String?) {
             bindResults[specId] = if (ok) "ok:$boundPort" else "error:$error"
             host?.evidence?.event("ssdp-bind", mapOf("sock" to specId, "ok" to ok, "port" to boundPort, "error" to error))
@@ -133,7 +340,7 @@ class DiscoveryFeature : SpikeFeature {
 
         override fun onReceive(specId: String, src: InetSocketAddress, msg: SsdpMessage, raw: String) {
             ssdpRx.incrementAndGet()
-            val self = isSelf(src.address)
+            val self = isSelf(src.address, wifiIp)
             if (self) ssdpRxSelf.incrementAndGet()
             val h = msg.headers
             val isSearch = msg.startLine.uppercase().startsWith("M-SEARCH")
@@ -183,9 +390,14 @@ class DiscoveryFeature : SpikeFeature {
         }
     }
 
+    private fun isSelf(addr: InetAddress, wifiIp: String): Boolean = addr.hostAddress == wifiIp
+
     private fun onHttp(device: String, req: DialRequest) {
         httpReqs.incrementAndGet()
-        val self = req.remoteHost == wifiIp
+        if (req.method == "POST" && req.uri.substringBefore('?').endsWith("/apps/YouTube")) launches.incrementAndGet()
+        // the phone's own apps reach a receiver either through its Wi-Fi address or through loopback (variant D)
+        val self = req.remoteHost == running?.wifiIp || req.remoteHost == lastIp ||
+            req.remoteHost.startsWith("127.") || req.remoteHost == "::1"
         host?.evidence?.event(
             "http-req",
             mapOf(
@@ -203,5 +415,13 @@ class DiscoveryFeature : SpikeFeature {
                 "body" to req.body,
             ),
         )
+    }
+
+    private companion object {
+        const val DEFAULT_JOIN = "explicit"
+        const val DEFAULT_APP_STATE = "running"
+        const val REBIND_DEBOUNCE_MS = 2000L
+        val JOIN_MODES = listOf("explicit", "default-route", "bind-ip", "all")
+        val APP_STATES = listOf("running", "stopped")
     }
 }

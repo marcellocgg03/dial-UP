@@ -94,4 +94,26 @@ class DiscoveryLoopbackTest {
             dial.stop()
         }
     }
+
+    @Test
+    fun aDialServerCanRebindItsPortRightAfterServingRequests() {
+        val first = DialServer(DialConfig("rebind", "u1", "127.0.0.1", 0)) {}
+        first.start()
+        val port = first.resolvedPort()
+        try {
+            val http = HttpClient.newHttpClient()
+            repeat(3) {
+                http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/ytcr/apps")).GET().build(), HttpResponse.BodyHandlers.discarding())
+            }
+        } finally {
+            first.stop()
+        }
+        val second = DialServer(DialConfig("rebind", "u1", "127.0.0.1", port)) {}
+        second.start() // would throw BindException without reuseAddress when connections linger in TIME_WAIT
+        try {
+            assertEquals(port, second.resolvedPort())
+        } finally {
+            second.stop()
+        }
+    }
 }

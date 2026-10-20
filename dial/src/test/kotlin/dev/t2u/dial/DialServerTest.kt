@@ -169,4 +169,45 @@ class DialServerTest {
         assertEquals(listOf(404, 404), seen.map { it.status })
         assertNull(seen[0].body)
     }
+
+    // ----- spike variants ---------------------------------------------------------------------
+
+    private fun variants() = spikeVariants("6.1.0-test", "16") { java.util.UUID.randomUUID().toString() }
+
+    @Test
+    fun fourVariantsWithAsciiSpikeNamesOnPorts3100To3103() {
+        val v = variants()
+        assertEquals(listOf("A", "B", "C", "D"), v.map { it.id })
+        assertEquals(listOf(3100, 3101, 3102, 3103), v.map { it.port })
+        assertEquals(
+            listOf("T2U-SPIKE A base", "T2U-SPIKE B server", "T2U-SPIKE C uuid", "T2U-SPIKE D loc"),
+            v.map { it.name },
+        )
+        for (x in v) {
+            assertTrue(x.name.startsWith("T2U-SPIKE "), x.name)
+            assertTrue(x.name.all { it.code in 0x20..0x7e }, "ASCII only: ${x.name}")
+        }
+        assertEquals(4, v.map { it.uuid }.toSet().size, "every variant has its own UUID")
+    }
+
+    @Test
+    fun variantCUuidIsStableAndAAndBChangeBetweenCalls() {
+        val first = variants()
+        val second = variants()
+        assertEquals(first[2].uuid, second[2].uuid)
+        assertEquals(java.util.UUID.nameUUIDFromBytes("t2u-spike-C".toByteArray()).toString(), first[2].uuid)
+        assertTrue(first[0].uuid != second[0].uuid)
+        assertTrue(first[1].uuid != second[1].uuid)
+    }
+
+    @Test
+    fun serverHeadersAndLocationHosts() {
+        val v = variants()
+        assertEquals("Linux/6.1.0-test UPnP/1.1 famium/0.0.1", v[0].serverHeader)
+        assertTrue(v[1].serverHeader.startsWith("Android/"), v[1].serverHeader)
+        assertEquals(LocationHost.WifiIp, v[0].locationHost)
+        assertEquals(LocationHost.Fixed("127.0.0.1"), v[3].locationHost)
+        assertEquals(LocationHost.Fixed("127.0.0.1"), v[3].bindHost)
+        assertEquals(LocationHost.WifiIp, v[2].bindHost)
+    }
 }

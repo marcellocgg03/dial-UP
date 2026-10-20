@@ -7,8 +7,10 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
+import io.ktor.server.application.serverConfig
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.EngineConnectorBuilder
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.host
 import io.ktor.server.request.httpMethod
@@ -67,7 +69,16 @@ class DialServer(private val config: DialConfig, private val onRequest: (DialReq
 
     fun start() {
         check(server == null) { "already started" }
-        val s = embeddedServer(CIO, port = config.port, host = config.bindHost) { configure(this) }
+        // reuseAddress: a restart (variant change, Wi-Fi rebind) must not hit EADDRINUSE from TIME_WAIT
+        val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
+            reuseAddress = true
+            connectors.add(
+                EngineConnectorBuilder().apply {
+                    host = config.bindHost
+                    port = config.port
+                },
+            )
+        }
         s.start(wait = false)
         boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
         server = s
