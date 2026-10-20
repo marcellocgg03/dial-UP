@@ -15,7 +15,14 @@ import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.maxAge
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -145,6 +152,8 @@ class RendererRegistry(
                 existing.refresh(age)
                 return
             }
+            // Same device, new description URL (rebooted, DHCP change, random port): rebuild.
+            removeRenderer(udn, "moved", "now at $location")
         }
 
         val go = lock.withLock {
@@ -182,6 +191,75 @@ class RendererRegistry(
             log("failed", udn, renderer?.name, location, port, reason = e.message ?: e.javaClass.simpleName)
         } finally {
             withContext(NonCancellable) { lock.withLock { pending.remove(udn) } }
+        }
+    }
+
+    /** index.js removeRenderer: take it out of the list, destroy it, free its port (which stays remembered), log [event]. */
+    private suspend fun removeRenderer(udn: String, event: String = "removed", reason: String? = null) {
+        val r = lock.withLock { running.remove(udn)?.also { publish() } } ?: return
+        try {
+            r.destroy()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            // a renderer that fails to stop is gone from the list all the same
+        } finally {
+            ports.release(r.port)
+        }
+        log(event, udn, r.name, r.location, r.port, reason)
+    }
+
+    /** index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. */
+    suspend fun onByebye(headers: Map<String, String>) {
+        val udn = udnFromUsn(headers["USN"]) ?: return
+        removeRenderer(udn)
+    }
+
+    /** index.js prune: removes every renderer that has not been seen for maxAge x 1.5. */
+    suspend fun prune() {
+        val now = clock()
+        val stale = lock.withLock { running.filterValues { it.isStale(now) }.mapValues { it.value.lastSeen } }
+        for ((udn, lastSeen) in stale) {
+            removeRenderer(udn, "stale", "not seen for ${(now - lastSeen) / 1000} s")
+        }
+    }
+
+    /** Shutdown (index.js shutdown): stop every receiver so they leave the cast menu. */
+    suspend fun removeAll() {
+        val udns = lock.withLock { running.keys.toList() }
+        coroutineScope {
+            udns.map { udn -> async { runCatching { removeRenderer(udn) } } }.awaitAll()
+        }
+    }
+
+    /**
+     * index.js main: [search] at start, 5 s later (catches devices that drop the first packet) and every
+     * discoveryIntervalS; [prune] every pruneIntervalS. Cancel the returned job to stop all of it.
+     */
+    fun launchSchedules(scope: CoroutineScope, search: () -> Unit): Job = scope.launch {
+        suspend fun safe(block: suspend () -> Unit) {
+            try {
+                block()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                log("failed", "-", reason = "schedule: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
+        safe { search() }
+        launch {
+            delay(5_000)
+            safe { search() }
+        }
+        launch {
+            while (true) {
+                delay(config.discoveryIntervalS * 1000L)
+                safe { search() }
+            }
+        }
+        launch {
+            while (true) {
+                delay(config.pruneIntervalS * 1000L)
+                safe { prune() }
+            }
         }
     }
 }
