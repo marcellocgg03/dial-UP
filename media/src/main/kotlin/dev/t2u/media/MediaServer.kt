@@ -423,6 +423,9 @@ class MediaServer(
                 continue
             }
             // Hung up while we resolved: an ffmpeg started now would block on a pipe nobody reads (mediaServer.js).
+            // Measured with Ktor CIO 3.6.0: the call's coroutine stays active when the peer closes before the first
+            // response byte, so this only catches cancellation (engine stop). A hang-up during the lookup is caught by
+            // the first write below, which fails and kills ffmpeg within a flush (MediaServerLadderTest).
             if (!currentCoroutineContext().isActive) return
             val proc = withContext(Dispatchers.IO) { l.start(input + tail + "pipe:1") }
             try {
