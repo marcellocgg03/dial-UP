@@ -91,7 +91,14 @@ fun buildEnvelope(serviceType: String, action: String, params: List<Pair<String,
 
 private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
 
+/**
+ * [http] must be [lanHttpClient] or derived from it with newBuilder() (SVC-05), so SOAP can only reach
+ * private LAN addresses; the no-argument constructor does exactly that.
+ */
 class SoapClient(private val http: OkHttpClient) {
+    constructor() : this(lanHttpClient())
+
+
     /**
      * POSTs one SOAP action and returns the children of the response element as a name -> text map.
      * Throws [UpnpError]; never anything else for a bad renderer. Cancelling the coroutine cancels the HTTP call.
@@ -103,16 +110,20 @@ class SoapClient(private val http: OkHttpClient) {
         timeoutMs: Long = 8000,
     ): Map<String, String> {
         val body = buildEnvelope(service.serviceType, action, params).toByteArray(Charsets.UTF_8)
-        val request = Request.Builder()
-            .url(service.controlURL)
-            .header("SOAPACTION", "\"${service.serviceType}#$action\"")
-            .post(body.toRequestBody(XML_MEDIA_TYPE))
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(service.controlURL)
+                .header("SOAPACTION", "\"${service.serviceType}#$action\"")
+                .post(body.toRequestBody(XML_MEDIA_TYPE))
+                .build()
+        } catch (e: IllegalArgumentException) {
+            throw UpnpError("$action: bad control URL (${e.message})", "ENETWORK")
+        }
         val call = http.newCall(request)
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
 
         val (status, text) = try {
-            execute(call)
+            executeForText(call)
         } catch (e: IOException) {
             val timedOut = e is InterruptedIOException || e.message?.contains("timeout", ignoreCase = true) == true
             throw UpnpError("$action: ${if (timedOut) "timed out" else (e.message ?: e.javaClass.simpleName)}", "ENETWORK")
@@ -136,26 +147,30 @@ class SoapClient(private val http: OkHttpClient) {
             emptyMap() // Some renderers return junk on success; the call still worked.
         }
     }
+}
 
-    private suspend fun execute(call: Call): Pair<Int, String> = suspendCancellableCoroutine { cont ->
-        cont.invokeOnCancellation { call.cancel() }
-        call.enqueue(
-            object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
+/**
+ * Runs [call] without blocking a thread and returns the HTTP status and the whole body as text.
+ * Cancelling the coroutine cancels the call. Shared by [SoapClient] and [fetchDescription].
+ */
+internal suspend fun executeForText(call: Call): Pair<Int, String> = suspendCancellableCoroutine { cont ->
+    cont.invokeOnCancellation { call.cancel() }
+    call.enqueue(
+        object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isActive) cont.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val text = response.use { it.body.string() }
+                    if (cont.isActive) cont.resume(response.code to text)
+                } catch (e: IOException) {
                     if (cont.isActive) cont.resumeWithException(e)
                 }
-
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        val text = response.use { it.body.string() }
-                        if (cont.isActive) cont.resume(response.code to text)
-                    } catch (e: IOException) {
-                        if (cont.isActive) cont.resumeWithException(e)
-                    }
-                }
-            },
-        )
-    }
+            }
+        },
+    )
 }
 
 private fun localName(tag: String): String = tag.substringAfterLast(':')

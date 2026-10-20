@@ -147,6 +147,14 @@ class SoapTest {
     }
 
     @Test
+    fun `the default client refuses a public address as ENETWORK`() {
+        val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://8.8.8.8/ctl", "", "")
+        val err = assertFailsWith<UpnpError> { runBlocking { SoapClient().callAction(svc, "Stop") } }
+        assertEquals("ENETWORK", err.code)
+        assertTrue(err.message!!.contains("refused"), err.message)
+    }
+
+    @Test
     fun `a 200 with a body that is not XML returns an empty map`() {
         withCannedServer(200, "not xml") { svc ->
             val out = runBlocking { soap.callAction(svc, "Stop") }
