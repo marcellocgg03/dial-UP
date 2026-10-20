@@ -67,7 +67,7 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
     private val startedAtMs = SystemClock.elapsedRealtime()
-    private var lastNotifiedIp: String? = null
+    private var lastNotifiedText: String = notificationText(CastCount(0, 0))
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -80,10 +80,9 @@ class BridgeService : Service(), SpikeHost {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification(wifiIpv4()?.hostAddress),
+            buildNotification(CastCount(0, 0)),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        lastNotifiedIp = wifiIpv4()?.hostAddress
 
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
@@ -97,6 +96,7 @@ class BridgeService : Service(), SpikeHost {
         acquireLocks()
         logExitInfo()
         startFeatures()
+        scope.launch { castCountLoop() }
         scope.launch { heartbeatLoop() }
     }
 
@@ -222,7 +222,6 @@ class BridgeService : Service(), SpikeHost {
                 val state = currentState()
                 evidence.event("heartbeat", heartbeatFields())
                 writeStateFile(state)
-                refreshNotificationIfIpChanged()
             } catch (t: Throwable) {
                 evidence.event("feature-error", mapOf("where" to "heartbeat", "error" to t.javaClass.name, "message" to t.message))
             }
@@ -304,10 +303,10 @@ class BridgeService : Service(), SpikeHost {
 
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "T2U spike", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Tube2U", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(ip: String?): Notification {
+    private fun buildNotification(count: CastCount): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -315,19 +314,27 @@ class BridgeService : Service(), SpikeHost {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("T2U spike")
-            .setContentText("listening on ${ip ?: "no Wi-Fi"}")
+            .setContentTitle("Tube2U (app)")
+            .setContentText(notificationText(count))
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
             .build()
     }
 
-    private fun refreshNotificationIfIpChanged() {
-        val ip = wifiIpv4()?.hostAddress
-        if (ip == lastNotifiedIp) return
-        lastNotifiedIp = ip
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(ip))
+    /**
+     * The count is derived from feature state (every [CastCountSource] feature), never from events.
+     * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
+     */
+    private suspend fun castCountLoop() {
+        sumCastCounts(features.filterIsInstance<CastCountSource>()).collect { count ->
+            evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
+            val text = notificationText(count)
+            if (text != lastNotifiedText) {
+                lastNotifiedText = text
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count))
+            }
+        }
     }
 
     companion object {
