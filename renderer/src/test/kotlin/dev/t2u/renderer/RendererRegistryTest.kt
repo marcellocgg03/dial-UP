@@ -7,7 +7,16 @@ import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.RENDERER_ST
 import dev.t2u.upnp.Ssdp
 import dev.t2u.upnp.SsdpClientEvents
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -18,7 +27,9 @@ import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** What the registry needs of a speaker, recording the calls it receives. */
@@ -28,11 +39,12 @@ private class FakeManagedRenderer(
     override val address: String,
     maxAge: Int,
     override val port: Int,
-    private val behaviour: () -> Boolean,
+    override val name: String?,
+    private val behaviour: suspend () -> Boolean,
 ) : ManagedRenderer {
     @Volatile var maxAgeS = maxAge
     @Volatile override var lastSeen: Long = 0
-    override val name: String? = "Fake $udn"
+    val staleChecks = java.util.concurrent.atomic.AtomicInteger()
     val initCalls = java.util.concurrent.atomic.AtomicInteger()
     val destroyCalls = java.util.concurrent.atomic.AtomicInteger()
     val refreshCalls = java.util.concurrent.atomic.AtomicInteger()
@@ -42,7 +54,10 @@ private class FakeManagedRenderer(
         maxAgeS = maxAge
     }
 
-    override fun isStale(now: Long): Boolean = now - lastSeen > maxAgeS * 1000L * 1.5
+    override fun isStale(now: Long): Boolean {
+        staleChecks.incrementAndGet()
+        return now - lastSeen > maxAgeS * 1000L * 1.5
+    }
 
     override suspend fun init(): Boolean {
         initCalls.incrementAndGet()
@@ -79,7 +94,7 @@ class RendererRegistryTest {
             Config(dataDir = dataDir),
             ports,
             { udn, location, address, maxAge, port ->
-                FakeManagedRenderer(udn, location, address, maxAge, port) { true }.also { created.add(it) }
+                FakeManagedRenderer(udn, location, address, maxAge, port, "Fake $udn") { true }.also { created.add(it) }
             },
         )
 
@@ -136,5 +151,296 @@ class RendererRegistryTest {
             speakerSock.close()
             speakerThread.join(2000)
         }
+    }
+
+    // ---- Task 2: the lifecycle of index.js onAlive / onByebye / prune and the schedules ----
+
+    private val kitchenLocation = "http://192.168.50.42:1400/xml/device_description.xml"
+
+    private inner class Harness(
+        val dataDir: File = tempDir(),
+        val now: AtomicLong = AtomicLong(1_000_000),
+        val friendlyName: String? = null,
+        var initBehaviour: suspend (String) -> Boolean = { true },
+    ) {
+        val events = Events()
+        val ports = PortRegistry(dataDir, 3000).load()
+        val created = CopyOnWriteArrayList<FakeManagedRenderer>()
+        val registry = RendererRegistry(
+            Config(dataDir = dataDir),
+            ports,
+            { udn, location, address, maxAge, port ->
+                FakeManagedRenderer(udn, location, address, maxAge, port, friendlyName ?: "Fake $udn") { initBehaviour(udn) }
+                    .also {
+                        it.lastSeen = now.get()
+                        created.add(it)
+                    }
+            },
+            events,
+            { now.get() },
+        )
+
+        suspend fun alive(
+            udn: String = "Kitchen",
+            location: String = kitchenLocation,
+            src: String = "192.168.50.42",
+            cacheControl: String? = "max-age=1800",
+            st: String = RENDERER_ST,
+            extra: Map<String, String> = emptyMap(),
+            usn: String? = "uuid:$udn::$RENDERER_ST",
+        ) {
+            val h = LinkedHashMap<String, String>()
+            h["ST"] = st
+            if (usn != null) h["USN"] = usn
+            if (location.isNotEmpty()) h["LOCATION"] = location
+            if (cacheControl != null) h["CACHECONTROL"] = cacheControl
+            h.putAll(extra)
+            registry.onAlive(h, InetSocketAddress(InetAddress.getByName(src), 1900))
+        }
+
+        suspend fun byebye(udn: String) = registry.onByebye(mapOf("USN" to "uuid:$udn::$RENDERER_ST", "NTS" to "ssdp:byebye"))
+    }
+
+    @Test
+    @DisplayName("100 alives for one UDN and LOCATION create one renderer, init once and log one added event")
+    fun repeatedAlivesRefreshOnly() = runBlocking {
+        val h = Harness()
+        repeat(100) { h.alive() }
+        assertEquals(1, h.created.size)
+        val r = h.created.single()
+        assertEquals(1, r.initCalls.get())
+        assertEquals(99, r.refreshCalls.get())
+        assertEquals(1, h.registry.count.value)
+        assertEquals(1, h.events.list.size)
+        assertEquals(1, h.events.named("added").size)
+    }
+
+    @Test
+    @DisplayName("the same UDN with a new LOCATION destroys the old renderer and recreates it on the same remembered port")
+    fun movedLocationRecreates() = runBlocking {
+        val h = Harness()
+        h.alive()
+        val first = h.created.single()
+        h.alive(location = "http://192.168.50.42:51161/other.xml")
+        assertEquals(2, h.created.size)
+        val second = h.created[1]
+        assertEquals(1, first.destroyCalls.get())
+        assertEquals(3000, second.port)
+        assertEquals(3000, first.port)
+        assertEquals(1, h.registry.count.value)
+        assertEquals(listOf<ManagedRenderer>(second), h.registry.renderers())
+        assertEquals(1, h.events.named("moved").size)
+        assertEquals(2, h.events.named("added").size)
+    }
+
+    @Test
+    @DisplayName("a byebye for a known UDN destroys it and releases its port; for an unknown UDN it does nothing")
+    fun byebyeRemoves() = runBlocking {
+        val h = Harness()
+        h.alive()
+        h.byebye("Nobody")
+        assertEquals(1, h.registry.count.value)
+        assertEquals(1, h.events.list.size)
+
+        h.byebye("Kitchen")
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, h.created.single().destroyCalls.get())
+        assertEquals(1, h.events.named("removed").size)
+        // released: the speaker's remembered port is free to be claimed again
+        assertEquals(3000, h.ports.claim("kitchen"))
+        // and a second byebye finds nothing
+        h.byebye("Kitchen")
+        assertEquals(1, h.created.single().destroyCalls.get())
+    }
+
+    @Test
+    @DisplayName("a renderer last seen exactly maxAge x 1.5 ago is kept and one more millisecond prunes it")
+    fun pruneBoundary() = runBlocking {
+        val h = Harness()
+        h.alive()
+        h.now.addAndGet(1800L * 1500L)
+        h.registry.prune()
+        assertEquals(1, h.registry.count.value)
+        h.now.addAndGet(1)
+        h.registry.prune()
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, h.created.single().destroyCalls.get())
+        assertEquals(1, h.events.named("stale").size)
+    }
+
+    @Test
+    @DisplayName("an init that throws releases the port, is ignored for 5 minutes and then retried")
+    fun failedInitRetriesAfterFiveMinutes() = runBlocking {
+        val h = Harness(initBehaviour = { throw java.io.IOException("description fetch failed") })
+        h.alive()
+        assertEquals(1, h.created.size)
+        assertEquals(1, h.created[0].destroyCalls.get())
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, h.events.named("failed").size)
+        assertTrue(h.ports.saved().isEmpty())
+
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS - 60_000)
+        h.alive()
+        assertEquals(1, h.created.size)
+
+        h.now.addAndGet(60_000)
+        // port 3000 was released by the failure, so the retry claims it again
+        h.initBehaviour = { true }
+        h.alive()
+        assertEquals(2, h.created.size)
+        assertEquals(3000, h.created[1].port)
+        assertEquals(1, h.registry.count.value)
+    }
+
+    @Test
+    @DisplayName("an init that returns false releases the port, remembers nothing and is never retried for that LOCATION")
+    fun rejectedInitIsNeverRetried() = runBlocking {
+        val h = Harness(initBehaviour = { false })
+        h.alive()
+        assertEquals(1, h.created.size)
+        assertEquals(0, h.registry.count.value)
+        assertTrue(h.ports.saved().isEmpty())
+        assertFalse(File(h.dataDir, "ports.json").exists())
+        assertEquals(3000, h.ports.claim("probe"))
+        h.ports.release(3000)
+
+        repeat(5) {
+            h.now.addAndGet(60L * 60 * 1000)
+            h.alive()
+        }
+        assertEquals(1, h.created.size)
+        // a different LOCATION for the same UDN is a new device description and is tried
+        h.alive(location = "http://192.168.50.42:1401/xml/device_description.xml")
+        assertEquals(2, h.created.size)
+    }
+
+    @Test
+    @DisplayName("two concurrent alives for a new UDN create one renderer")
+    fun concurrentAlivesCreateOne() = runBlocking {
+        val gate = CompletableDeferred<Boolean>()
+        val h = Harness(initBehaviour = { gate.await() })
+        coroutineScope {
+            val jobs = List(2) { async(Dispatchers.Default) { h.alive() } }
+            val end = System.currentTimeMillis() + 3000
+            while (h.created.isEmpty() && System.currentTimeMillis() < end) delay(5)
+            delay(150)
+            gate.complete(true)
+            jobs.awaitAll()
+        }
+        assertEquals(1, h.created.size)
+        assertEquals(1, h.created.single().initCalls.get())
+        assertEquals(1, h.registry.count.value)
+    }
+
+    @Test
+    @DisplayName("two speakers with the same friendly name get two receivers on ports 3000 and 3001")
+    fun sameNameTwoReceivers() = runBlocking {
+        val h = Harness(friendlyName = "Living Room")
+        h.alive(udn = "AAA")
+        h.alive(udn = "BBB", location = "http://192.168.50.43:1400/xml/device_description.xml", src = "192.168.50.43")
+        assertEquals(2, h.registry.count.value)
+        assertEquals(listOf("aaa" to 3000, "bbb" to 3001), h.registry.renderers().map { it.udn to it.port })
+        assertEquals(listOf("Living Room", "Living Room"), h.registry.renderers().map { it.name })
+    }
+
+    @Test
+    @DisplayName("after a restart speakers alive in reverse order keep their earlier ports")
+    fun portsStableAcrossRestart() = runBlocking {
+        val dataDir = tempDir()
+        val first = Harness(dataDir = dataDir)
+        val names = listOf("Kitchen" to 42, "Lamp" to 43, "Deck" to 44)
+        for ((n, host) in names) first.alive(udn = n, location = "http://192.168.50.$host:1400/d.xml", src = "192.168.50.$host")
+        assertEquals(mapOf("kitchen" to 3000, "lamp" to 3001, "deck" to 3002), first.ports.saved())
+
+        val second = Harness(dataDir = dataDir)
+        for ((n, host) in names.reversed()) second.alive(udn = n, location = "http://192.168.50.$host:1400/d.xml", src = "192.168.50.$host")
+        assertEquals(
+            mapOf("deck" to 3002, "lamp" to 3001, "kitchen" to 3000),
+            second.registry.renderers().associate { it.udn to it.port },
+        )
+    }
+
+    @Test
+    @DisplayName("an alive whose LOCATION host is not its sender, or is not a private address, never reaches the factory")
+    fun locationGuards() = runBlocking {
+        val h = Harness()
+        repeat(5) {
+            h.alive(location = "http://192.168.50.99:1400/x.xml", src = "192.168.50.42")
+            h.alive(udn = "Evil", location = "http://8.8.8.8/x.xml", src = "8.8.8.8")
+            h.alive(udn = "Named", location = "http://speaker.example/x.xml", src = "192.168.50.42")
+        }
+        assertEquals(0, h.created.size)
+        assertEquals(0, h.registry.count.value)
+        // one event per UDN and reason, not per datagram
+        assertEquals(3, h.events.named("skipped").size)
+    }
+
+    @Test
+    @DisplayName("an alive from a QuickShareUPnP device never reaches the factory and is logged once")
+    fun quickShareExcluded() = runBlocking {
+        val h = Harness()
+        repeat(20) { h.alive(udn = "Phone", extra = mapOf("SERVER" to "Android/14 QuickShareUPnP/1.0")) }
+        h.alive(udn = "Phone", extra = mapOf("USERAGENT" to "quicksHAREupnp"))
+        assertEquals(0, h.created.size)
+        assertEquals(1, h.events.named("skipped").size)
+        // a real speaker with another SERVER header is unaffected
+        h.alive(extra = mapOf("SERVER" to "Linux UPnP/1.0 Sonos/80.1 (ZPS9)"))
+        assertEquals(1, h.created.size)
+    }
+
+    @Test
+    @DisplayName("an alive whose ST or NT is not a MediaRenderer, or that has no USN or LOCATION, is ignored")
+    fun malformedAlivesIgnored() = runBlocking {
+        val h = Harness()
+        h.alive(st = "urn:schemas-upnp-org:device:ZonePlayer:1")
+        h.alive(usn = null)
+        h.alive(location = "")
+        h.alive(usn = "no-uuid-here")
+        assertEquals(0, h.created.size)
+        assertTrue(h.events.list.isEmpty())
+        // a NOTIFY carries the type in NT, not ST
+        h.registry.onAlive(
+            mapOf("NT" to RENDERER_ST, "USN" to "uuid:Kitchen::$RENDERER_ST", "LOCATION" to kitchenLocation),
+            InetSocketAddress(InetAddress.getByName("192.168.50.42"), 1900),
+        )
+        assertEquals(1, h.created.size)
+    }
+
+    @Test
+    @DisplayName("removeAll destroys every renderer and empties the list")
+    fun removeAllDestroysEverything() = runBlocking {
+        val h = Harness()
+        h.alive(udn = "A")
+        h.alive(udn = "B", location = "http://192.168.50.43:1400/d.xml", src = "192.168.50.43")
+        assertEquals(2, h.registry.renderersFlow.value.size)
+        h.registry.removeAll()
+        assertEquals(0, h.registry.count.value)
+        assertTrue(h.registry.renderersFlow.value.isEmpty())
+        assertEquals(listOf(1, 1), h.created.map { it.destroyCalls.get() })
+    }
+
+    @Test
+    @DisplayName("launchSchedules searches at 0 s, 5 s, 300 s and 600 s and prunes every 60 s")
+    fun schedules() = runTest {
+        val h = Harness()
+        h.alive()
+        val renderer = h.created.single()
+        val searchTimes = CopyOnWriteArrayList<Long>()
+        val job = h.registry.launchSchedules(this) { searchTimes.add(testScheduler.currentTime / 1000) }
+        runCurrent()
+        assertEquals(listOf(0L), searchTimes.toList())
+        assertEquals(0, renderer.staleChecks.get())
+
+        advanceTimeBy(59_999)
+        assertEquals(0, renderer.staleChecks.get())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, renderer.staleChecks.get())
+
+        advanceTimeBy(600_000 - 60_000 + 1)
+        runCurrent()
+        assertEquals(listOf(0L, 5L, 300L, 600L), searchTimes.toList())
+        assertEquals(10, renderer.staleChecks.get())
+        job.cancel()
     }
 }
