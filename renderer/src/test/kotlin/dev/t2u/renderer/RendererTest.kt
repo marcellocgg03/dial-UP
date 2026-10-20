@@ -12,6 +12,7 @@ package dev.t2u.renderer
 //  * Receivers, resolver and media registrar are stubs, as in Node (deps.createReceiver, resolver, mediaServer).
 
 import dev.t2u.lounge.CastReceiver
+import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Sender
@@ -27,6 +28,7 @@ import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -35,9 +37,15 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+private const val A = "AAAAAAAAAAA"
 private const val DQW = "dQw4w9WgXcQ"
 
 /** PLAY-05, DISC-02, DISC-03, CAST-07: one speaker as one cast target. */
@@ -66,6 +74,7 @@ class RendererTest {
         val fake: FakeRenderer,
         config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
         resolveDelayMs: Long = 0,
+        locationOverride: String? = null,
     ) : AutoCloseable {
         val dataDir: File = Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
         val registered = CopyOnWriteArrayList<VideoEntry>()
@@ -109,7 +118,7 @@ class RendererTest {
 
         val renderer = Renderer(
             udn = "fake-renderer",
-            location = fake.location,
+            location = locationOverride ?: fake.location,
             address = "127.0.0.1",
             maxAge = 1800,
             port = 3000,
@@ -169,6 +178,218 @@ class RendererTest {
             assertEquals(65.0, r.doGetPosition())
             assertEquals(210.0, r.doGetDuration())
             assertEquals(Volume(30, false), r.doGetVolume())
+        }
+    }
+
+    private suspend fun until(timeoutMs: Long = 5000, cond: () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (!cond() && System.currentTimeMillis() < end) delay(20)
+    }
+
+    private fun FakeRenderer.count(action: String): Int = calls.count { it.action == action }
+
+    @Test
+    @DisplayName("renderer errors without UPnP fault body do not crash, and UTF-8 bodies have byte-accurate length")
+    fun bareFaultAndByteAccurateLength() = withFake(FakeRenderer(bareFaultOn = setOf("Pause"))) { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.doPlay(Video(DQW), 0.0))
+            assertFalse(r.doPause()) // reported as failure, the process survives
+            for (c in fake.calls) assertEquals(c.contentLength, c.bytes.toLong(), "${c.action} Content-Length")
+            assertTrue(fake.calls.any { it.body.contains("ő") }, "the accented title went over the wire")
+        }
+    }
+
+    @Test
+    @DisplayName("a renderer removed while a track is loading stays stopped")
+    fun removedWhileLoadingStaysStopped() = withFake { fake ->
+        Harness(fake, resolveDelayMs = 200).use { h ->
+            val r = h.renderer
+            r.init()
+            val play = h.scope.async { r.doPlay(Video(A), 0.0) }
+            delay(50)
+            r.destroy() // the device went away (byebye or stale) mid-load
+            assertFalse(play.await())
+            val calls = fake.calls.size
+            delay(300)
+            assertEquals(calls, fake.calls.size, "no SOAP calls (polls, Play) after destroy")
+            assertEquals(0, fake.count("SetAVTransportURI"))
+            assertEquals(0, fake.count("Play"))
+        }
+    }
+
+    @Test
+    @DisplayName("duration comes from the video, not a renderer still reporting the previous track")
+    fun durationComesFromTheVideo() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            r.doPlay(Video(A), 0.0)
+
+            // The speaker briefly still reports the previous, longer track (4:58 at 2:40).
+            fake.state.trackDuration = "0:04:58"
+            fake.state.relTime = "0:02:40"
+            fake.state.reportedUri = "http://192.168.0.85:8000/stream/" + "f".repeat(32) + ".aac"
+            assertEquals(210.0, r.doGetDuration(), "video length, not the stale 4:58")
+            assertEquals(0.0, r.doGetPosition(), "stale position ignored")
+
+            // Once it reports our stream, its position is used again.
+            fake.state.reportedUri = null
+            fake.state.relTime = "0:00:07"
+            assertEquals(7.0, r.doGetPosition())
+        }
+    }
+
+    @Test
+    @DisplayName("a description without AVTransport makes init return false")
+    fun noAvTransportSkipsTheDevice() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/desc.xml") { ex ->
+            val xml = """<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><device>""" +
+                "<deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType><friendlyName>Lamp</friendlyName>" +
+                "<UDN>uuid:lamp</UDN><serviceList><service><serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>" +
+                "<serviceId>urn:upnp-org:serviceId:RenderingControl</serviceId><controlURL>/ctl</controlURL>" +
+                "<eventSubURL>/evt</eventSubURL><SCPDURL>/scpd</SCPDURL></service></serviceList></device></root>"
+            val bytes = xml.toByteArray()
+            ex.responseHeaders.add("Content-Type", "text/xml")
+            ex.sendResponseHeaders(200, bytes.size.toLong())
+            ex.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+        try {
+            // Harness wants a FakeRenderer for its location; build the pieces by hand instead.
+            val fake = FakeRenderer()
+            Harness(fake, locationOverride = "http://127.0.0.1:${server.address.port}/desc.xml").use { h ->
+                assertFalse(runBlocking { h.renderer.init() })
+                assertEquals(0, h.receiverCreated)
+                assertNull(h.renderer.name)
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    @DisplayName("the default config keeps the coexistence suffix in the receiver name")
+    fun defaultSuffixIsKept() = withFake { fake ->
+        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200) }).use { h ->
+            h.renderer.init()
+            assertEquals("🔊 Living Room Speaker (app)", h.receiverOptions?.name)
+        }
+    }
+
+    @Test
+    @DisplayName("resume, stop and volume from the sender become Play, Stop, SetVolume and SetMute")
+    fun controlsReachTheSpeaker() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            r.doPlay(Video(A), 0.0)
+
+            val plays = fake.count("Play")
+            assertTrue(r.doResume())
+            assertEquals(plays + 1, fake.count("Play"))
+
+            assertTrue(r.doPause())
+            assertEquals("PAUSED_PLAYBACK", fake.state.transport)
+
+            assertTrue(r.doSetVolume(Volume(40, true)))
+            val setVolume = fake.calls.first { it.action == "SetVolume" }
+            assertTrue(setVolume.body.contains("<DesiredVolume>40</DesiredVolume>"), setVolume.body)
+            assertTrue(fake.calls.first { it.action == "SetMute" }.body.contains("<DesiredMute>1</DesiredMute>"))
+            assertEquals(Volume(40, true), r.doGetVolume())
+
+            assertNotNull(r.nowPlaying)
+            assertTrue(r.doStop())
+            assertEquals("STOPPED", fake.state.transport)
+            assertNull(r.nowPlaying)
+        }
+    }
+
+    @Test
+    @DisplayName("speaker pause and play are mirrored to the sender by polling")
+    fun pollingMirrorsPauseAndPlay() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            assertEquals(PlayerStatus.PLAYING, r.status)
+
+            fake.state.transport = "PAUSED_PLAYBACK"
+            until(500) { r.status == PlayerStatus.PAUSED }
+            assertEquals(PlayerStatus.PAUSED, r.status)
+
+            fake.state.transport = "PLAYING"
+            until(500) { r.status == PlayerStatus.PLAYING }
+            assertEquals(PlayerStatus.PLAYING, r.status)
+        }
+    }
+
+    @Test
+    @DisplayName("a track that ends on the speaker advances the queue and ends stopped")
+    fun endOfTrackCallsNext() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            until { r.status == PlayerStatus.PLAYING && fake.count("GetPositionInfo") > 0 }
+            fake.state.transport = "STOPPED"
+            until { r.status == PlayerStatus.STOPPED }
+            assertEquals(PlayerStatus.STOPPED, r.status)
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that never starts playing ends stopped with the reason")
+    fun neverPlayingStops() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            r.play(Video(A), 0.0)
+            until { r.status == PlayerStatus.STOPPED }
+            assertEquals(PlayerStatus.STOPPED, r.status)
+            assertTrue(r.lastError?.contains("stream") == true, r.lastError)
+        }
+    }
+
+    @Test
+    @DisplayName("seeking an ADTS stream reloads it at the new offset")
+    fun seekReloadsAtOffset() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            r.doPlay(Video(A), 0.0)
+            assertTrue(r.doSeek(50.0))
+            assertEquals(listOf("adts" to 0, "adts" to 50), h.registered.map { it.format to it.startAt })
+            assertEquals(2, fake.count("SetAVTransportURI"))
+            assertEquals(0, fake.count("Seek"), "no AVTransport Seek on a non-seekable stream")
+        }
+    }
+
+    @Test
+    @DisplayName("casting mid-video starts the stream at that position")
+    fun castingMidVideoStartsAtPosition() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            r.doPlay(Video(A), 36.0)
+            assertEquals(36, h.registered[0].startAt)
+            assertTrue(fake.calls.first { it.action == "SetAVTransportURI" }.body.contains("duration=&quot;0:02:54.000&quot;"))
+        }
+    }
+
+    @Test
+    @DisplayName("the speaker volume is never changed on its own")
+    fun volumeIsNeverTouchedUnasked() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            delay(300)
+            assertTrue(r.doStop())
+            assertEquals(0, fake.count("SetVolume"))
+            assertEquals(0, fake.count("SetMute"))
         }
     }
 }
