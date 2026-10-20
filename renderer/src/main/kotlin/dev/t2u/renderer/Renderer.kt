@@ -1,0 +1,461 @@
+package dev.t2u.renderer
+
+// Port of tube2upnp src/renderer.js (Phase 2 slice), GPL-3.0-only.
+//
+// One UPnP MediaRenderer exposed as one YouTube cast receiver. The renderer is the lounge Player: play,
+// pause, stop, seek and volume from the sender become SOAP calls to the speaker. Left for later phases:
+// the format chain and format learning (Phase 3: the stream format is Config.outputFormat, "adts"),
+// gapless SetNextAVTransportURI and prefetch (Phase 4), SponsorBlock and play history (v2).
+
+import dev.t2u.lounge.CastReceiver
+import dev.t2u.lounge.Player
+import dev.t2u.lounge.PlayerStatus
+import dev.t2u.lounge.ReceiverFactory
+import dev.t2u.lounge.ReceiverOptions
+import dev.t2u.lounge.Video
+import dev.t2u.lounge.Volume
+import dev.t2u.media.FORMATS
+import dev.t2u.media.MediaRegistrar
+import dev.t2u.media.VideoEntry
+import dev.t2u.media.VideoResolver
+import dev.t2u.media.dlnaFeatures
+import dev.t2u.media.mimeOf
+import dev.t2u.upnp.DeviceDescription
+import dev.t2u.upnp.DidlItem
+import dev.t2u.upnp.EventSink
+import dev.t2u.upnp.NoEvents
+import dev.t2u.upnp.SinkProtocol
+import dev.t2u.upnp.SoapClient
+import dev.t2u.upnp.UpnpError
+import dev.t2u.upnp.buildDidl
+import dev.t2u.upnp.fetchDescription
+import dev.t2u.upnp.parseSink
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
+
+private const val AV_TRANSPORT = "AVTransport"
+private const val RENDERING_CONTROL = "RenderingControl"
+private const val CONNECTION_MANAGER = "ConnectionManager"
+private const val SERVICE_ID_PREFIX = "urn:upnp-org:serviceId:"
+
+/** How long a track-start waits for the speaker to report PLAYING before the seek-after-play (renderer.js 8000). */
+private const val SEEK_AFTER_PLAY_WAIT_MS = 8000L
+private const val TRANSPORT_WAIT_STEP_MS = 300L
+
+private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
+
+/**
+ * Everything a [Renderer] needs from the outside. [http] must derive from `lanHttpClient()` (SVC-05),
+ * [scope] is the service scope the renderer's own child scope hangs under, [clock] is epoch milliseconds.
+ */
+data class RendererDeps(
+    val config: Config,
+    val resolver: VideoResolver,
+    val media: MediaRegistrar,
+    val http: OkHttpClient,
+    val createReceiver: ReceiverFactory,
+    val scope: CoroutineScope,
+    val events: EventSink = NoEvents,
+    val clock: () -> Long = System::currentTimeMillis,
+)
+
+/** What the speaker is playing, for the status UI and the notification. */
+data class NowPlaying(
+    val videoId: String,
+    val title: String,
+    val artist: String,
+    val duration: Double,
+    val format: String,
+    val thumbnail: String,
+)
+
+/** The track the speaker was last told to play. [startAt] is the offset the stream itself starts at. */
+private class Current(val video: Video, val format: String, val startAt: Int, val sourceMime: String) {
+    @Volatile var loadedAt: Long = 0
+
+    @Volatile var fetched: Boolean = false
+
+    @Volatile var streamPath: String? = null
+}
+
+/** A track resolved, registered with the media server and described in DIDL, ready to send. */
+private class PreparedItem(
+    val current: Current,
+    val title: String,
+    val artist: String,
+    val duration: Double,
+    val thumbnail: String,
+    val format: String,
+    val mime: String,
+    val url: String,
+    val metadata: String,
+)
+
+/** Result of the last poll: [rel] is already shifted by the stream offset. */
+private data class PollPosition(val rel: Double, val dur: Double, val uri: String?, val at: Long)
+
+/**
+ * One speaker as one cast target (renderer.js `Renderer`). Concurrency: `loadSeq` invalidates a load a
+ * newer play, a stop or [destroy] has overtaken; `destroyed` makes a load, a poll or an action launched
+ * from a poll leave the speaker alone after removal; `expectStop` silences the poll while this renderer
+ * is itself stopping or switching the speaker.
+ */
+class Renderer(
+    override val udn: String,
+    override val location: String,
+    override val address: String,
+    maxAge: Int,
+    override val port: Int,
+    private val deps: RendererDeps,
+) : Player(), ManagedRenderer {
+    private val config: Config get() = deps.config
+
+    // Child scope: cancelled by destroy(), parented to the service scope so the service can stop everything.
+    private val scope = CoroutineScope(deps.scope.coroutineContext + SupervisorJob(deps.scope.coroutineContext[Job]))
+
+    @Volatile private var maxAgeS: Int = maxAge
+
+    @Volatile override var lastSeen: Long = deps.clock()
+        private set
+
+    @Volatile override var name: String? = null
+        private set
+
+    @Volatile var description: DeviceDescription? = null
+        private set
+
+    @Volatile var nowPlaying: NowPlaying? = null
+        private set
+
+    @Volatile var lastError: String? = null
+        private set
+
+    private val soap = SoapClient(deps.http)
+
+    @Volatile private var protocols: List<SinkProtocol>? = null
+
+    @Volatile private var ip: String? = null
+
+    @Volatile private var receiver: CastReceiver? = null
+
+    @Volatile private var current: Current? = null
+
+    @Volatile private var transport: String? = null
+
+    @Volatile private var position: PollPosition? = null
+
+    private val loadSeq = AtomicInteger()
+
+    @Volatile private var expectStop = false
+
+    @Volatile private var sawPlaying = false
+
+    @Volatile private var destroyed = false
+
+    init {
+        events = deps.events
+    }
+
+    override fun refresh(maxAge: Int) {
+        maxAgeS = maxAge
+        lastSeen = deps.clock()
+    }
+
+    /** Many devices re-announce exactly at max-age, hence the 1.5 grace factor (renderer.js `isStale`). */
+    override fun isStale(now: Long): Boolean = now - lastSeen > maxAgeS * 1000L * 1.5
+
+    // ------------------------------------------------------------------------------------------ init
+
+    /** Fetch the description, verify AVTransport, start the cast receiver. Returns false to skip this device. */
+    override suspend fun init(): Boolean {
+        val desc = fetchDescription(deps.http, location)
+        description = desc
+
+        if (!desc.services.containsKey(SERVICE_ID_PREFIX + AV_TRANSPORT)) {
+            note("warn", "\"${desc.friendlyName}\" has no AVTransport service - skipping")
+            return false
+        }
+
+        val displayName = receiverName(config.nameTemplate, config.nameSuffix, desc.friendlyName, desc.manufacturer, desc.modelName)
+        name = displayName
+
+        safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { protocols = parseSink(it["Sink"]) }
+
+        ip = config.advertiseIp ?: withContext(Dispatchers.IO) { localAddressFor(address) }
+
+        val store = RendererDataStore(config.dataDir, udn) { message, error -> note("warn", "$message: ${error.message}") }
+        val rec = deps.createReceiver.create(
+            this,
+            ReceiverOptions(
+                dialPort = port,
+                name = displayName,
+                screenName = displayName,
+                brand = desc.manufacturer.ifEmpty { "Tube2U[PnP]" },
+                model = desc.modelName.ifEmpty { "UPnP Renderer" },
+                dataStore = store,
+            ),
+        )
+        receiver = rec
+        rec.enableAutoplayOnConnect(config.autoplayOnConnect)
+        rec.start()
+        if (destroyed) {
+            // Removed while the receiver was starting: do not leave it running.
+            try {
+                rec.stop()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // best effort
+            }
+            return false
+        }
+        note("info", "Cast receiver \"$displayName\" ready on $ip:$port")
+        return true
+    }
+
+    override suspend fun destroy() {
+        // A load or poll still in flight must not bring the speaker back to life afterwards.
+        destroyed = true
+        loadSeq.incrementAndGet()
+        current = null
+        stopPolling()
+        try {
+            val rec = receiver
+            if (rec != null && rec.status == "running") rec.stop()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("warn", "Error stopping receiver: ${e.message}")
+        } finally {
+            receiver = null
+            scope.cancel()
+        }
+    }
+
+    // ------------------------------------------------------------------------------------- Player impl
+
+    override suspend fun doPlay(video: Video, position: Double): Boolean {
+        if (destroyed) return false
+        return load(video, position)
+    }
+
+    /** True when a newer play, a stop or destroy() has overtaken the load that took [seq]. */
+    private fun superseded(seq: Int): Boolean = destroyed || seq != loadSeq.get()
+
+    private suspend fun load(video: Video, position: Double, format: String? = null): Boolean {
+        val seq = loadSeq.incrementAndGet()
+        stopPolling()
+        try {
+            val item = prepareItem(video, position, format)
+            if (superseded(seq)) return false
+
+            expectStop = true
+            safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+            if (superseded(seq)) return false
+            call(
+                AV_TRANSPORT,
+                "SetAVTransportURI",
+                "InstanceID" to 0,
+                "CurrentURI" to item.url,
+                "CurrentURIMetaData" to item.metadata,
+            )
+            if (superseded(seq)) return false
+            call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+            if (superseded(seq)) return false
+
+            if (position > 1 && item.current.startAt == 0) {
+                waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
+                if (superseded(seq)) return false
+                safeCall(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
+                if (superseded(seq)) return false
+            }
+
+            adopt(item)
+            note("info", "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})")
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            lastError = e.message ?: e::class.java.simpleName
+            note("error", "Play ${video.id} failed: $lastError")
+            expectStop = false
+            return false
+        }
+    }
+
+    /** Resolve and register a track; returns everything needed to play it. */
+    private suspend fun prepareItem(video: Video, position: Double, format: String?): PreparedItem {
+        val info = deps.resolver.resolve(video.id)
+        val fmt = format ?: config.outputFormat
+        val mime = mimeOf(fmt, info.mime)
+        // Seekable formats start at 0 and use AVTransport Seek; streams start ffmpeg at the offset.
+        val seekable = FORMATS[fmt]?.seekable ?: false
+        val startAt = if (!seekable && position > 1) Math.floor(position).toInt() else 0
+        val cur = Current(video, fmt, startAt, info.mime)
+        val entry = VideoEntry(video.id, fmt, startAt) {
+            if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
+            cur.fetched = true
+        }
+        val streamPath = deps.media.registerVideo(entry)
+        cur.streamPath = streamPath
+        val address = checkNotNull(ip) { "renderer was not initialised" }
+        val url = "http://$address:${config.mediaPort}$streamPath"
+        val protocolInfo = "http-get:*:$mime:${dlnaFeatures(fmt)}"
+        val metadata = buildDidl(
+            DidlItem(
+                url = url,
+                protocolInfo = protocolInfo,
+                title = info.title,
+                artist = info.artist,
+                album = info.album,
+                albumArt = info.thumbnail,
+                duration = maxOf(0.0, info.duration - startAt),
+                isVideo = mime.startsWith("video/"),
+            ),
+        )
+        return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata)
+    }
+
+    /** Make [item] the current track after the speaker was told to play it. */
+    private fun adopt(item: PreparedItem) {
+        item.current.loadedAt = deps.clock()
+        current = item.current
+        nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail)
+        position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
+        lastError = null
+        sawPlaying = false
+        expectStop = false
+        startPolling()
+    }
+
+    // Controls follow in the next commit (pause, resume, stop, seek, volume, polling).
+    override suspend fun doPause(): Boolean = false
+
+    override suspend fun doResume(): Boolean = false
+
+    override suspend fun doStop(): Boolean = false
+
+    override suspend fun doSeek(position: Double): Boolean = false
+
+    override suspend fun doSetVolume(volume: Volume): Boolean = false
+
+    override suspend fun doGetVolume(): Volume {
+        val level = safeCall(RENDERING_CONTROL, "GetVolume", "InstanceID" to 0, "Channel" to "Master")
+        val mute = safeCall(RENDERING_CONTROL, "GetMute", "InstanceID" to 0, "Channel" to "Master")
+        return Volume(
+            level = if (level != null) level["CurrentVolume"]?.trim()?.toIntOrNull() ?: 0 else 50,
+            muted = mute?.get("CurrentMute")?.trim()?.lowercase() in listOf("1", "true"),
+        )
+    }
+
+    override suspend fun doGetPosition(): Double {
+        val offset = current?.startAt ?: 0
+        val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+        // Right after a track change some speakers still report the previous track for a moment. If the
+        // speaker names a different stream than ours, its numbers are not ours.
+        if (r == null || isOnOtherStream(r["TrackURI"])) return offset.toDouble()
+        // The speaker counts from the start of the stream it got; add the offset our ffmpeg started at.
+        return parseHms(r["RelTime"]) + offset
+    }
+
+    override suspend fun doGetDuration(): Double {
+        // yt-dlp's duration is the video's real length. The speaker's TrackDuration can be the previous
+        // track's, the remaining part of an offset stream, or missing, so it is only a fallback.
+        nowPlaying?.duration?.takeIf { it != 0.0 }?.let { return it }
+        val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+        return if (r != null && !isOnOtherStream(r["TrackURI"])) parseHms(r["TrackDuration"]) else 0.0
+    }
+
+    /** Does the speaker report a stream other than the one we are playing? */
+    private fun isOnOtherStream(trackUri: String?): Boolean {
+        val ours = current?.streamPath
+        return !trackUri.isNullOrEmpty() && ours != null && HTTP_URL.containsMatchIn(trackUri) && !trackUri.contains(ours)
+    }
+
+    // ------------------------------------------------------------------------------------- internals
+
+    private suspend fun call(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String> {
+        val service = description?.services?.get(SERVICE_ID_PREFIX + svc)
+            ?: throw UpnpError("$svc service not provided", "ENOSERVICE")
+        return soap.callAction(service, action, params.toList())
+    }
+
+    /** A command whose failure the caller reports (false) but that must not throw. */
+    private suspend fun ok(svc: String, action: String, vararg params: Pair<String, Any?>): Boolean =
+        try {
+            call(svc, action, *params)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("warn", "$action failed: ${e.message}")
+            false
+        }
+
+    /** A call whose failure is ignored (null). */
+    private suspend fun safeCall(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String>? =
+        try {
+            call(svc, action, *params)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("debug", "$action failed (ignored): ${e.message}")
+            null
+        }
+
+    private suspend fun transportState(): String? =
+        safeCall(AV_TRANSPORT, "GetTransportInfo", "InstanceID" to 0)?.get("CurrentTransportState")
+
+    private suspend fun waitForState(state: String, timeoutMs: Long): Boolean {
+        val end = deps.clock() + timeoutMs
+        while (deps.clock() < end) {
+            if (transportState() == state) return true
+            delay(TRANSPORT_WAIT_STEP_MS)
+        }
+        return false
+    }
+
+    // Polling arrives with the controls.
+    private fun startPolling() {}
+
+    private fun stopPolling() {}
+
+    /** Reports through the evidence sink (kind "renderer"); never carries signed URLs, and never throws. */
+    private fun note(level: String, message: String, vararg fields: Pair<String, Any?>) {
+        try {
+            deps.events.event(
+                "renderer",
+                mapOf<String, Any?>("level" to level, "speaker" to (description?.friendlyName ?: address), "message" to message) + fields,
+            )
+        } catch (_: Exception) {
+            // an event sink must not break playback
+        }
+    }
+}
+
+/** Parses a UPnP H:MM:SS(.fff) time; 0 for anything else, including NOT_IMPLEMENTED (renderer.js `parseHms`). */
+fun parseHms(t: String?): Double {
+    if (t.isNullOrEmpty() || t.contains("NOT_IMPLEMENTED", ignoreCase = true)) return 0.0
+    var total = 0.0
+    for (part in t.split(':')) {
+        val v = part.trim().toDoubleOrNull()?.takeIf { it.isFinite() } ?: return 0.0
+        total = total * 60 + v
+    }
+    return total
+}
+
+/** HH:MM:SS with zero-padded hours, floored, never negative: the REL_TIME form of Seek (renderer.js `hms`). */
+fun seekHms(sec: Double): String {
+    val s = maxOf(0L, Math.floor(sec).toLong())
+    return String.format(Locale.ROOT, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+}
