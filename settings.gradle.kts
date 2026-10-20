@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "tube2upnp-android"
 
-include(":app")
+include(":upnp", ":dial", ":media", ":app")
