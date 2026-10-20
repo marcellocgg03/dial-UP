@@ -15,11 +15,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SessionTest {
@@ -179,5 +183,177 @@ class SessionTest {
         fake.failNextSends.set(2)
         assertEquals(false, s.sendMessage(listOf(volume(12))))
         awaitUntil { s.status == SessionStatus.STOPPED && terminated.isNotEmpty() }
+    }
+
+    // ---- lifecycle
+
+    private fun count(suffix: String, method: String? = null) =
+        fake.requests.count { it.path.endsWith(suffix) && (method == null || it.method == method) }
+
+    @Test
+    fun aSecondSessionOnTheSameStoreReusesScreenAndDeviceId() = run {
+        val store = MemoryStore()
+        val first = session(store)
+        first.begin()
+        val screen = first.screenId
+        val device = first.deviceId
+        first.end()
+        fake.requests.clear()
+
+        val second = session(store)
+        second.begin()
+        assertEquals(0, count("generate_screen_id"))
+        assertEquals(screen, second.screenId)
+        assertEquals(device, second.deviceId)
+        assertEquals(screen, fake.requests.first { it.path.endsWith("get_lounge_token_batch") }.form["screen_ids"])
+    }
+
+    @Test
+    fun aStoredScreenIdTheTokenServiceRefusesIsReplacedOnce() = run {
+        val store = MemoryStore()
+        val refused = "STOREDSCREEN00000000001"
+        store.set(StoreKeys.mdxContext("cl"), JsonObject(mapOf("deviceId" to JsonPrimitive("dev-x"), "screenId" to JsonPrimitive(refused))))
+        fake.refuseTokenFor.add(refused)
+        val s = session(store)
+        s.begin()
+        assertEquals(1, count("generate_screen_id"))
+        assertEquals(2, count("get_lounge_token_batch"))
+        assertTrue(s.screenId != refused)
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun aStreamThatEndsIsReopened() = run {
+        val s = session()
+        s.begin()
+        assertEquals(1, fake.requests.count { it.method == "GET" && it.query["RID"] == "rpc" })
+        fake.closeRpc("cl")
+        awaitUntil { fake.requests.count { it.method == "GET" && it.query["RID"] == "rpc" } >= 2 }
+        awaitUntil { fake.rpcOpen("cl") == 1 }
+        // messages arriving on the new stream are delivered
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
+        awaitUntil { received.any { it.name == "pause" } }
+    }
+
+    @Test
+    fun threeRefusedConnectsRefreshTheTokenAndBeginAgain() = run {
+        val s = session()
+        s.begin()
+        fake.refuseNextRpc.set(3)
+        fake.closeRpc("cl")
+        awaitUntil { count("get_lounge_token_batch") >= 2 && fake.rpcOpen("cl") == 1 }
+        assertEquals(2, count("bc/bind", "POST"), "a new bind init")
+        assertEquals(5, fake.requests.count { it.method == "GET" && it.query["RID"] == "rpc" })
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun theTokenIsRefreshedWhenItsIntervalElapses() = run {
+        fake.refreshIntervalInMillis = 500
+        val s = session()
+        s.begin()
+        awaitUntil(2000) { count("get_lounge_token_batch") >= 2 }
+        awaitUntil(2000) { s.status == SessionStatus.RUNNING && fake.rpcOpen("cl") == 1 }
+    }
+
+    @Test
+    fun endSaysGoodbyeClosesTheStreamAndIsIdempotent() = run {
+        val s = session()
+        s.begin()
+        s.end()
+        assertEquals(SessionStatus.STOPPED, s.status)
+        val bye = fake.sent.getValue("cl").single()
+        assertEquals("loungeScreenDisconnected", bye["req0__sc"])
+        awaitUntil { !s.rpcOpen() }
+        val before = fake.requests.size
+        s.end()
+        assertEquals(before, fake.requests.size)
+        assertFalse(s.sendMessage(listOf(volume(5))), "a stopped session sends nothing")
+    }
+
+    @Test
+    fun registerPairingCodePostsTheRecordedFields() = run {
+        val s = session()
+        s.begin()
+        s.registerPairingCode("ABC123")
+        val post = fake.requests.last { it.path.endsWith("register_pairing_code") }
+        assertEquals(
+            listOf("access_type" to "permanent", "app" to "ytcr", "pairing_code" to "ABC123", "screen_id" to s.screenId!!, "screen_name" to "T2U test", "device_id" to s.deviceId),
+            post.form.toList(),
+        )
+        fake.refusePairing = true
+        assertFailsWith<LoungeHttpException> { s.registerPairingCode("ZZZ999") }
+    }
+
+    // ---- logging (CAST-08, T-02-30)
+
+    private fun flatten(v: Any?): List<String> = when (v) {
+        null -> emptyList()
+        is Map<*, *> -> v.entries.flatMap { flatten(it.key) + flatten(it.value) }
+        is Iterable<*> -> v.flatMap { flatten(it) }
+        else -> listOf(v.toString())
+    }
+
+    @Test
+    fun everyMessageIsLoggedAndNoSecretEverReachesALog() = run {
+        val s = session()
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        s.begin()
+        fake.replayRecorded("cl")
+        awaitUntil { received.size >= 1 + recordedNames("rpc-cl.txt").size }
+        assertTrue(received.any { it.name == "setPlaylist" })
+        val sentOk = s.sendMessage(listOf(volume(30), OutgoingMessage.autoplayUpNext(null, "VID12345678")))
+        assertTrue(sentOk)
+        s.registerPairingCode("ABC123")
+        s.end()
+
+        val all = events.toList()
+        assertTrue(all.isNotEmpty())
+        for ((kind, fields) in all) {
+            val text = flatten(fields).joinToString(" ")
+            for (secret in fake.secrets) assertFalse(secret in text, "$kind leaked a fake secret")
+            assertFalse("ABC123" in text, "$kind leaked the pairing code")
+            assertFalse(s.screenId!! in text)
+            assertFalse(s.deviceId in text)
+        }
+        val rx = all.filter { it.first == "lounge" && it.second["dir"] == "rx" }
+        // the init response is logged whole, although only c, S and loungeStatus are acted on
+        assertEquals(
+            listOf("c", "S", "loungeStatus", "getNowPlaying", "getDiscoveryDeviceId") + received.drop(1).map { it.name },
+            rx.map { it.second["name"] },
+        )
+        assertTrue(rx.all { it.second["theme"] == "cl" && it.second["aid"] is Int })
+        val tx = all.filter { it.first == "lounge" && it.second["dir"] == "tx" }
+        assertEquals(listOf("onVolumeChanged", "autoplayUpNext", "loungeScreenDisconnected"), tx.map { it.second["name"] })
+    }
+
+    @Test
+    fun rawChunksAreLoggedRedactedInPiecesOfAtMost1800Characters() = run {
+        val s = session()
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        s.begin()
+        val big = "[[60,[\"setPlaylist\",{\"listId\":\"L\",\"videoIds\":\"" + "a".repeat(4500) + "\"}]]]"
+        fake.replayRecorded("cl")
+        fake.enqueueRpc("cl", big)
+        awaitUntil { received.any { it.aid == 60 } }
+        val raw = events.filter { it.first == "lounge-raw" }.map { it.second }
+        assertTrue(raw.isNotEmpty())
+        for (e in raw) {
+            assertEquals("cl", e["theme"])
+            assertTrue((e["data"] as String).length <= 1800)
+            assertTrue(e["seq"] is Int && e["part"] is Int && e["parts"] is Int)
+        }
+        val bySeq = raw.groupBy { it["seq"] as Int }.mapValues { (_, parts) ->
+            parts.sortedBy { it["part"] as Int }.also { assertEquals(it.size, it[0]["parts"]) }.joinToString("") { it["data"] as String }
+        }
+        // every RPC payload the fake served shows up, redacted, once its pieces are joined
+        for (served in fake.served.getValue("cl")) {
+            assertTrue(Redact.text(served) in bySeq.values, "a served chunk is missing from lounge-raw")
+        }
+        assertTrue(raw.any { (it["parts"] as Int) >= 3 }, "the 4500 character chunk is split")
     }
 }
