@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <URLBase>http://192.168.50.239:3000/ytcr</URLBase>
+  <device>
+    <deviceType>urn:dial-multiscreen-org:device:dial:1</deviceType>
+    <friendlyName>T2U-SPIKE A base</friendlyName>
+    <manufacturer>Tube2U[PnP]</manufacturer>
+    <modelName>UPnP Renderer</modelName>
+    <UDN>uuid:11652cc9-8e9f-4431-9bdd-49a5bf04dd57</UDN>
+    <iconList>
+      <icon>
+        <mimetype>image/png</mimetype>
+        <width>144</width>
+        <height>144</height>
+        <depth>32</depth>
+        <url>/img/icon.png</url>
+      </icon>
+    </iconList>
+    <serviceList>
+      <service>
+        <serviceType>urn:dial-multiscreen-org:service:dial:1</serviceType>
+        <serviceId>urn:dial-multiscreen-org:serviceId:dial</serviceId>
+        <controlURL>/ssdp/notfound</controlURL>
+        <eventSubURL>/ssdp/notfound</eventSubURL>
+        <SCPDURL>/ssdp/notfound</SCPDURL>
+      </service>
+    </serviceList>
+  </device>
+</root>

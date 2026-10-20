@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<service xmlns="urn:dial-multiscreen-org:schemas:dial"  dialVer="1.7">
+  <name>YouTube</name>
+  <options allowStop="false"/>
+  <state>running</state>
+  <link rel="run" href="3a8650d4-a45b-498c-8dd2-ebee30afa3c3" />
+</service>
