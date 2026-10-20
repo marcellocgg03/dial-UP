@@ -26,7 +26,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -45,6 +47,44 @@ sealed interface StreamSource {
      * per format (adts: `-c:a copy -f adts pipe:1`, mp3: `-c:a libmp3lame -b:a 192k -f mp3 pipe:1`).
      */
     data class PipeSource(val inputArgs: List<String>) : StreamSource
+
+    /**
+     * A cast video: the server resolves [entry]'s ID through its [VideoResolver] when the speaker asks, and
+     * runs the attempt ladder (YouTube URL, then a fresh extraction) before answering 502.
+     */
+    data class VideoPipe(val entry: VideoEntry) : StreamSource
+}
+
+/**
+ * A video to stream to a speaker as an ffmpeg pipe. [format] is `adts` or `mp3` (file formats are Phase 3),
+ * [startAt] is the offset in seconds for streams the speaker cannot seek, [onRequest] runs once per GET
+ * (mediaServer.js `entry.onRequest`).
+ */
+data class VideoEntry(
+    val videoId: String,
+    val format: String,
+    val startAt: Int = 0,
+    val onRequest: (() -> Unit)? = null,
+)
+
+/** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
+interface MediaRegistrar {
+    /** @return `/stream/<token>.<ext>`. @throws IllegalArgumentException for an invalid ID or a non-pipe format. */
+    fun registerVideo(entry: VideoEntry): String
+}
+
+/**
+ * The input side of mediaServer.js `#urlInputArgs`: ffmpeg reads [info]'s URL itself with the headers yt-dlp
+ * chose, reconnects on a dropped read, and (input-side `-ss`) range-requests from [startAt] instead of reading from 0.
+ */
+fun urlInputArgs(info: ResolvedInfo, startAt: Int): List<String> {
+    val hdrs = info.headers.entries.joinToString("") { (k, v) -> "$k: $v\r\n" }
+    val args = mutableListOf("-hide_banner", "-loglevel", "error")
+    if (hdrs.isNotEmpty()) args += listOf("-headers", hdrs)
+    args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
+    if (startAt > 0) args += listOf("-ss", startAt.toString())
+    args += listOf("-i", info.url, "-vn")
+    return args
 }
 
 /** A registered stream. [format] is a key of [FORMATS]; [label] only appears in the request log. */
@@ -88,7 +128,8 @@ class MediaServer(
     private val launcher: PipeLauncher?,
     private val onRequest: (MediaRequest) -> Unit,
     private val bufferDir: File? = null,
-) {
+    private val resolver: VideoResolver? = null,
+) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var boundPort: Int = port
@@ -139,6 +180,14 @@ class MediaServer(
         return "/stream/$token.$ext"
     }
 
+    override fun registerVideo(entry: VideoEntry): String {
+        requireVideoId(entry.videoId)
+        require(outputArgs(entry.format) != null) { "format ${entry.format} is not a pipe format (adts or mp3)" }
+        require(entry.startAt >= 0) { "startAt must not be negative" }
+        val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
+        return register(StreamEntry(StreamSource.VideoPipe(entry), entry.format, mime, entry.videoId))
+    }
+
     /** Installs the handler into [app]; used by [start] and available to testApplication tests. */
     fun configure(app: Application) {
         app.intercept(ApplicationCallPipeline.Call) { handle(call) }
@@ -170,6 +219,10 @@ class MediaServer(
             when (val src = entry.source) {
                 is StreamSource.FileSource -> serveFile(call, entry, src.file, head, out, "file")
                 is StreamSource.PipeSource -> servePipe(call, entry, src, head, out)
+                is StreamSource.VideoPipe -> {
+                    if (!head) runCatching { src.entry.onRequest?.invoke() }
+                    servePipe(call, entry, src, head, out)
+                }
             }
         } finally {
             report(call, out)
@@ -291,12 +344,42 @@ class MediaServer(
         }
     }
 
-    private suspend fun servePipe(call: ApplicationCall, entry: StreamEntry, src: StreamSource.PipeSource, head: Boolean, out: Outcome) {
+    /** One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw). */
+    private class PipeAttempt(val name: String, val input: suspend () -> List<String>)
+
+    /**
+     * The ladder of mediaServer.js `#pipe`: a [StreamSource.PipeSource] has one attempt, a
+     * [StreamSource.VideoPipe] reads YouTube's URL and, when that fails, drops the cached resolve and reads a
+     * fresh extraction. The yt-dlp download rung of the Node ladder belongs to the file formats (Phase 3).
+     */
+    private fun attemptsFor(src: StreamSource): List<PipeAttempt>? = when (src) {
+        is StreamSource.PipeSource -> listOf(PipeAttempt("stream") { src.inputArgs })
+        is StreamSource.VideoPipe -> resolver?.let { r ->
+            val id = src.entry.videoId
+            val startAt = src.entry.startAt
+            listOf(
+                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt) },
+                PipeAttempt("a fresh extraction") {
+                    r.invalidate(id)
+                    urlInputArgs(r.resolve(id), startAt)
+                },
+            )
+        }
+        is StreamSource.FileSource -> null
+    }
+
+    /** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host (threat T-02-15). */
+    private fun failureLine(name: String, detail: String, prefixed: Boolean): String {
+        val text = Resolver.redactUrls(detail).take(MAX_NOTE)
+        return if (prefixed) "$name: $text" else text
+    }
+
+    private suspend fun servePipe(call: ApplicationCall, entry: StreamEntry, src: StreamSource, head: Boolean, out: Outcome) {
         out.pipeMode = "chunked"
         val type = ContentType.parse(entry.mime)
         val tail = outputArgs(entry.format)
         if (head) {
-            // Headers only, no process (a HEAD must never start ffmpeg).
+            // Headers only, no process and no resolve (a HEAD must never start ffmpeg).
             dlnaHeaders(call, entry)
             out.status = 200
             call.respond(
@@ -310,9 +393,14 @@ class MediaServer(
             return
         }
         val l = launcher
-        if (l == null || tail == null) {
+        val attempts = attemptsFor(src)
+        if (l == null || tail == null || attempts == null) {
             out.status = 501
-            out.note = if (l == null) "no ffmpeg launcher" else "format ${entry.format} is not a pipe format"
+            out.note = when {
+                l == null -> "no ffmpeg launcher"
+                tail == null -> "format ${entry.format} is not a pipe format"
+                else -> "no resolver for video tokens"
+            }
             call.respond(HttpStatusCode.NotImplemented)
             return
         }
@@ -320,69 +408,87 @@ class MediaServer(
         // give them a complete, length-delimited body instead.
         val dir = bufferDir
         if (call.request.httpVersion == "HTTP/1.0" && dir != null) {
-            serveBuffered(call, entry, src, l, tail, dir, out)
+            serveBuffered(call, entry, attempts, l, tail, dir, out)
             return
         }
 
-        val proc = withContext(Dispatchers.IO) { l.start(src.inputArgs + tail + "pipe:1") }
-        try {
-            val stdout = proc.inputStream
-            val buf = ByteArray(PIPE_CHUNK)
-            // Wait for the first audio byte; headers go out only after it, so a dead start is a 502, not an empty 200.
-            val firstLen = coroutineScope {
-                val watchdog = launch {
-                    delay(FIRST_BYTE_TIMEOUT_MS)
-                    out.note = "no first byte after ${FIRST_BYTE_TIMEOUT_MS / 1000} s"
-                    proc.destroyForcibly()
-                }
-                try {
-                    withContext(Dispatchers.IO) { stdout.read(buf) }
-                } finally {
-                    watchdog.cancel()
-                }
+        val failures = mutableListOf<String>()
+        for (attempt in attempts) {
+            val input = try {
+                attempt.input()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
+                continue
             }
-            if (firstLen <= 0) {
-                withContext(Dispatchers.IO) { runCatching { proc.waitFor(2, TimeUnit.SECONDS) } }
-                val err = withContext(Dispatchers.IO) { l.stderrTail(proc) }
-                out.status = 502
-                out.note = listOfNotNull(out.note, err.takeIf { it.isNotEmpty() }).joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
-                call.respond(HttpStatusCode.BadGateway)
-                return
-            }
-            val first = buf.copyOf(firstLen)
-            dlnaHeaders(call, entry)
-            out.status = 200
-            call.respondBytesWriter(contentType = type, status = HttpStatusCode.OK) {
-                try {
-                    writeFully(first, 0, first.size)
-                    out.bytes += first.size
-                    flush()
-                    while (true) {
-                        val n = withContext(Dispatchers.IO) { stdout.read(buf) }
-                        if (n < 0) break
-                        writeFully(buf, 0, n)
-                        out.bytes += n
-                        flush()
+            // Hung up while we resolved: an ffmpeg started now would block on a pipe nobody reads (mediaServer.js).
+            if (!currentCoroutineContext().isActive) return
+            val proc = withContext(Dispatchers.IO) { l.start(input + tail + "pipe:1") }
+            try {
+                val stdout = proc.inputStream
+                val buf = ByteArray(PIPE_CHUNK)
+                var watchdogNote: String? = null
+                // Wait for the first audio byte; headers go out only after it, so a dead start is a 502, not an empty 200.
+                val firstLen = coroutineScope {
+                    val watchdog = launch {
+                        delay(FIRST_BYTE_TIMEOUT_MS)
+                        watchdogNote = "no first byte after ${FIRST_BYTE_TIMEOUT_MS / 1000} s"
+                        proc.destroyForcibly()
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    // a write failure is the client hanging up; the finally below kills ffmpeg
-                    out.note = "client closed: ${e.javaClass.simpleName}"
-                } finally {
-                    killAndWait(proc)
+                    try {
+                        withContext(Dispatchers.IO) { stdout.read(buf) }
+                    } finally {
+                        watchdog.cancel()
+                    }
                 }
+                if (firstLen <= 0) {
+                    withContext(Dispatchers.IO) { runCatching { proc.waitFor(2, TimeUnit.SECONDS) } }
+                    val err = withContext(Dispatchers.IO) { l.stderrTail(proc) }
+                    val detail = listOfNotNull(watchdogNote, err.takeIf { it.isNotEmpty() }).joinToString(" | ")
+                        .ifEmpty { "ffmpeg produced no output" }
+                    failures += failureLine(attempt.name, detail, attempts.size > 1)
+                    continue
+                }
+                val first = buf.copyOf(firstLen)
+                dlnaHeaders(call, entry)
+                out.status = 200
+                call.respondBytesWriter(contentType = type, status = HttpStatusCode.OK) {
+                    try {
+                        writeFully(first, 0, first.size)
+                        out.bytes += first.size
+                        flush()
+                        while (true) {
+                            val n = withContext(Dispatchers.IO) { stdout.read(buf) }
+                            if (n < 0) break
+                            writeFully(buf, 0, n)
+                            out.bytes += n
+                            flush()
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // a write failure is the client hanging up; the finally below kills ffmpeg
+                        out.note = "client closed: ${e.javaClass.simpleName}"
+                    } finally {
+                        killAndWait(proc)
+                    }
+                }
+                return
+            } finally {
+                killAndWait(proc)
             }
-        } finally {
-            killAndWait(proc)
         }
+        out.status = 502
+        out.note = failures.joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
+        call.respond(HttpStatusCode.BadGateway)
     }
 
     /** HTTP/1.0 path: run ffmpeg to completion into a temp file, serve it like a file entry, delete it. */
     private suspend fun serveBuffered(
         call: ApplicationCall,
         entry: StreamEntry,
-        src: StreamSource.PipeSource,
+        attempts: List<PipeAttempt>,
         l: PipeLauncher,
         outputArgs: List<String>,
         dir: File,
@@ -392,31 +498,45 @@ class MediaServer(
             dir.mkdirs()
             File.createTempFile("pipe-", "." + extensionOf(entry.format), dir)
         }
-        var proc: Process? = null
+        val failures = mutableListOf<String>()
         try {
-            val p = withContext(Dispatchers.IO) { l.start(listOf("-y") + src.inputArgs + outputArgs + tmp.absolutePath) }
-            proc = p
-            val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
-            if (!done) {
-                killAndWait(p)
-                out.status = 502
-                out.pipeMode = "buffered"
-                out.note = "ffmpeg did not finish within $BUFFER_TIMEOUT_SEC s"
-                call.respond(HttpStatusCode.BadGateway)
+            for (attempt in attempts) {
+                val input = try {
+                    attempt.input()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
+                    continue
+                }
+                if (!currentCoroutineContext().isActive) return
+                var proc: Process? = null
+                try {
+                    val p = withContext(Dispatchers.IO) { l.start(listOf("-y") + input + outputArgs + tmp.absolutePath) }
+                    proc = p
+                    val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
+                    if (!done) {
+                        killAndWait(p)
+                        failures += failureLine(attempt.name, "ffmpeg did not finish within $BUFFER_TIMEOUT_SEC s", attempts.size > 1)
+                        continue
+                    }
+                    val code = p.exitValue()
+                    if (code != 0 || tmp.length() == 0L) {
+                        val err = withContext(Dispatchers.IO) { l.stderrTail(p) }
+                        failures += failureLine(attempt.name, "ffmpeg exit $code: $err".trim(), attempts.size > 1)
+                        continue
+                    }
+                } finally {
+                    proc?.let { killAndWait(it) }
+                }
+                serveFile(call, entry, tmp, false, out, "buffered")
                 return
             }
-            val code = p.exitValue()
-            if (code != 0 || tmp.length() == 0L) {
-                val err = withContext(Dispatchers.IO) { l.stderrTail(p) }
-                out.status = 502
-                out.pipeMode = "buffered"
-                out.note = "ffmpeg exit $code: $err".trim()
-                call.respond(HttpStatusCode.BadGateway)
-                return
-            }
-            serveFile(call, entry, tmp, false, out, "buffered")
+            out.status = 502
+            out.pipeMode = "buffered"
+            out.note = failures.joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
+            call.respond(HttpStatusCode.BadGateway)
         } finally {
-            proc?.let { killAndWait(it) }
             withContext(NonCancellable + Dispatchers.IO) { tmp.delete() }
         }
     }
@@ -428,6 +548,7 @@ class MediaServer(
         private const val MP3_BITRATE = "192k"
         private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
         private const val BUFFER_TIMEOUT_SEC = 180L
+        private const val MAX_NOTE = 400
         private val TOKEN_PATH = Regex("^/stream/([0-9a-f]{32})\\.\\w+$")
     }
 }

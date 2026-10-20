@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -80,6 +81,8 @@ class MediaServerLadderTest {
                 }
             }
         }
+        // ffmpeg keeps one connection open while it seeks on another: the default single-threaded executor would stall it
+        upstream.executor = Executors.newCachedThreadPool { r -> Thread(r, "upstream").also { it.isDaemon = true } }
         upstream.start()
         base = "http://127.0.0.1:${upstream.address.port}"
         launcher = JvmPipeLauncher(ffmpeg)
@@ -117,7 +120,7 @@ class MediaServerLadderTest {
         val ms = serve(resolver)
         val path = ms.registerVideo(VideoEntry("iiiiiiiiiii", "mp3"))
         val r = RawHttp.request(ms.resolvedPort(), "GET", path)
-        assertEquals(200, r.status)
+        assertEquals(200, r.status, "reported: $seen")
         assertEquals("audio/mpeg", r.header("Content-Type"))
         assertTrue(isMp3Start(r.body), "first bytes ${r.body.take(4)}")
         val saved = File(dir, "out.mp3").also { it.writeBytes(r.body) }

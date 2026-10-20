@@ -1,5 +1,12 @@
 package dev.t2u.media
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -13,10 +20,10 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.net.URI
 
-// Port of reference/tube2upnp/src/resolver.js for the Phase 1 measurements. Pure JVM (no android.*):
-// the youtubedl-android adapter lives in :app behind YtDlpGateway. Deliberately no cache, no
-// in-flight coalescing and no 403/410 re-resolve: that is PLAY-01 in Phase 2, and a memo cache would
-// hide the raw yt-dlp timings this phase exists to measure.
+// Port of reference/tube2upnp/src/resolver.js. Pure JVM (no android.*): the youtubedl-android adapter lives
+// in :app behind YtDlpGateway. [Resolver] is the uncached single resolve the Phase 1 measurements use (a memo
+// cache would hide the raw yt-dlp timings); [CachingResolver] below is the PLAY-01 resolver of the cast path
+// (cache until the signed URL expires, coalesced lookups, invalidate for the 403/410 retry).
 
 /** resolver.js VIDEO_ID. A YouTube video ID is exactly 11 characters of this alphabet. */
 val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")
@@ -286,6 +293,132 @@ class Resolver(private val gateway: YtDlpGateway) {
                 if (line != null) return line.trim().take(300)
             }
             return null
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------------- caching resolver
+
+private const val MAX_CACHE_MS = 60L * 60 * 1000
+private const val EXPIRY_MARGIN_MS = 5L * 60 * 1000
+private const val MAX_CACHE_ENTRIES = 100
+
+/**
+ * resolver.js urlExpiry: a googlevideo URL is good until its `expire` query value minus 5 minutes, but never
+ * longer than 1 hour from [now]; a URL without a positive `expire` is kept for 1 hour.
+ */
+fun urlExpiry(url: String, now: Long = System.currentTimeMillis()): Long {
+    val exp = urlExpire(url)
+    if (exp != null && exp > 0) return minOf(exp * 1000 - EXPIRY_MARGIN_MS, now + MAX_CACHE_MS)
+    return now + MAX_CACHE_MS
+}
+
+/** A lookup that did not produce a playable URL. The message never carries a full signed URL. */
+class ResolveException(message: String) : Exception(message)
+
+/** What the media server needs from a resolver: a video's stream info, and a way to drop a refused one. */
+interface VideoResolver {
+    /** @throws IllegalArgumentException for an ID that is not 11 characters of `[A-Za-z0-9_-]` (no process starts). */
+    suspend fun resolve(videoId: String): ResolvedInfo
+
+    fun invalidate(videoId: String)
+}
+
+/**
+ * resolver.js `resolve`/`invalidate`: the ID is checked before anything else (threat T-02-13), a result is
+ * cached until [urlExpiry] with at most 100 entries (oldest first), concurrent lookups for one ID share a single
+ * yt-dlp run, and a failed lookup is never cached. The blocking [YtDlpGateway] runs on [Dispatchers.IO] in a
+ * private scope, so one caller giving up does not cancel the lookup the others wait for.
+ *
+ * [onEvent] gets `{id, result: hit|miss|coalesced|fail, ms, urlHost, expire}` and never the URL itself (T-02-15).
+ */
+class CachingResolver(
+    private val gateway: YtDlpGateway,
+    private val cacheDir: String?,
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val onEvent: (Map<String, Any?>) -> Unit = {},
+) : VideoResolver {
+    private class Cached(val info: ResolvedInfo, val expires: Long)
+
+    private val lock = Any()
+    private val cache = LinkedHashMap<String, Cached>()
+    private val inflight = HashMap<String, Deferred<ResolvedInfo>>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override suspend fun resolve(videoId: String): ResolvedInfo {
+        requireVideoId(videoId)
+        val started = System.nanoTime()
+
+        var coalesced = false
+        val pending = synchronized(lock) {
+            val hit = cache[videoId]
+            if (hit != null && hit.expires > clock()) return@synchronized hit.info to null
+            val running = inflight[videoId]
+            if (running != null) {
+                coalesced = true
+                return@synchronized null to running
+            }
+            val fresh = scope.async { lookup(videoId) }
+            inflight[videoId] = fresh
+            fresh.invokeOnCompletion { synchronized(lock) { inflight.remove(videoId, fresh) } }
+            null to fresh
+        }
+        pending.first?.let {
+            emit(videoId, "hit", started, it)
+            return it
+        }
+        val deferred = pending.second!!
+        val info = try {
+            deferred.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emit(videoId, "fail", started, null)
+            throw e
+        }
+        emit(videoId, if (coalesced) "coalesced" else "miss", started, info)
+        return info
+    }
+
+    override fun invalidate(videoId: String) {
+        synchronized(lock) { cache.remove(videoId) }
+    }
+
+    private suspend fun lookup(id: String): ResolvedInfo = withContext(Dispatchers.IO) {
+        val result = try {
+            gateway.run(dumpJsonCall(id, cacheDir, verbose = false))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ResolveException("yt-dlp failed for $id: ${Resolver.redactUrls(e.message ?: e.javaClass.simpleName).take(300)}")
+        }
+        if (result.exitCode != 0) throw ResolveException("yt-dlp failed for $id: ${Resolver.errorTail(result.stderrTail)}")
+        val info = try {
+            parseInfo(result.stdout, id)
+        } catch (e: Exception) {
+            // a JSON parse message can quote the input, which holds signed URLs: reduce them to scheme and host
+            throw ResolveException(Resolver.redactUrls(e.message ?: e.javaClass.simpleName).take(300))
+        }
+        synchronized(lock) {
+            cache[id] = Cached(info, urlExpiry(info.url, clock()))
+            while (cache.size > MAX_CACHE_ENTRIES) cache.remove(cache.keys.first())
+        }
+        info
+    }
+
+    private fun emit(id: String, result: String, startedNanos: Long, info: ResolvedInfo?) {
+        try {
+            onEvent(
+                mapOf(
+                    "id" to id,
+                    "result" to result,
+                    "ms" to (System.nanoTime() - startedNanos) / 1_000_000,
+                    "urlHost" to info?.let { urlHost(it.url) },
+                    "expire" to info?.let { urlExpire(it.url) },
+                ),
+            )
+        } catch (_: Throwable) {
+            // logging must never break a lookup
         }
     }
 }
