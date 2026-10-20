@@ -9,13 +9,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Sonos SOAP and device descriptions are plain HTTP to private LAN IPs. -->
     <!-- Do not set the native-library extraction attribute here: AGP injects it from
          useLegacyPackaging = true (Pitfall 10). -->
     <application
         android:allowBackup="false"
-        android:label="T2U spike"
+        android:label="Tube2U (app)"
         android:usesCleartextTraffic="true">
 
         <activity
