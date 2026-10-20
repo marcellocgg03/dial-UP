@@ -1,5 +1,7 @@
 package dev.t2u.media
 
+// Port of tube2upnp src/formats.js (MIME_ALIASES lives in :upnp Upnp.kt).
+
 /** One output format of formats.js: `mime` and `ext` are null for `direct` (they come from the source). */
 data class FormatSpec(val mime: String?, val ext: String?, val seekable: Boolean)
 
@@ -11,6 +13,12 @@ val FORMATS: Map<String, FormatSpec> = linkedMapOf(
     "flac" to FormatSpec("audio/flac", "flac", true),
     "mp3" to FormatSpec("audio/mpeg", "mp3", false),
 )
+
+/** Order tried by auto-detection (formats.js FALLBACK_CHAIN). */
+val FALLBACK_CHAIN: List<String> = listOf("direct", "mp4", "adts", "flac", "mp3")
+
+/** Formats built as a complete file in the cache and served with byte ranges (formats.js FILE_FORMATS). */
+val FILE_FORMATS: List<String> = listOf("mp4", "flac")
 
 private fun spec(format: String): FormatSpec = FORMATS[format] ?: throw IllegalArgumentException("unknown format: $format")
 
@@ -31,3 +39,6 @@ fun dlnaFeatures(format: String): String {
 
 /** File extension of a token URL for [format] (mp4 -> m4a, adts -> aac, mp3 -> mp3). */
 fun extensionOf(format: String): String = spec(format).ext ?: throw IllegalArgumentException("format $format has no fixed extension")
+
+/** formats.js mimeOf: the format's own MIME, or [sourceMime] for `direct`, which has none. */
+fun mimeOf(format: String, sourceMime: String): String = spec(format).mime ?: sourceMime
