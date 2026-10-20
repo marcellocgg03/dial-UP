@@ -8,16 +8,22 @@ package dev.t2u.lounge
 // reads protocol constants from Constants.kt and (from the logging step on) reports every message through LoungeLog.
 
 import dev.t2u.upnp.EventSink
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -53,6 +59,8 @@ class SessionException(message: String, cause: Throwable? = null) : Exception(me
  * One lounge session. [begin] performs generate_screen_id (unless a screen id is stored), get_lounge_token_batch,
  * the bind init POST and opens the RPC long-poll; incoming messages go to [onMessages], one batch at a time, in order.
  */
+private const val FAREWELL_TIMEOUT_MS = 2000L
+
 class Session(
     val client: Client,
     private val screenName: String,
@@ -104,9 +112,25 @@ class Session(
     suspend fun begin() {
         if (status != SessionStatus.STOPPED) return
         status = SessionStatus.STARTING
+        try {
+            connect(useStore = true)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            val error = SessionException("(${client.displayName}) Failed to establish session", e)
+            end()
+            throw error
+        }
+        status = SessionStatus.RUNNING
+    }
+
+    /**
+     * Screen id (stored, or generated), lounge token, bind init, RPC connection, then the identity is stored.
+     * [useStore] is false when refreshing: the screen id in memory is kept.
+     */
+    private suspend fun connect(useStore: Boolean) {
         val storageKey = StoreKeys.mdxContext(client.theme)
         var screenFromStore = false
-        if (screenId == null && dataStore != null) {
+        if (useStore && screenId == null && dataStore != null) {
             val stored = dataStore.get(storageKey) as? JsonObject
             if (stored != null) {
                 bind.updateWithMdxContext((stored["deviceId"] as? JsonPrimitive)?.contentOrNull)
@@ -117,21 +141,16 @@ class Session(
                 }
             }
         }
-        try {
-            establish(screenFromStore)
-        } catch (e: Exception) {
-            val error = SessionException("(${client.displayName}) Failed to establish session", e)
-            end()
-            throw error
-        }
-        status = SessionStatus.RUNNING
+        ofs = 0
+        establish(screenFromStore)
         if (dataStore != null) {
             try {
                 dataStore.set(
                     storageKey,
                     JsonObject(mapOf("deviceId" to JsonPrimitive(bind.id), "screenId" to JsonPrimitive(screenId))),
                 )
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 // a store that cannot write is the store's problem; the session works without it
             }
         }
@@ -161,15 +180,177 @@ class Session(
         startRpcReader(openRpcStream())
     }
 
-    suspend fun end() {
+    /**
+     * Ends the session: closes the RPC stream, drops queued sends and tells the senders (best effort).
+     * With [error] the session ended because of it and [onTerminate] is called.
+     */
+    suspend fun end(error: Throwable? = null) {
         if (status == SessionStatus.STOPPED || status == SessionStatus.STOPPING) return
         status = SessionStatus.STOPPING
         try {
             rpc?.close()
             rpc = null
+            clearQueuedSends()
+            try {
+                withTimeoutOrNull(FAREWELL_TIMEOUT_MS) {
+                    sendLock.withLock { postMessages(SendTask(listOf(OutgoingMessage.loungeScreenDisconnected()), epoch, CompletableDeferred())) }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                // the lounge may not be reachable any more; we are quitting anyway
+            }
         } finally {
             bind.reset()
             status = SessionStatus.STOPPED
+        }
+        if (error != null) onTerminate(error)
+    }
+
+    /**
+     * Gets a fresh lounge token and a new bind session (Session.js refreshLoungeToken). Queued sends wait meanwhile
+     * and go out with their AID cleared, because AID restarts after a refresh. A failure ends the session with that error.
+     */
+    suspend fun refreshLoungeToken() {
+        if (!refreshMutex.tryLock()) return
+        try {
+            if (status != SessionStatus.RUNNING) return
+            status = SessionStatus.REFRESHING
+            val old = rpc
+            try {
+                sendLock.withLock {
+                    bind.reset()
+                    try {
+                        connect(useStore = false)
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        throw SessionException("(${client.displayName}) Error while refreshing lounge token", e)
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                old?.close()
+                end(e)
+                throw e
+            }
+            old?.close()
+            epoch++
+            if (status == SessionStatus.REFRESHING) status = SessionStatus.RUNNING else rpc?.close()
+        } finally {
+            refreshMutex.unlock()
+        }
+    }
+
+    // ---- sending
+
+    private class SendTask(val messages: List<OutgoingMessage>, val epoch: Int, val result: CompletableDeferred<Boolean>)
+
+    private class DeferredSend(val job: Job, val task: SendTask)
+
+    private val sendChannel = Channel<SendTask>(Channel.UNLIMITED)
+    private val sendLock = Mutex()
+    private val refreshMutex = Mutex()
+    private val deferred = HashMap<String, DeferredSend>()
+
+    @Volatile
+    private var epoch = 0
+
+    private var ofs = 0
+
+    private val sendConsumer: Job by lazy {
+        scope.launch {
+            for (task in sendChannel) process(task)
+        }
+    }
+
+    /**
+     * Sends [messages] in queue order. With [deferKey], the send waits [deferMs]; a later call with the same key
+     * replaces it and the replaced call returns false. Returns true when the lounge accepted the POST.
+     */
+    suspend fun sendMessage(
+        messages: List<OutgoingMessage>,
+        deferKey: String? = null,
+        deferMs: Long = LoungeConstants.VOLUME_DEFER_MS,
+    ): Boolean {
+        if (status != SessionStatus.RUNNING && status != SessionStatus.REFRESHING) return false
+        sendConsumer.isActive // starts the consumer
+        val task = SendTask(messages, epoch, CompletableDeferred())
+        if (deferKey == null) {
+            sendChannel.trySend(task)
+        } else {
+            synchronized(deferred) {
+                deferred.remove(deferKey)?.let {
+                    it.job.cancel()
+                    it.task.result.complete(false)
+                }
+                val job = scope.launch {
+                    delay(deferMs)
+                    val mine = synchronized(deferred) {
+                        if (deferred[deferKey]?.task === task) {
+                            deferred.remove(deferKey)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (mine) sendChannel.trySend(task)
+                }
+                deferred[deferKey] = DeferredSend(job, task)
+            }
+        }
+        return task.result.await()
+    }
+
+    private suspend fun process(task: SendTask) {
+        var attempt = 0
+        while (true) {
+            try {
+                sendLock.withLock { postMessages(task) }
+                task.result.complete(true)
+                return
+            } catch (e: CancellationException) {
+                task.result.complete(false)
+                throw e
+            } catch (e: Exception) {
+                attempt++
+                if (attempt >= 2) {
+                    // the retry after a token refresh failed as well
+                    task.result.complete(false)
+                    end(e)
+                    return
+                }
+                try {
+                    refreshLoungeToken()
+                } catch (r: Exception) {
+                    if (r is CancellationException) throw r
+                    task.result.complete(false)
+                    return
+                }
+            }
+        }
+    }
+
+    /** One message POST. Not queued: callers hold [sendLock]. */
+    private suspend fun postMessages(task: SendTask) {
+        val aid = if (task.epoch == epoch) task.messages.firstOrNull()?.aid else null
+        val url = endpoints.bind + "?" + bind.toQueryString(BindType.SEND_MESSAGE, aid)
+        val pairs = sendMessagePostData(task.messages, ofs)
+        ofs += task.messages.size
+        val request = Request.Builder().url(url).header("User-Agent", LoungeConstants.USER_AGENT)
+            .post(formEncode(pairs).toRequestBody(formType)).build()
+        http.newCall(request).await().use { checkOk(it, request) }
+    }
+
+    private fun clearQueuedSends() {
+        synchronized(deferred) {
+            deferred.values.forEach {
+                it.job.cancel()
+                it.task.result.complete(false)
+            }
+            deferred.clear()
+        }
+        while (true) {
+            val task = sendChannel.tryReceive().getOrNull() ?: break
+            task.result.complete(false)
         }
     }
 
@@ -323,26 +504,4 @@ internal suspend fun Call.await(): Response = suspendCancellableCoroutine { cont
             }
         },
     )
-}
-
-/**
- * The WHATWG application/x-www-form-urlencoded serializer URLSearchParams uses: alphanumerics and `*-._` stay,
- * a space becomes `+`, everything else is %XX of its UTF-8 bytes.
- */
-fun formEncode(pairs: List<Pair<String, String>>): String = pairs.joinToString("&") { (k, v) -> formComponent(k) + "=" + formComponent(v) }
-
-private const val HEX = "0123456789ABCDEF"
-
-private fun formComponent(s: String): String {
-    val sb = StringBuilder(s.length + 8)
-    for (b in s.toByteArray(Charsets.UTF_8)) {
-        val c = b.toInt() and 0xFF
-        when {
-            (c in 'A'.code..'Z'.code) || (c in 'a'.code..'z'.code) || (c in '0'.code..'9'.code) ||
-                c == '*'.code || c == '-'.code || c == '.'.code || c == '_'.code -> sb.append(c.toChar())
-            c == ' '.code -> sb.append('+')
-            else -> sb.append('%').append(HEX[c shr 4]).append(HEX[c and 0xF])
-        }
-    }
-    return sb.toString()
 }

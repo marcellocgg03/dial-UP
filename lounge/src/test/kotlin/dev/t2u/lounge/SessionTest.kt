@@ -143,12 +143,14 @@ class SessionTest {
     fun deferredVolumeMessagesCollapseToTheLastOne() = run {
         val s = session()
         s.begin()
-        val results = listOf(10, 20, 30).map { level ->
-            val r = async { s.sendMessage(listOf(volume(level)), deferKey = "volume") }
-            delay(15)
-            r
+        val results = kotlinx.coroutines.coroutineScope {
+            listOf(10, 20, 30).map { level ->
+                val r = async { s.sendMessage(listOf(volume(level)), deferKey = "volume") }
+                delay(15)
+                r
+            }.awaitAll()
         }
-        assertEquals(listOf(false, false, true), results.awaitAll())
+        assertEquals(listOf(false, false, true), results)
         val sent = fake.sent.getValue("cl")
         assertEquals(1, sent.size)
         assertEquals("30", sent[0]["req0_volume"])
