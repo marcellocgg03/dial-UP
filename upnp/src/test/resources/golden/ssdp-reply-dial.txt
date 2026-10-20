@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+LOCATION: http://192.168.50.239:3003/ytcr/ssdp/device-desc.xml
+ST: urn:dial-multiscreen-org:service:dial:1
+CONFIGID.UPNP.ORG: 7337
+BOOTID.UPNP.ORG: 7337
+SERVER: Linux/6.1.0-40-amd64 UPnP/1.1 famium/0.0.1
+USN: uuid:11652cc9-8e9f-4431-9bdd-49a5bf04dd57::urn:dial-multiscreen-org:service:dial:1
+HOST: 239.255.255.250:1900
+CACHE-CONTROL: max-age=1800
+EXT: 
+DATE: Mon, 19 Oct 2026 20:36:03 GMT
+
