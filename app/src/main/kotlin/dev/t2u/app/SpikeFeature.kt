@@ -34,7 +34,11 @@ interface SpikeHost {
 }
 
 /**
- * One wave-3 plan fills one feature. A feature is started in the service's onCreate and stopped in
+ * One feature of the service. [CastFeature] is the product: it runs the cast bridge. [ResolverFeature] and
+ * [MediaFeature] are adb diagnostics from Phase 1 (resolve timings, ffmpeg pipes); the media diagnostic listens on
+ * its own port 8100, so it never collides with the bridge's media server.
+ *
+ * Originally one wave-3 plan filled one feature. A feature is started in the service's onCreate and stopped in
  * onDestroy; commands named in [commands] reach [handle]; [state] is merged into state.json under [name].
  * Long-running commands reply `{"started":true}` at once and write their result file into evidenceDir.
  */
@@ -52,5 +56,5 @@ interface SpikeFeature {
 }
 
 object SpikeFeatures {
-    fun all(): List<SpikeFeature> = listOf(DiscoveryFeature(), ResolverFeature(), MediaFeature())
+    fun all(): List<SpikeFeature> = listOf(CastFeature(), ResolverFeature(), MediaFeature())
 }

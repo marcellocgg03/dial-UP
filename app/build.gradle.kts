@@ -49,6 +49,8 @@ dependencies {
     implementation(project(":upnp"))
     implementation(project(":dial"))
     implementation(project(":media"))
+    implementation(project(":lounge"))
+    implementation(project(":renderer"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
