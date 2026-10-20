@@ -45,13 +45,21 @@ object ServiceHub {
  * snapshot that `tools/spike.sh dump-state` reads. START_NOT_STICKY on purpose: a kill must show up
  * as a heartbeat gap plus an exit-info entry, not as a silent restart.
  */
-class BridgeService : Service() {
-    private lateinit var scope: CoroutineScope
-    lateinit var evidence: EvidenceLog
+class BridgeService : Service(), SpikeHost {
+    override lateinit var scope: CoroutineScope
         private set
-    lateinit var evidenceDir: File
+    override lateinit var evidence: EvidenceLog
         private set
-    lateinit var spikeDir: File
+    override lateinit var evidenceDir: File
+        private set
+    override lateinit var spikeDir: File
+        private set
+
+    override val context: Context get() = applicationContext
+
+    /** Features started in onCreate; read by CommandReceiver to route commands. */
+    @Volatile
+    var features: List<SpikeFeature> = emptyList()
         private set
 
     private lateinit var mcastLock: WifiManager.MulticastLock
@@ -88,6 +96,7 @@ class BridgeService : Service() {
 
         acquireLocks()
         logExitInfo()
+        startFeatures()
         scope.launch { heartbeatLoop() }
     }
 
@@ -101,12 +110,47 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         evidence.event("service-stop")
+        stopFeatures()
         releaseLocks()
         scope.cancel()
         ServiceHub.service = null
         evidence.flush()
         super.onDestroy()
     }
+
+    // ----- features ------------------------------------------------------------------------------
+
+    private fun startFeatures() {
+        val all = SpikeFeatures.all()
+        features = all
+        for (feature in all) {
+            try {
+                feature.start(this)
+            } catch (t: Throwable) {
+                // a failing feature must not stop the others or the service
+                evidence.event(
+                    "feature-error",
+                    mapOf("where" to "${feature.name}:start", "error" to t.javaClass.name, "message" to t.message),
+                )
+            }
+        }
+    }
+
+    private fun stopFeatures() {
+        for (feature in features.asReversed()) {
+            try {
+                feature.stop()
+            } catch (t: Throwable) {
+                evidence.event(
+                    "feature-error",
+                    mapOf("where" to "${feature.name}:stop", "error" to t.javaClass.name, "message" to t.message),
+                )
+            }
+        }
+    }
+
+    /** Blocking; throws IllegalStateException on the main thread (see [NativePayloads.ensure]). */
+    override fun payloads(): NativePayloads.Paths = NativePayloads.ensure(applicationContext, evidence)
 
     // ----- locks ---------------------------------------------------------------------------------
 
@@ -166,9 +210,9 @@ class BridgeService : Service() {
         return null to null
     }
 
-    fun wifiIpv4(): Inet4Address? = wifiLinkProperties().first
+    override fun wifiIpv4(): Inet4Address? = wifiLinkProperties().first
 
-    fun wifiInterfaceName(): String? = wifiLinkProperties().second
+    override fun wifiInterfaceName(): String? = wifiLinkProperties().second
 
     // ----- heartbeat and state -------------------------------------------------------------------
 
@@ -218,6 +262,14 @@ class BridgeService : Service() {
             put("ignoringBatteryOpt", power.isIgnoringBatteryOptimizations(packageName))
             put("uptimeMs", SystemClock.elapsedRealtime() - startedAtMs)
             put("pid", android.os.Process.myPid())
+            for (feature in features) {
+                val featureState = try {
+                    feature.state()
+                } catch (t: Throwable) {
+                    buildJsonObject { put("error", "${t.javaClass.name}: ${t.message}") }
+                }
+                put(feature.name, featureState)
+            }
         }
     }
 
