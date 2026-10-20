@@ -70,6 +70,10 @@ class FakeLoungeServer : AutoCloseable {
     /** screenIds that get 400 from get_lounge_token_batch. */
     val refuseTokenFor: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** When set, get_lounge_token_batch answers 400 for every screen. */
+    @Volatile
+    var refuseAllTokens: Boolean = false
+
     /** The next this many RPC GETs answer 503. */
     val refuseNextRpc = AtomicInteger(0)
 
@@ -145,7 +149,7 @@ class FakeLoungeServer : AutoCloseable {
             post("/api/lounge/pairing/get_lounge_token_batch") {
                 val form = record(call)
                 val requested = form["screen_ids"] ?: ""
-                if (requested in refuseTokenFor) {
+                if (refuseAllTokens || requested in refuseTokenFor) {
                     call.respondText("{}", ContentType.Application.Json, HttpStatusCode.BadRequest)
                 } else {
                     call.respondText(tokenBatch(requested), ContentType.Application.Json)

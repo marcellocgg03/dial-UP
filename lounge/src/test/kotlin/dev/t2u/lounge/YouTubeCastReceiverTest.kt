@@ -19,13 +19,19 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 internal class MemoryDataStore : DataStore {
@@ -183,5 +189,139 @@ class YouTubeCastReceiverTest {
         // and the player's state goes back to the sender
         awaitUntil { fake.sentNames("cl").flatten().let { "nowPlaying" in it && "onStateChange" in it } }
         assertTrue(fake.sentNames("cl").flatten().containsAll(listOf("nowPlaying", "onStateChange")))
+    }
+
+    private fun getBytes(port: Int, path: String): ByteArray = http.send(
+        HttpRequest.newBuilder(URI("http://127.0.0.1:$port$path")).GET().build(),
+        HttpResponse.BodyHandlers.ofByteArray(),
+    ).body()
+
+    private fun deviceDescription(port: Int) = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+        .parse(getBytes(port, "/ytcr/ssdp/device-desc.xml").inputStream())
+
+    private fun reachable(port: Int): Boolean = try {
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500) }
+        true
+    } catch (_: ConnectException) {
+        false
+    }
+
+    private fun pairingRegistrations() = fake.requests.filter { it.path.endsWith("register_pairing_code") }
+
+    @Test
+    fun aRestartOnTheSameStoreKeepsUuidPidAndLoungeIdentities() = run {
+        val first = receiver()
+        first.start()
+        val uuid = advertiser.advertised.last().uuid
+        val port1 = dialPort()
+        val pid = launchPost(port1, "pairingCode=ABCDEF&theme=cl").headers().firstValue("LOCATION").get().substringAfterLast('/')
+        val udn1 = deviceDescription(port1).getElementsByTagName("UDN").item(0).textContent
+        val screenIdRequests = fake.requests.count { it.path.endsWith("generate_screen_id") }
+        assertEquals(2, screenIdRequests, "one new screen for each of cl and m on the first start")
+        val identities = listOf("mdxContext.cl", "mdxContext.m").map { store.map[it] }
+        first.stop()
+
+        val second = receiver()
+        second.start()
+        val port2 = dialPort()
+        assertEquals(2, advertiser.advertised.size)
+        assertEquals(uuid, advertiser.advertised.last().uuid, "same uuid, so the phone sees the same cast target")
+        assertEquals(udn1, deviceDescription(port2).getElementsByTagName("UDN").item(0).textContent)
+        assertEquals("uuid:$uuid", udn1)
+        val pid2 = launchPost(port2, "pairingCode=GHIJKL&theme=cl").headers().firstValue("LOCATION").get().substringAfterLast('/')
+        assertEquals(pid, pid2)
+        assertEquals(screenIdRequests, fake.requests.count { it.path.endsWith("generate_screen_id") }, "stored screen ids reused")
+        assertEquals(identities, listOf("mdxContext.cl", "mdxContext.m").map { store.map[it] })
+        assertEquals(2, pairingRegistrations().size)
+    }
+
+    @Test
+    fun aStoredValueThatIsNotAUuidIsReplaced() = run {
+        store.map[StoreKeys.DIAL_UUID] = JsonPrimitive("x\r\nINJECTED: 1")
+        receiver().start()
+        val uuid = advertiser.advertised.single().uuid
+        assertTrue(Regex("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}").matches(uuid), uuid)
+        assertEquals(uuid, store.text(StoreKeys.DIAL_UUID))
+    }
+
+    @Test
+    fun stopWithdrawsBeforeThePortClosesThenClosesItAndTellsBothSessions() = run {
+        val r = receiver()
+        r.start()
+        val port = dialPort()
+        assertTrue(reachable(port))
+        var reachableAtWithdraw: Boolean? = null
+        advertiser.onWithdraw = { reachableAtWithdraw = reachable(port) }
+
+        r.stop()
+
+        assertEquals("stopped", r.status)
+        assertEquals(listOf(advertiser.advertised.single().uuid), advertiser.withdrawn.toList())
+        assertEquals(true, reachableAtWithdraw, "byebye goes out while the DIAL port still answers")
+        assertFalse(reachable(port), "the DIAL port refuses connections afterwards")
+        assertTrue("loungeScreenDisconnected" in fake.sentNames("cl").flatten())
+        assertTrue("loungeScreenDisconnected" in fake.sentNames("m").flatten())
+    }
+
+    @Test
+    fun aLaunchWithoutPairingCodeOrWithAnUnknownThemeAnswers200WithoutLocation() = run {
+        receiver().start()
+        val port = dialPort()
+        for (body in listOf("theme=cl", "pairingCode=ABCDEF&theme=x", "pairingCode=&theme=cl", "")) {
+            val response = launchPost(port, body)
+            assertEquals(200, response.statusCode(), body)
+            assertTrue(response.headers().firstValue("LOCATION").isEmpty, "no LOCATION for '$body'")
+        }
+        assertTrue(pairingRegistrations().isEmpty())
+        assertTrue(events.any { (kind, f) -> kind == "lounge-receiver" && f["type"] == "launchFailed" })
+    }
+
+    @Test
+    fun aRefusingAccessPolicyAnswers403AndNothingReachesTheLounge() = run {
+        receiver(accessPolicy = { false }).start()
+        val port = dialPort()
+        val response = launchPost(port, "pairingCode=ABCDEF&theme=cl")
+        assertEquals(403, response.statusCode())
+        assertTrue(response.headers().firstValue("LOCATION").isEmpty)
+        assertTrue(pairingRegistrations().isEmpty())
+    }
+
+    @Test
+    fun aNameWithEmojiAndAccentsReachesTheDeviceDescriptionAndTheBindUnchanged() = run {
+        val name = "\uD83D\uDD0A K\u00FCche (app)"
+        receiver(name = name).start()
+        val doc = deviceDescription(dialPort())
+        assertEquals(name, doc.getElementsByTagName("friendlyName").item(0).textContent)
+        assertEquals(name, advertiser.advertised.single().name)
+
+        val binds = fake.requests.filter { it.path.endsWith("/bc/bind") }
+        assertTrue(binds.isNotEmpty())
+        for (bind in binds) {
+            assertTrue("name=%F0%9F%94%8A%20K%C3%BCche%20%28app%29" in bind.rawQuery.split('&'), bind.rawQuery)
+        }
+    }
+
+    @Test
+    fun aStartFailureThrowsAndLeavesNothingListeningOrAdvertised() = run {
+        fake.refuseAllTokens = true
+        val r = receiver()
+        assertFailsWith<AppException> { r.start() }
+        assertEquals("stopped", r.status)
+        assertTrue(advertiser.advertised.isEmpty())
+        assertTrue(advertiser.withdrawn.isEmpty())
+
+        // nothing was left half-started: the same receiver starts once the lounge accepts again
+        fake.refuseAllTokens = false
+        r.start()
+        assertEquals("running", r.status)
+        assertEquals(1, advertiser.advertised.size)
+    }
+
+    @Test
+    fun aSecondStartWhileRunningDoesNothing() = run {
+        val r = receiver()
+        r.start()
+        r.start()
+        assertEquals(1, advertiser.advertised.size)
     }
 }
