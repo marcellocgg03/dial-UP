@@ -136,7 +136,8 @@ class MediaServerPipeTest {
     @Test
     fun ffmpegIsGoneWithinThreeSecondsOfAClientHangUp() {
         val endless = listOf("-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "sine=frequency=440:duration=600", "-vn")
-        val path = register("adts", "audio/aac", endless)
+        // mp3 (not adts): lavfi produces PCM, and `-c:a copy -f adts` cannot carry PCM, so only the mp3 encode path stays alive
+        val path = register("mp3", "audio/mpeg", endless)
         Socket("127.0.0.1", server.resolvedPort()).use { s ->
             s.soTimeout = 20_000
             s.getOutputStream().apply {

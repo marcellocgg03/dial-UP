@@ -24,10 +24,13 @@ import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
 import java.io.RandomAccessFile
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
@@ -273,16 +276,156 @@ class MediaServer(
 
     // ------------------------------------------------------------------------------------ pipe
 
+    /** Output side of the ffmpeg command per format (mediaServer.js lines 123-124); null for non-pipe formats. */
+    private fun outputArgs(format: String): List<String>? = when (format) {
+        "adts" -> listOf("-c:a", "copy", "-f", "adts")
+        "mp3" -> listOf("-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-f", "mp3")
+        else -> null
+    }
+
+    /** Kills [proc] and waits up to 2 s for it to be gone (Node `res.on('close', kill)`). */
+    private suspend fun killAndWait(proc: Process) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            proc.destroyForcibly()
+            runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
+        }
+    }
+
     private suspend fun servePipe(call: ApplicationCall, entry: StreamEntry, src: StreamSource.PipeSource, head: Boolean, out: Outcome) {
-        // Added with the pipe behaviour (Task 2); until then a pipe token cannot be served.
-        out.status = 501
         out.pipeMode = "chunked"
-        call.respond(HttpStatusCode.NotImplemented)
+        val type = ContentType.parse(entry.mime)
+        val tail = outputArgs(entry.format)
+        if (head) {
+            // Headers only, no process (a HEAD must never start ffmpeg).
+            dlnaHeaders(call, entry)
+            out.status = 200
+            call.respond(
+                object : OutgoingContent.NoContent() {
+                    override val status: HttpStatusCode = HttpStatusCode.OK
+                    override val contentType: ContentType = type
+                },
+            )
+            return
+        }
+        val l = launcher
+        if (l == null || tail == null) {
+            out.status = 501
+            out.note = if (l == null) "no ffmpeg launcher" else "format ${entry.format} is not a pipe format"
+            call.respond(HttpStatusCode.NotImplemented)
+            return
+        }
+        // HTTP/1.0 clients cannot parse chunked framing and Ktor CIO answers them chunked (Pitfall 6):
+        // give them a complete, length-delimited body instead.
+        val dir = bufferDir
+        if (call.request.httpVersion == "HTTP/1.0" && dir != null) {
+            serveBuffered(call, entry, src, l, tail, dir, out)
+            return
+        }
+
+        val proc = withContext(Dispatchers.IO) { l.start(src.inputArgs + tail + "pipe:1") }
+        try {
+            val stdout = proc.inputStream
+            val buf = ByteArray(PIPE_CHUNK)
+            // Wait for the first audio byte; headers go out only after it, so a dead start is a 502, not an empty 200.
+            val firstLen = coroutineScope {
+                val watchdog = launch {
+                    delay(FIRST_BYTE_TIMEOUT_MS)
+                    out.note = "no first byte after ${FIRST_BYTE_TIMEOUT_MS / 1000} s"
+                    proc.destroyForcibly()
+                }
+                try {
+                    withContext(Dispatchers.IO) { stdout.read(buf) }
+                } finally {
+                    watchdog.cancel()
+                }
+            }
+            if (firstLen <= 0) {
+                withContext(Dispatchers.IO) { runCatching { proc.waitFor(2, TimeUnit.SECONDS) } }
+                val err = withContext(Dispatchers.IO) { l.stderrTail(proc) }
+                out.status = 502
+                out.note = listOfNotNull(out.note, err.takeIf { it.isNotEmpty() }).joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
+                call.respond(HttpStatusCode.BadGateway)
+                return
+            }
+            val first = buf.copyOf(firstLen)
+            dlnaHeaders(call, entry)
+            out.status = 200
+            call.respondBytesWriter(contentType = type, status = HttpStatusCode.OK) {
+                try {
+                    writeFully(first, 0, first.size)
+                    out.bytes += first.size
+                    flush()
+                    while (true) {
+                        val n = withContext(Dispatchers.IO) { stdout.read(buf) }
+                        if (n < 0) break
+                        writeFully(buf, 0, n)
+                        out.bytes += n
+                        flush()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // a write failure is the client hanging up; the finally below kills ffmpeg
+                    out.note = "client closed: ${e.javaClass.simpleName}"
+                } finally {
+                    killAndWait(proc)
+                }
+            }
+        } finally {
+            killAndWait(proc)
+        }
+    }
+
+    /** HTTP/1.0 path: run ffmpeg to completion into a temp file, serve it like a file entry, delete it. */
+    private suspend fun serveBuffered(
+        call: ApplicationCall,
+        entry: StreamEntry,
+        src: StreamSource.PipeSource,
+        l: PipeLauncher,
+        outputArgs: List<String>,
+        dir: File,
+        out: Outcome,
+    ) {
+        val tmp = withContext(Dispatchers.IO) {
+            dir.mkdirs()
+            File.createTempFile("pipe-", "." + extensionOf(entry.format), dir)
+        }
+        var proc: Process? = null
+        try {
+            val p = withContext(Dispatchers.IO) { l.start(listOf("-y") + src.inputArgs + outputArgs + tmp.absolutePath) }
+            proc = p
+            val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
+            if (!done) {
+                killAndWait(p)
+                out.status = 502
+                out.pipeMode = "buffered"
+                out.note = "ffmpeg did not finish within $BUFFER_TIMEOUT_SEC s"
+                call.respond(HttpStatusCode.BadGateway)
+                return
+            }
+            val code = p.exitValue()
+            if (code != 0 || tmp.length() == 0L) {
+                val err = withContext(Dispatchers.IO) { l.stderrTail(p) }
+                out.status = 502
+                out.pipeMode = "buffered"
+                out.note = "ffmpeg exit $code: $err".trim()
+                call.respond(HttpStatusCode.BadGateway)
+                return
+            }
+            serveFile(call, entry, tmp, false, out, "buffered")
+        } finally {
+            proc?.let { killAndWait(it) }
+            withContext(NonCancellable + Dispatchers.IO) { tmp.delete() }
+        }
     }
 
     companion object {
         const val MAX_TOKENS = 256
         private const val FILE_CHUNK = 64 * 1024
+        private const val PIPE_CHUNK = 16 * 1024
+        private const val MP3_BITRATE = "192k"
+        private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
+        private const val BUFFER_TIMEOUT_SEC = 180L
         private val TOKEN_PATH = Regex("^/stream/([0-9a-f]{32})\\.\\w+$")
     }
 }
