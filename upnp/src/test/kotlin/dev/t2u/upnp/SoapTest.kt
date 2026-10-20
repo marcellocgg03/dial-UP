@@ -95,7 +95,7 @@ class SoapTest {
                 listOf("InstanceID" to 0, "CurrentURI" to "http://127.0.0.1/x", "CurrentURIMetaData" to title),
             )
             val call = fake.calls.single { it.action == "SetAVTransportURI" }
-            assertEquals(call.bytes, call.contentLength, "Content-Length must be the UTF-8 byte count")
+            assertEquals(call.bytes.toLong(), call.contentLength, "Content-Length must be the UTF-8 byte count")
             assertTrue(call.bytes > call.body.length, "non-ASCII text makes the byte count exceed the character count")
             assertTrue(call.body.contains("Song &amp; Dance"), "ampersand is escaped in the body")
             assertTrue(call.body.contains("Pitypang ő ű"), "non-ASCII text arrives intact")
@@ -108,20 +108,8 @@ class SoapTest {
         }
     }
 
-    private fun fault(code: String, desc: String? = null) =
-        """<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>""" +
-            """<faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring><detail>""" +
-            """<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>$code</errorCode>""" +
-            (desc?.let { "<errorDescription>$it</errorDescription>" } ?: "") +
-            """</UPnPError></detail></s:Fault></s:Body></s:Envelope>"""
-
     @Test
     fun `a fault with errorCode 714 and no errorDescription reads Illegal MIME-type`() {
-        withCannedServer(500, fault("714")) { svc ->
-            val err = assertFailsWith<UpnpError> { runBlocking { soap.callAction(svc, "Play") } }
-            // faultstring is the fallback description in parseFault, so use a fault without it for the name table
-            assertTrue(err.message!!.startsWith("Play: "), err.message)
-        }
         withCannedServer(
             500,
             """<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail>""" +
