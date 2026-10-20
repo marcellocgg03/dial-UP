@@ -51,6 +51,12 @@ class SsdpResponder(
     private val events: SsdpEvents,
     private val groupPort: Int = SsdpConstants.PORT,
     private val clockNanos: () -> Long = System::nanoTime,
+    /** Whether a datagram from this source may be answered (SVC-09); refused sources are dropped with reason "access". */
+    private val replyPolicy: (InetAddress) -> Boolean = { true },
+    /** Whether [announce] may send ssdp:alive (false in phone-only mode); byebye is always sent. */
+    private val announcePolicy: () -> Boolean = { true },
+    /** Where NOTIFY goes; null means the SSDP group on [groupPort]. Tests point it at a unicast socket. */
+    private val notifyTarget: InetSocketAddress? = null,
 ) {
     private class Listener(val spec: ListenSpec, val socket: MulticastSocket) {
         lateinit var thread: Thread
@@ -120,15 +126,31 @@ class SsdpResponder(
         }
     }
 
-    /** Sends ssdp:alive for every registered device and every service type to the SSDP group. */
-    fun announce() = sendNotifies("ssdp:alive")
+    /**
+     * Sends ssdp:alive for every registered device and every service type to the SSDP group, unless
+     * [announcePolicy] says no (phone-only mode: a multicast alive would show the receivers to the whole LAN).
+     */
+    fun announce() {
+        if (!announcePolicy()) return
+        sendNotifies("ssdp:alive", devices)
+    }
 
-    private fun sendNotifies(nts: String) {
-        // JVM tests bind the reply socket to loopback and must never put multicast on a real network
-        if (replyBind.isLoopbackAddress) return
+    /**
+     * Sends ssdp:byebye for one device's five DIAL notification types, then removes it. Sent whatever
+     * [announcePolicy] says: a byebye only removes cache entries (RESEARCH Pitfall 12).
+     */
+    fun withdraw(uuid: String) {
+        val device = devices.firstOrNull { it.uuid == uuid } ?: return
+        sendNotifies("ssdp:byebye", listOf(device))
+        devices.removeIf { it.uuid == uuid }
+    }
+
+    private fun sendNotifies(nts: String, targets: List<SsdpDevice>) {
         val sock = replySocket ?: return
-        val group = InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), groupPort)
-        for (device in devices) {
+        val group = notifyTarget ?: InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), groupPort)
+        // JVM tests bind the reply socket to loopback and must never put multicast on a real network
+        if (replyBind.isLoopbackAddress && group.address.isMulticastAddress) return
+        for (device in targets) {
             for (nt in SsdpConstants.dialServiceTypes(device.uuid)) {
                 val bytes = buildNotify(nts, nt, "uuid:${device.uuid}::$nt", device.serverHeader, device.location, httpDate())
                 try {
@@ -143,7 +165,7 @@ class SsdpResponder(
 
     fun stop() {
         if (!running) return
-        sendNotifies("ssdp:byebye")
+        sendNotifies("ssdp:byebye", devices)
         running = false
         for (l in listeners) runCatching { l.socket.close() }
         for (l in listeners) runCatching { l.thread.join(3000) }
@@ -182,6 +204,13 @@ class SsdpResponder(
         if (!msg.startLine.uppercase().startsWith("M-SEARCH")) return
         if (!msg.headers["MAN"].orEmpty().lowercase().contains("ssdp:discover")) return
         val st = msg.headers["ST"] ?: return
+        // searches for types none of our devices answers are not ours to refuse or log
+        if (devices.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return
+        if (!replyPolicy(src.address)) {
+            // a refused source never reaches the rate limiter
+            events.onDrop(src, "access")
+            return
+        }
         for (device in devices) {
             if (st !in SsdpConstants.dialServiceTypes(device.uuid)) continue
             if (!allowReply(src)) {
