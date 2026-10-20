@@ -300,9 +300,11 @@ class MediaServer(
             dlnaHeaders(call, entry)
             out.status = 200
             call.respond(
-                object : OutgoingContent.NoContent() {
+                object : OutgoingContent.WriteChannelContent() {
                     override val status: HttpStatusCode = HttpStatusCode.OK
                     override val contentType: ContentType = type
+
+                    override suspend fun writeTo(channel: ByteWriteChannel) {}
                 },
             )
             return

@@ -120,6 +120,8 @@ class MediaServerPipeTest {
         assertEquals("Streaming", r.header("transferMode.dlna.org"))
         assertEquals(dlnaFeatures("adts"), r.header("contentFeatures.dlna.org"))
         assertEquals(0, r.body.size)
+        // a Content-Length: 0 would tell the renderer the track is empty; Node sends no length on a pipe HEAD
+        assertNull(r.header("Content-Length"), r.headerLines.toString())
         assertEquals(0, launcher.starts.get())
         assertEquals(0, launcher.inner.liveCount())
     }
