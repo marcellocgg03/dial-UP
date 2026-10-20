@@ -1,0 +1,421 @@
+package dev.t2u.lounge
+
+// Tests for Player (port of yt-cast-receiver 2.1.0 lib/Player.js, MIT, Copyright (c) Patrick Kan), GPL-3.0-only.
+
+import dev.t2u.upnp.EventSink
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import org.junit.jupiter.api.Test
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/** A Player whose do* hooks record their calls and return configurable results. */
+class FakePlayer : Player() {
+    val calls = CopyOnWriteArrayList<String>()
+    var playResult = true
+    var pauseResult = true
+    var resumeResult = true
+    var stopResult = true
+    var seekResult = true
+    var volumeResult = true
+    var volume = Volume(50, false)
+    var position = 0.0
+    var duration = 200.0
+    var lastPlayedPosition: Double? = null
+    var lastVolumeSet: Volume? = null
+
+    override suspend fun doPlay(video: Video, position: Double): Boolean {
+        calls += "play:${video.id}"
+        lastPlayedPosition = position
+        return playResult
+    }
+
+    override suspend fun doPause(): Boolean {
+        calls += "pause"
+        return pauseResult
+    }
+
+    override suspend fun doResume(): Boolean {
+        calls += "resume"
+        return resumeResult
+    }
+
+    override suspend fun doStop(): Boolean {
+        calls += "stop"
+        return stopResult
+    }
+
+    override suspend fun doSeek(position: Double): Boolean {
+        calls += "seek:$position"
+        return seekResult
+    }
+
+    override suspend fun doSetVolume(volume: Volume): Boolean {
+        calls += "volume:${volume.level}:${volume.muted}"
+        lastVolumeSet = volume
+        if (volumeResult) this.volume = volume
+        return volumeResult
+    }
+
+    override suspend fun doGetVolume(): Volume = volume
+
+    override suspend fun doGetPosition(): Double = position
+
+    override suspend fun doGetDuration(): Double = duration
+}
+
+/** PLAY-05 and CAST-08: sender commands become play, pause, stop, seek and volume calls with the sender's semantics. */
+class PlayerTest {
+    private fun payload(
+        listId: String? = "RDtest",
+        videoIds: String? = "dQw4w9WgXcQ",
+        videoId: String? = "dQw4w9WgXcQ",
+        currentIndex: String? = "0",
+    ): JsonObject = buildJsonObject {
+        listId?.let { put("listId", it) }
+        videoIds?.let { put("videoIds", it) }
+        videoId?.let { put("videoId", it) }
+        currentIndex?.let { put("currentIndex", it) }
+        put("currentTime", "0")
+    }
+
+    /** Player with one cast song queued and a listener collecting every state event. */
+    private suspend fun queued(): Pair<FakePlayer, MutableList<PlayerStateEvent>> {
+        val player = FakePlayer()
+        val events = CopyOnWriteArrayList<PlayerStateEvent>()
+        player.addStateListener { events += it }
+        player.queue.updateByMessage("setPlaylist", payload(), Client.YT)
+        return player to events
+    }
+
+    private suspend fun playing(): Pair<FakePlayer, MutableList<PlayerStateEvent>> {
+        val (player, events) = queued()
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        events.clear()
+        player.calls.clear()
+        return player to events
+    }
+
+    @Test
+    fun tracerSetPlaylistForOneSongPlaysAndReportsLoadingThenPlaying() = runBlocking {
+        val (player, events) = queued()
+        val video = assertNotNull(player.queue.current)
+        assertEquals("dQw4w9WgXcQ", video.id)
+        assertEquals(Client.YT, video.client)
+        assertEquals("RDtest", video.context?.playlistId)
+        assertEquals(0, video.context?.index)
+
+        assertTrue(player.play(video, 0.0))
+
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PLAYING), events.map { it.current.status })
+        assertNull(events[0].previous)
+        assertEquals(PlayerStatus.LOADING, events[1].previous?.status)
+        assertEquals(listOf("play:dQw4w9WgXcQ"), player.calls.toList())
+        assertEquals(0.0, player.lastPlayedPosition)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(PlayerStatus.PLAYING, player.statusFlow.value)
+        assertEquals("dQw4w9WgXcQ", events[1].current.queue.current?.id)
+    }
+
+    @Test
+    fun playPassesAidAndStartPositionThrough() = runBlocking {
+        val (player, events) = queued()
+        player.play(player.queue.current!!, 12.5, aid = 7)
+        assertEquals(12.5, player.lastPlayedPosition)
+        assertEquals(listOf(7, 7), events.map { it.aid })
+    }
+
+    @Test
+    fun doPlayFalseReportsStopped() = runBlocking {
+        val (player, events) = queued()
+        player.playResult = false
+        assertFalse(player.play(player.queue.current!!, 0.0))
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.STOPPED), events.map { it.current.status })
+        assertEquals(PlayerStatus.STOPPED, player.statusFlow.value)
+    }
+
+    @Test
+    fun cpnIsSixteenLowercaseHexChars() {
+        val cpn = FakePlayer().cpn
+        assertTrue(Regex("[0-9a-f]{16}").matches(cpn), cpn)
+    }
+
+    @Test
+    fun startsIdle() {
+        assertEquals(PlayerStatus.IDLE, FakePlayer().status)
+    }
+
+    @Test
+    fun pauseActsOnlyWhilePlaying() = runBlocking {
+        val (idle, _) = queued()
+        assertFalse(idle.pause())
+        assertTrue(idle.calls.isEmpty())
+
+        val (player, events) = playing()
+        assertTrue(player.pause())
+        assertEquals(listOf("pause"), player.calls.toList())
+        assertEquals(PlayerStatus.PAUSED, events.single().current.status)
+        // paused now: a second pause does nothing
+        player.calls.clear()
+        assertFalse(player.pause())
+        assertTrue(player.calls.isEmpty())
+    }
+
+    @Test
+    fun pauseFailureLeavesStatusAlone() = runBlocking {
+        val (player, events) = playing()
+        player.pauseResult = false
+        assertFalse(player.pause())
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun resumeWhilePausedCallsDoResume() = runBlocking {
+        val (player, events) = playing()
+        player.pause()
+        events.clear()
+        player.calls.clear()
+        assertTrue(player.resume())
+        assertEquals(listOf("resume"), player.calls.toList())
+        assertEquals(PlayerStatus.PLAYING, events.single().current.status)
+    }
+
+    @Test
+    fun resumeWhilePlayingOnlyReEmitsAndReturnsFalse() = runBlocking {
+        val (player, events) = playing()
+        assertFalse(player.resume())
+        assertTrue(player.calls.isEmpty())
+        assertEquals(PlayerStatus.PLAYING, events.single().current.status)
+    }
+
+    @Test
+    fun resumeWhileStoppedReplaysTheCurrentVideo() = runBlocking {
+        val (player, _) = playing()
+        player.stop()
+        player.calls.clear()
+        assertTrue(player.resume())
+        assertEquals(listOf("play:dQw4w9WgXcQ"), player.calls.toList())
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun resumeWithNothingQueuedReturnsFalse() = runBlocking {
+        val player = FakePlayer()
+        assertFalse(player.resume())
+        assertTrue(player.calls.isEmpty())
+    }
+
+    @Test
+    fun stopIsANoOpReturningTrueWhenStoppedOrIdle() = runBlocking {
+        val idle = FakePlayer()
+        assertTrue(idle.stop())
+        assertTrue(idle.calls.isEmpty())
+
+        val (player, events) = playing()
+        assertTrue(player.stop())
+        assertEquals(listOf("stop"), player.calls.toList())
+        assertEquals(PlayerStatus.STOPPED, events.single().current.status)
+
+        player.calls.clear()
+        events.clear()
+        assertTrue(player.stop())
+        assertTrue(player.calls.isEmpty())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun stopFailureReturnsFalseWithoutEmitting() = runBlocking {
+        val (player, events) = playing()
+        player.stopResult = false
+        assertFalse(player.stop())
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun playOnAPlayingPlayerStopsItFirst() = runBlocking {
+        val (player, events) = playing()
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        assertEquals(listOf("stop", "play:dQw4w9WgXcQ"), player.calls.toList())
+        assertEquals(
+            listOf(PlayerStatus.STOPPED, PlayerStatus.LOADING, PlayerStatus.PLAYING),
+            events.map { it.current.status },
+        )
+    }
+
+    @Test
+    fun seekWhileIdleOrStoppedReturnsFalse() = runBlocking {
+        val (player, _) = queued()
+        assertFalse(player.seek(30.0))
+        assertTrue(player.calls.isEmpty())
+    }
+
+    @Test
+    fun seekWhilePlayingEmitsLoadingAtTargetThenPlaying() = runBlocking {
+        val (player, events) = playing()
+        assertTrue(player.seek(42.0))
+        assertEquals(listOf("seek:42.0"), player.calls.toList())
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PLAYING), events.map { it.current.status })
+        assertEquals(42.0, events[0].current.position)
+        assertEquals(PlayerStatus.PLAYING, events[0].previous?.status)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun seekWhilePausedResumesPlayback() = runBlocking {
+        val (player, events) = playing()
+        player.pause()
+        events.clear()
+        player.calls.clear()
+        assertTrue(player.seek(10.0))
+        assertEquals(listOf("seek:10.0", "resume"), player.calls.toList())
+        assertEquals(PlayerStatus.LOADING, events.first().current.status)
+        assertEquals(PlayerStatus.PLAYING, events.last().current.status)
+    }
+
+    @Test
+    fun seekFailureEmitsNoPlayingState() = runBlocking {
+        val (player, events) = playing()
+        player.seekResult = false
+        assertFalse(player.seek(10.0))
+        assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun mutedWithZeroOnMuteSendsLevelZero() = runBlocking {
+        val player = FakePlayer()
+        player.setZeroVolumeLevelOnMute(true)
+        assertTrue(player.setVolume(Volume(40, true)))
+        assertEquals(Volume(0, true), player.lastVolumeSet)
+    }
+
+    @Test
+    fun mutedWithoutZeroOnMuteKeepsTheLevel() = runBlocking {
+        val player = FakePlayer()
+        assertTrue(player.setVolume(Volume(40, true)))
+        assertEquals(Volume(40, true), player.lastVolumeSet)
+    }
+
+    @Test
+    fun successfulVolumeChangeEmitsAStateEvent() = runBlocking {
+        val player = FakePlayer()
+        val events = CopyOnWriteArrayList<PlayerStateEvent>()
+        player.addStateListener { events += it }
+        assertTrue(player.setVolume(Volume(30, false), aid = 4))
+        val event = events.single()
+        assertEquals(Volume(30, false), event.current.volume)
+        assertEquals(Volume(50, false), event.previous?.volume)
+        assertEquals(4, event.aid)
+    }
+
+    @Test
+    fun failedVolumeChangeEmitsNothing() = runBlocking {
+        val player = FakePlayer()
+        player.volumeResult = false
+        val events = CopyOnWriteArrayList<PlayerStateEvent>()
+        player.addStateListener { events += it }
+        assertFalse(player.setVolume(Volume(30, false)))
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun enablingZeroOnMuteWhileMutedEnforcesLevelZero() = runBlocking {
+        val player = FakePlayer()
+        player.volume = Volume(35, true)
+        player.setZeroVolumeLevelOnMute(true)
+        assertEquals(Volume(0, true), player.volume)
+        assertTrue(player.zeroVolumeLevelOnMute)
+    }
+
+    @Test
+    fun getVolumeClampsTheLevelTo0To100() = runBlocking {
+        val player = FakePlayer()
+        player.volume = Volume(140, false)
+        assertEquals(100, player.getVolume().level)
+        player.volume = Volume(-5, true)
+        assertEquals(Volume(0, true), player.getVolume())
+    }
+
+    @Test
+    fun withTheNoOpHandlerThereIsNothingPreviousOrNext() = runBlocking {
+        val (player, events) = playing()
+        assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
+        assertNull(player.queue.autoplay)
+
+        assertFalse(player.next())
+        assertEquals(listOf("stop"), player.calls.toList())
+        assertEquals(PlayerStatus.STOPPED, events.single().current.status)
+    }
+
+    @Test
+    fun previousWithNothingBeforeStopsAndReturnsFalse() = runBlocking {
+        val (player, _) = playing()
+        assertFalse(player.previous())
+        assertEquals(listOf("stop"), player.calls.toList())
+        assertEquals(PlayerStatus.STOPPED, player.status)
+    }
+
+    @Test
+    fun resetReturnsToIdleAndClearsTheQueue() = runBlocking {
+        val (player, events) = playing()
+        player.reset()
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertNull(player.queue.current)
+        assertNull(player.queue.id)
+        assertEquals(listOf(PlayerStatus.STOPPED, PlayerStatus.IDLE), events.map { it.current.status })
+    }
+
+    @Test
+    fun externalStateChangeUpdatesStatusAndEmits() = runBlocking {
+        val (player, events) = playing()
+        player.notifyExternalStateChange(PlayerStatus.PAUSED)
+        assertEquals(PlayerStatus.PAUSED, player.status)
+        assertEquals(PlayerStatus.PAUSED, events.single().current.status)
+        assertEquals(PlayerStatus.PLAYING, events.single().previous?.status)
+    }
+
+    @Test
+    fun externalStateChangeWithNullKeepsTheStatusButStillEmits() = runBlocking {
+        val (player, events) = playing()
+        player.position = 77.0
+        player.notifyExternalStateChange(null)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(77.0, events.single().current.position)
+    }
+
+    @Test
+    fun aThrowingListenerDoesNotBreakPlaybackAndIsReported() = runBlocking {
+        val player = FakePlayer()
+        val reported = CopyOnWriteArrayList<Pair<String, Map<String, Any?>>>()
+        player.events = EventSink { kind, fields -> reported += kind to fields }
+        val good = CopyOnWriteArrayList<PlayerStateEvent>()
+        player.addStateListener { throw IllegalStateException("listener boom") }
+        player.addStateListener { good += it }
+        player.queue.updateByMessage("setPlaylist", payload(), Client.YT)
+
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(2, good.size)
+        assertTrue(reported.any { it.first == "player" && it.second["error"].toString().contains("listener boom") })
+    }
+
+    @Test
+    fun removedListenerStopsReceivingEvents() = runBlocking {
+        val player = FakePlayer()
+        val got = CopyOnWriteArrayList<PlayerStateEvent>()
+        val listener = PlayerStateListener { got += it }
+        player.addStateListener(listener)
+        player.notifyExternalStateChange(PlayerStatus.PLAYING)
+        player.removeStateListener(listener)
+        player.notifyExternalStateChange(PlayerStatus.PAUSED)
+        assertEquals(1, got.size)
+    }
+}
