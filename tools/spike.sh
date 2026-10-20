@@ -152,7 +152,9 @@ cmd_wait() {
   safe_name "$file"
   local start=$SECONDS
   while :; do
-    if adb_ exec-out run-as dev.t2u.spike test -f "$EVIDENCE_REL/$file" >/dev/null 2>&1; then
+    # `adb exec-out` does not propagate the remote exit status (adb 37: `test -f` of a missing file
+    # still exits 0), so the answer is read from the output of `adb shell`.
+    if [ "$(adb_ shell "run-as dev.t2u.spike test -f '$EVIDENCE_REL/$file' && echo present" 2>/dev/null | tr -d '\r')" = "present" ]; then
       return 0
     fi
     if [ $((SECONDS - start)) -ge "$timeout" ]; then
@@ -171,7 +173,7 @@ cmd_pull() {
   fi
   mkdir -p "$dest"
   local names name
-  names="$(adb_ exec-out run-as dev.t2u.spike ls "$EVIDENCE_REL" | tr -d '\r')"
+  names="$(adb_ exec-out run-as dev.t2u.spike ls -1 "$EVIDENCE_REL" | tr -d '\r')"
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     safe_name "$name"
