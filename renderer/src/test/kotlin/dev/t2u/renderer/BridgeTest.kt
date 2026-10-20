@@ -282,4 +282,97 @@ class BridgeTest {
         connectFails(mediaPort)
         assertEquals(BridgeCount(0, 0), bridge.castCount.value)
     }
+
+    private fun rendererPort(bridge: Bridge): Int =
+        Regex("\"port\":(\\d+)").find(bridge.state()["renderers"].toString())!!.groupValues[1].toInt()
+
+    @Test
+    @DisplayName("the access mode is read per request: phone mode announces nothing, switching to lan announces the receivers")
+    fun accessModeIsReadPerRequestAndLanReannounces() = run {
+        val bridge = newBridge()
+        bridge.start()
+        awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(RENDERER_UDN) == true }
+        // phone mode (the default): the receiver is advertised to the responder, but no multicast alive goes out
+        assertTrue(notifies.none { it.contains("ssdp:alive") }, "no alive in phone mode: $notifies")
+        bridge.reannounce()
+        delay(200)
+        assertTrue(notifies.none { it.contains("ssdp:alive") }, "reannounce is a no-op in phone mode")
+
+        accessMode = DialAccessMode.LAN
+        bridge.onAccessModeChanged(DialAccessMode.LAN)
+        awaitUntil("alive datagrams after switching to lan") { notifies.any { it.contains("ssdp:alive") } }
+        assertTrue(notifies.any { it.contains("urn:dial-multiscreen-org:service:dial:1") })
+        assertEquals("lan", bridge.state()["accessMode"].toString().trim('"'))
+    }
+
+    @Test
+    @DisplayName("the media server and the DIAL server listen on the Wi-Fi address only")
+    fun listensOnTheWifiAddressOnly() = run {
+        val bridge = newBridge()
+        bridge.start()
+        awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(RENDERER_UDN) == true }
+        val mediaPort = Regex("mediaBase\":\"http://127\\.0\\.0\\.1:(\\d+)").find(bridge.state().toString())!!.groupValues[1].toInt()
+        val dialPort = rendererPort(bridge)
+        // 127.0.0.2 is loopback too: a socket bound to the wildcard would accept it, one bound to 127.0.0.1 does not
+        for (port in listOf(mediaPort, dialPort)) {
+            Socket().use { it.connect(InetSocketAddress(loopback, port), 1000) }
+            assertFailsWith<ConnectException> { Socket().use { it.connect(InetSocketAddress("127.0.0.2", port), 1000) } }
+        }
+    }
+
+    @Test
+    @DisplayName("warmUp resolves once and logs its duration; a failing resolve is logged and returns -1")
+    fun warmUpResolvesOnceAndLogsItsDuration() = run {
+        val bridge = newBridge()
+        bridge.start()
+        val ms = bridge.warmUp("dQw4w9WgXcQ")
+        assertTrue(ms >= 0)
+        assertEquals(listOf("dQw4w9WgXcQ"), resolved.toList())
+        val event = events.single { it.first == "warmup" }
+        assertEquals(true, event.second["ok"])
+        assertEquals(ms, event.second["ms"])
+
+        val failing = Bridge(
+            BridgeNetwork(loopback, null, emptyList(), InetSocketAddress(loopback, speakerSocket.localPort)),
+            BridgeDeps(
+                Config(dataDir = dataDir),
+                object : VideoResolver {
+                    override suspend fun resolve(videoId: String): ResolvedInfo = throw IllegalStateException("yt-dlp missing")
+
+                    override fun invalidate(videoId: String) {}
+                },
+                null,
+                lanHttpClient(),
+                { DialAccessMode.PHONE },
+                "x",
+                EventSink { kind, fields -> events.add(kind to fields) },
+                scope,
+                null,
+            ),
+        )
+        assertEquals(-1L, failing.warmUp("dQw4w9WgXcQ"))
+        assertEquals(false, events.last { it.first == "warmup" }.second["ok"])
+    }
+
+    @Test
+    @DisplayName("stop is safe to call twice and a start that cannot bind leaves nothing running")
+    fun stopIsIdempotentAndAFailedStartCleansUp() = run {
+        val bridge = newBridge()
+        bridge.start()
+        awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(RENDERER_UDN) == true }
+        bridge.stop()
+        bridge.stop()
+        assertEquals(BridgeCount(0, 0), bridge.castCount.value)
+        assertEquals("false", bridge.state()["running"].toString())
+
+        // the media port is taken: start throws and the responder it had not yet created is never left behind
+        val taken = ServerSocket(0, 1, loopback)
+        try {
+            val blocked = newBridge(mediaPort = taken.localPort)
+            assertFailsWith<Exception> { blocked.start() }
+            assertEquals("false", blocked.state()["running"].toString())
+        } finally {
+            taken.close()
+        }
+    }
 }
