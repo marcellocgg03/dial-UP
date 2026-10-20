@@ -8,3 +8,5 @@ local.properties
 .idea/
 *.iml
 .planning/phases/*/evidence/*/screenshots/
+tools/lounge-capture/node_modules/
+tools/lounge-capture/out/
