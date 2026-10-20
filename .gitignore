@@ -7,3 +7,4 @@ local.properties
 .t2u/
 .idea/
 *.iml
+.planning/phases/*/evidence/*/screenshots/

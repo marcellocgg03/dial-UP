@@ -182,7 +182,7 @@ cmd_pull() {
   adb_ logcat -d -v threadtime -s 'T2U:*' >"$dest/logcat-T2U.txt"
   # Other LAN devices embed their MAC address in SSDP USN values (uuid:aa:bb:cc:dd:ee:ff::...); the
   # evidence is committed, so MAC-shaped strings are masked right after the pull (threat T-01-20).
-  sed -i -E 's/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' "$dest/logcat-T2U.txt" "$dest"/*.jsonl "$dest"/*.json 2>/dev/null || true
+  sed -i -E 's/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' "$dest/logcat-T2U.txt" "$dest"/*.jsonl* "$dest"/*.json 2>/dev/null || true
   echo "spike: pulled $(printf '%s\n' "$names" | grep -c . || true) evidence file(s) and logcat into $dest"
 }
 
