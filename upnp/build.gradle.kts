@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // Android API 26+. Main code must not use java.net.http (absent on Android); tests may.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    `java-test-fixtures`
 }
 
 java {
@@ -20,10 +21,21 @@ kotlin {
 
 dependencies {
     implementation(libs.kotlinx.coroutines.core)
+    // The SOAP API takes an OkHttpClient (every client in the app derives from lanHttpClient(), SVC-05).
+    api(libs.okhttp)
+    implementation(libs.jsoup)
+
+    // FakeRenderer (port of test/fakeRenderer.js), shared with :lounge and :renderer tests
+    testFixturesImplementation(libs.ktor.server.core)
+    testFixturesImplementation(libs.ktor.server.cio)
+    testFixturesImplementation(libs.kotlinx.coroutines.core)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.ktor.server.core)
+    testImplementation(libs.ktor.server.cio)
     // catalog alias junit-platform-launcher: Gradle 9 needs it on the test runtime classpath (Pitfall 13)
     testRuntimeOnly(libs.junit.platform.launcher)
     testRuntimeOnly(libs.slf4j.jdk14)
