@@ -274,7 +274,7 @@ class SessionTest {
     }
 
     @Test
-    fun registerPairingCodePostsTheRecordedFields() = run {
+    fun registerPairingCodePostsTheRecordedFields() = run<Unit> {
         val s = session()
         s.begin()
         s.registerPairingCode("ABC123")

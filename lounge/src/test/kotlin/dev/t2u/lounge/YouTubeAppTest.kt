@@ -350,7 +350,7 @@ class YouTubeAppTest {
     }
 
     @Test
-    fun stopTellsBothSessionsAndReleasesTheListener() = run {
+    fun stopTellsBothSessionsAndReleasesTheListener() = run<Unit> {
         val a = startedApp()
         connect()
         a.stop()

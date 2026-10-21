@@ -62,7 +62,7 @@ class InnerTubePlaylistRequestHandlerTest {
     }
 
     @Test
-    fun requestShapeFollowsTheTvClient() = runBlocking {
+    fun requestShapeFollowsTheTvClient() = runBlocking<Unit> {
         val playlist = Playlist()
         playlist.requestHandler = handler()
         playlist.updateByMessage(

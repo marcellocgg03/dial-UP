@@ -633,7 +633,7 @@ class PlayerTest {
     }
 
     @Test
-    fun aCancelledDoClearPropagates() = runBlocking {
+    fun aCancelledDoClearPropagates() = runBlocking<Unit> {
         val (player, _) = playing()
         player.clearFailure = kotlinx.coroutines.CancellationException("cancelled")
         assertFailsWith<kotlinx.coroutines.CancellationException> { player.reset() }
