@@ -93,6 +93,13 @@ abstract class Player {
     abstract suspend fun doGetDuration(): Double
 
     /**
+     * Empties the speaker's current track. [reset] calls it unconditionally (also when the player is
+     * already STOPPED or IDLE, where [stop] never reaches doStop) when asked to clear: this is the CAST-06
+     * hook for "disconnect clears the speaker". renderer.js has no equivalent. The default does nothing.
+     */
+    open suspend fun doClear() {}
+
+    /**
      * Reports LOADING, calls doPlay, then reports PLAYING (or STOPPED when doPlay fails, so the
      * sender does not keep a loading spinner). A doPlay that throws counts as a failure.
      */
@@ -235,11 +242,24 @@ abstract class Player {
         return result
     }
 
-    /** Back to IDLE with an empty queue. */
-    suspend fun reset(aid: Int? = null) {
-        log("reset")
+    /**
+     * Back to IDLE with an empty queue. With [clear] (the default) the speaker is also emptied through
+     * [doClear] after the normal stop; a failing doClear never prevents the reset. Pass clear = false when
+     * a new session starts playing at once (the YouTube / YouTube Music switch).
+     */
+    suspend fun reset(aid: Int? = null, clear: Boolean = true) {
+        log("reset", "clear" to clear)
         queue.reset()
         stop(aid)
+        if (clear) {
+            try {
+                doClear()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("clearFailed", "error" to (e.message ?: e::class.simpleName))
+            }
+        }
         previousState = null
         try {
             setStatusAndEmit(PlayerStatus.IDLE, aid)

@@ -282,7 +282,8 @@ class YouTubeApp(
             } else {
                 // Only one client can be connected at a time: the senders of the old session are dropped.
                 note("switching", "from" to active.client.displayName, "to" to target.client.displayName)
-                player.reset()
+                // The new session starts playing at once, so the speaker is reset but not cleared.
+                player.reset(clear = false)
                 lastNav = null
                 val dropped = connected.toList()
                 connected.clear()
@@ -583,8 +584,7 @@ class YouTubeApp(
             }
             note("noSendersLeft", "policy" to resetPolicy.wire, "resetPlayer" to reset)
             if (reset) {
-                // CAST-06 seam (Phase 3): the speaker's current track must be cleared here (stop plus an emptied
-                // transport URI), not only the player state. See the KDoc on Renderer.doStop; deliberately not done in Phase 2.
+                // CAST-06: reset() also clears the speaker (Player.doClear), even when playback had already stopped.
                 player.reset()
             }
         } else if (player.autoplayMode == AutoplayMode.UNSUPPORTED) {
