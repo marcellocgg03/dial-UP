@@ -123,25 +123,57 @@ class InnerTubePlaylistRequestHandler(
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
-        /** Reads previous and next from a /next response (the middle-item shape; Task 2 widens it). */
+        private val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")
+
+        /**
+         * Reads previous, next and the autoplay video from a /next response. The explicit next wins; at the last item
+         * of a list the next is the maybeHistory endpoint, and when no nextVideoRenderer exists the autoplay endpoint is
+         * returned as next (the Node handler merges them; Playlist.autoplay is "next while at the last item").
+         * Every shape difference degrades to "not found" and never throws.
+         */
         fun parseNext(root: JsonObject, target: Video): PreviousNextVideos {
-            val set = root.obj("contents")?.obj("singleColumnWatchNextResults")?.obj("autoplay")?.obj("autoplay")
-                ?.get("sets").let { it as? JsonArray }?.firstOrNull() as? JsonObject
+            val sets = root.path("contents", "singleColumnWatchNextResults", "autoplay", "autoplay")?.get("sets") as? JsonArray
                 ?: return PreviousNextVideos(null, null)
-            val previous = set.obj("previousVideoRenderer")?.obj("autoplayEndpointRenderer")?.obj("endpoint")?.obj("watchEndpoint")
-            val next = set.obj("nextVideoRenderer")?.obj("autoplayEndpointRenderer")?.obj("endpoint")?.obj("watchEndpoint")
-            return PreviousNextVideos(toVideo(previous, target), toVideo(next, target))
+            val set = sets.firstOrNull { ((it as? JsonObject)?.get("mode") as? JsonPrimitive)?.content == "NORMAL" } as? JsonObject
+                ?: sets.firstOrNull() as? JsonObject
+                ?: return PreviousNextVideos(null, null)
+
+            val previous = set.watchEndpoint(listOf("previousVideoRenderer", "autoplayEndpointRenderer", "endpoint"))
+            val next = set.watchEndpoint(
+                listOf("nextVideoRenderer", "autoplayEndpointRenderer", "endpoint"),
+                listOf("nextVideoRenderer", "maybeHistoryEndpointRenderer", "endpoint"),
+            )
+            val autoplay = set.watchEndpoint(
+                listOf("autoplayVideoRenderer", "mdxAutoplayVideoRenderer", "navigationEndpoint"),
+                listOf("autoplayVideoRenderer", "autonavEndpointRenderer", "endpoint"),
+                listOf("autoplayVideoRenderer", "autoplayEndpointRenderer", "endpoint"),
+            )
+            return PreviousNextVideos(
+                previous = toVideo(previous, target),
+                next = toVideo(next, target) ?: toVideo(autoplay, target),
+            )
         }
+
+        /** The first existing watchEndpoint object among the key [paths]; a path ends at the object holding "watchEndpoint". */
+        private fun JsonObject.watchEndpoint(vararg paths: List<String>): JsonObject? =
+            paths.firstNotNullOfOrNull { p -> path(*p.toTypedArray())?.obj("watchEndpoint") }
+
+        private fun JsonObject.path(vararg keys: String): JsonObject? =
+            keys.fold(this as JsonObject?) { o, k -> o?.obj(k) }
 
         private fun toVideo(watch: JsonObject?, target: Video): Video? {
             watch ?: return null
-            val id = watch.str("videoId") ?: return null
+            val id = watch.str("videoId")?.takeIf { VIDEO_ID.matches(it) } ?: return null
+            val ctt = watch.path("watchEndpointSupportedAuthorizationTokenConfig", "videoAuthorizationToken")
+                ?.get("credentialTransferTokens").let { it as? JsonArray }
+                ?.firstOrNull().let { it as? JsonObject }?.str("token")
             return Video(
                 id = id,
                 client = target.client,
                 context = VideoContext(
                     playlistId = watch.str("playlistId"),
                     index = (watch["index"] as? JsonPrimitive)?.content?.toIntOrNull(),
+                    ctt = ctt,
                     params = watch.str("params"),
                 ),
             )
