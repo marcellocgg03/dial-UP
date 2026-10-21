@@ -93,6 +93,10 @@ class YouTubeApp(
     @Volatile
     private var activeSession: Session? = null
 
+    /** The previous/next availability last sent to the senders; null when nothing was sent since a start or a session switch. */
+    @Volatile
+    private var lastNav: NavInfo? = null
+
     private val connected = CopyOnWriteArrayList<Sender>()
     private val implicitlyDisconnected = CopyOnWriteArrayList<Sender>()
 
@@ -205,6 +209,7 @@ class YouTubeApp(
         connected.clear()
         implicitlyDisconnected.clear()
         player.removeStateListener(stateListener)
+        lastNav = null
         try {
             player.reset()
         } catch (e: CancellationException) {
@@ -278,6 +283,7 @@ class YouTubeApp(
                 // Only one client can be connected at a time: the senders of the old session are dropped.
                 note("switching", "from" to active.client.displayName, "to" to target.client.displayName)
                 player.reset()
+                lastNav = null
                 val dropped = connected.toList()
                 connected.clear()
                 implicitlyDisconnected.clear()
@@ -468,7 +474,7 @@ class YouTubeApp(
                 activeSession = session
                 setAutoplayModeBySenderCapabilities(aid)
                 enforceMutePolicy(aid)
-                out.add(OutgoingMessage.onHasPreviousNextChanged(aid, player.getNavInfo()))
+                out.add(navMessage(aid))
                 out.add(OutgoingMessage.nowPlaying(aid, null))
             }
             return out
@@ -497,8 +503,9 @@ class YouTubeApp(
             }
         }
         if (!handled) {
+            // The inactive session is answered with a null availability and does not touch lastNav.
             val nav = if (isActive) player.getNavInfo() else null
-            out.add(OutgoingMessage.onHasPreviousNextChanged(aid, nav))
+            out.add(if (nav != null) navMessage(aid, nav) else OutgoingMessage.onHasPreviousNextChanged(aid, null))
             out.add(OutgoingMessage.onAutoplayModeChanged(aid, nav?.autoplayMode))
         }
         return out
@@ -531,7 +538,7 @@ class YouTubeApp(
         } else {
             out.add(OutgoingMessage.nowPlaying(aid, player.getState()))
             if (navBefore.hasNext != navAfter.hasNext || navBefore.hasPrevious != navAfter.hasPrevious) {
-                out.add(OutgoingMessage.onHasPreviousNextChanged(aid, navAfter))
+                out.add(navMessage(aid, navAfter))
             }
         }
         return out
@@ -548,7 +555,7 @@ class YouTubeApp(
             enforceMutePolicy(aid)
             val nav = player.getNavInfo()
             val playerState = player.getState()
-            out.add(OutgoingMessage.onHasPreviousNextChanged(aid, nav))
+            out.add(navMessage(aid, nav))
             out.add(OutgoingMessage.nowPlaying(aid, playerState))
             out.add(OutgoingMessage.onStateChange(aid, playerState))
             safely { onSenderConnect(sender) }
@@ -617,10 +624,18 @@ class YouTubeApp(
         if (statusChanged || positionChanged) messages.add(OutgoingMessage.onStateChange(aid, current))
         if (nowPlayingChanged || (statusChanged && (previous == null || previous.status != PlayerStatus.PLAYING))) {
             messages.add(OutgoingMessage.nowPlaying(aid, current))
-            messages.add(OutgoingMessage.onHasPreviousNextChanged(aid, player.getNavInfo()))
+            messages.add(navMessage(aid))
         }
         if (volumeChanged) messages.add(OutgoingMessage.onVolumeChanged(aid, current.volume))
         if (autoplayChanged) messages.add(OutgoingMessage.autoplayUpNext(aid, current.queue.autoplay?.id))
+        // Previous/next can change without a now-playing change (the refresh after an autoplay hop): tell the sender.
+        if (messages.none { it.name == "onHasPreviousNextChanged" }) {
+            val nav = player.getNavInfo()
+            val last = lastNav
+            if (last == null || last.hasPrevious != nav.hasPrevious || last.hasNext != nav.hasNext) {
+                messages.add(navMessage(aid, nav))
+            }
+        }
         if (messages.isEmpty()) return
         if (messages.all { it.name == "onVolumeChanged" && it.aid != null }) {
             // a slider drag sends many setVolume messages: only the latest volume goes out, after a short quiet interval
@@ -631,6 +646,12 @@ class YouTubeApp(
     }
 
     // ---- helpers
+
+    /** The previous/next message for the active session; remembers what was sent in [lastNav]. */
+    private fun navMessage(aid: Int?, nav: NavInfo = player.getNavInfo()): OutgoingMessage {
+        lastNav = nav
+        return OutgoingMessage.onHasPreviousNextChanged(aid, nav)
+    }
 
     /**
      * Sends without waiting for the lounge. The send is queued before this returns (the coroutine starts undispatched
