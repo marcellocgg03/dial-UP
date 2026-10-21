@@ -393,12 +393,16 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
      * Removes everything this bridge put on the network (D-06, Pitfall 12): in-flight setups are cancelled, every receiver
      * is destroyed (byebye, DIAL port closed, loungeScreenDisconnected), then the SSDP client, the responder and the media
      * server stop. Each step is isolated, so one failure never skips the rest. Safe to call twice.
+     *
+     * With [clearSpeakers] every speaker this app loaded is emptied first (CAST-06; in parallel, each bounded, see
+     * [RendererRegistry.removeAll]). Clear only on an explicit service Stop: a Wi-Fi rebind (the bridge comes
+     * straight back), a start that failed, a goodbye and a stale speaker leave the speaker alone.
      */
     suspend fun stop(clearSpeakers: Boolean = false) {
         if (!stopped.compareAndSet(false, true)) return
         withContext(NonCancellable) {
             step("handlers") { handlerJob.cancelAndJoin() }
-            step("receivers") { registry?.removeAll() }
+            step("receivers") { registry?.removeAll(clearSpeakers) }
             step("ssdp-client") { withContext(Dispatchers.IO) { ssdp?.stop() } }
             step("ssdp-responder") { withContext(Dispatchers.IO) { responder?.stop() } }
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }

@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -224,11 +225,36 @@ class RendererRegistry(
         }
     }
 
-    /** Shutdown (index.js shutdown): stop every receiver so they leave the cast menu. */
+    /**
+     * Shutdown (index.js shutdown): stop every receiver so they leave the cast menu. With [clearSpeakers] each
+     * speaker is first emptied through [ManagedRenderer.clearSpeaker] (CAST-06), bounded by `clearBudgetMs`, in
+     * parallel with the others, and before its own destroy (a destroyed renderer no longer clears). A clear that
+     * hangs or throws never keeps a speaker from being destroyed. Clear only on an explicit service Stop: a
+     * rebind, a goodbye and a stale speaker leave the speaker alone ([onByebye] and [prune] never clear).
+     */
     suspend fun removeAll(clearSpeakers: Boolean = false) {
         val udns = lock.withLock { running.keys.toList() }
         coroutineScope {
-            udns.map { udn -> async { runCatching { removeRenderer(udn) } } }.awaitAll()
+            udns.map { udn ->
+                async {
+                    if (clearSpeakers) clearOne(udn)
+                    runCatching { removeRenderer(udn) }
+                }
+            }.awaitAll()
+        }
+    }
+
+    private suspend fun clearOne(udn: String) {
+        val r = lock.withLock { running[udn] } ?: return
+        try {
+            if (withTimeoutOrNull(clearBudgetMs) { r.clearSpeaker() } == null) {
+                // clearSpeaker returns Unit, so null means the budget ran out
+                log("clear-timeout", udn, r.name, r.location, r.port, "the speaker did not finish clearing in $clearBudgetMs ms")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("clear-failed", udn, r.name, r.location, r.port, e.message ?: e.javaClass.simpleName)
         }
     }
 

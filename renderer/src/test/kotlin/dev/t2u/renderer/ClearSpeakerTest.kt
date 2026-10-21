@@ -332,7 +332,7 @@ class ClearSpeakerTest {
                 assertEquals(1, rig.speaker(u).clearCalls.get(), u)
                 assertEquals(1, rig.speaker(u).destroyCalls.get(), u)
             }
-            assertTrue(rig.timeline.contains("clear-end:B"))
+            assertTrue(rig.timeline.contains("clear-end:b"))
         }
     }
 
