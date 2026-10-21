@@ -394,17 +394,36 @@ class MediaServer(
             return
         }
         val id = src.entry.videoId
+        val range = call.request.headers[HttpHeaders.Range]?.takeIf { it.length <= MAX_RANGE_HEADER && SIMPLE_RANGE.matches(it) }
         var resp: UpstreamResponse? = null
         try {
-            val info = r.resolve(id)
-            val headers = LinkedHashMap<String, String>(info.headers)
-            headers["Accept-Encoding"] = "identity"
-            resp = up.fetch(UpstreamRequest(info.url, if (head) "HEAD" else "GET", headers))
+            var retried = false
+            while (true) {
+                val info = r.resolve(id)
+                // The speaker's Range is the only thing of its request that goes upstream (T-03-06).
+                val headers = LinkedHashMap<String, String>(info.headers)
+                headers["Accept-Encoding"] = "identity"
+                if (range != null) headers["Range"] = range
+                val fetched = up.fetch(UpstreamRequest(info.url, if (head) "HEAD" else "GET", headers))
+                // Signed googlevideo URLs expire or get revoked: drop the cached resolve, resolve again, fetch once more.
+                if ((fetched.status == 403 || fetched.status == 410) && !retried) {
+                    fetched.close()
+                    retried = true
+                    r.invalidate(id)
+                    continue
+                }
+                resp = fetched
+                break
+            }
             relayDirect(call, entry, resp, head, out)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (out.status != 0) throw e // the answer is already on its way: nothing left to report to the speaker
+            if (out.status != 0) {
+                // The answer was already on its way: the transfer ended early. Say so and let the connection drop.
+                out.note = failureLine("direct", "transfer ended: ${e.message ?: e.javaClass.simpleName}", false)
+                throw e
+            }
             out.status = 502
             out.note = failureLine("direct", e.message ?: e.javaClass.simpleName, false)
             call.respond(HttpStatusCode.BadGateway)
@@ -416,19 +435,22 @@ class MediaServer(
     /** Copies the upstream status, selected headers and body to the speaker. */
     private suspend fun relayDirect(call: ApplicationCall, entry: StreamEntry, resp: UpstreamResponse, head: Boolean, out: Outcome) {
         val status = HttpStatusCode.fromValue(resp.status)
+        val success = resp.status in 200..299
         val upstreamLength = resp.headers["content-length"]?.toLongOrNull()?.takeIf { it >= 0 }
+        // Errors (404, 416, a second 403) are passed on by status alone: no upstream body reaches the speaker.
+        val length = if (success || head) upstreamLength else if (resp.status == 204 || resp.status == 304) null else 0L
         dlnaHeaders(call, entry)
         call.response.header(HttpHeaders.AcceptRanges, resp.headers["accept-ranges"] ?: "bytes")
         for (name in PASSTHROUGH_HEADERS) resp.headers[name.lowercase()]?.let { call.response.header(name, it) }
         out.status = status.value
         val type = ContentType.parse(entry.mime)
         val body = resp.body
-        if (head || body == null) {
+        if (head || body == null || !success) {
             call.respond(
                 object : OutgoingContent.NoContent() {
                     override val status: HttpStatusCode = status
                     override val contentType: ContentType = type
-                    override val contentLength: Long? = upstreamLength
+                    override val contentLength: Long? = length
                 },
             )
             return
@@ -443,10 +465,17 @@ class MediaServer(
                     withContext(Dispatchers.IO) {
                         val buf = ByteArray(FILE_CHUNK)
                         while (true) {
-                            val n = body.read(buf)
+                            val n = body.read(buf) // a failing upstream read propagates: the connection drops and the speaker sees a short body
                             if (n < 0) break
-                            channel.writeFully(buf, 0, n)
-                            channel.flush()
+                            try {
+                                channel.writeFully(buf, 0, n)
+                                channel.flush()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Throwable) {
+                                out.note = "client closed: ${e.javaClass.simpleName}" // the speaker hung up; serveDirect closes the upstream
+                                break
+                            }
                             out.bytes += n
                         }
                     }
@@ -804,6 +833,9 @@ class MediaServer(
         private val COLD_FILL_FORMATS = setOf("adts")
         private const val BUFFER_TIMEOUT_SEC = 180L
         private const val MAX_NOTE = 400
+        /** One `bytes=a-b` range with either side optional (not both), at most 64 characters. */
+        private const val MAX_RANGE_HEADER = 64
+        private val SIMPLE_RANGE = Regex("bytes=(?:\\d+-\\d*|-\\d+)")
         private val DIRECT_EXT = Regex("[a-z0-9]{1,5}")
         private val DIRECT_MIME = Regex("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
 
