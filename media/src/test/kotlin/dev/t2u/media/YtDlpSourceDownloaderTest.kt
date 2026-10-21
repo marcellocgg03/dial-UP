@@ -39,7 +39,7 @@ class YtDlpSourceDownloaderTest {
         val infoContent: String?,
     )
 
-    private class FakeGateway(private val behave: (YtDlpCall, File?) -> GatewayResult) : YtDlpGateway {
+    private class FakeGateway(private val behave: (YtDlpCall, File) -> GatewayResult) : YtDlpGateway {
         val seen = CopyOnWriteArrayList<Seen>()
 
         override fun run(call: YtDlpCall): GatewayResult {

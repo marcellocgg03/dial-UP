@@ -43,8 +43,12 @@ fun isValidVideoId(id: String): Boolean = VIDEO_ID.matches(id)
 
 data class YtDlpOption(val name: String, val value: String?)
 
-/** Discrete options plus the URL. The gateway must put a `--` between the two; the URL never sits in an option value. */
-data class YtDlpCall(val options: List<YtDlpOption>, val url: String)
+/**
+ * Discrete options plus the URL. The gateway must put a `--` between the two; the URL never sits in an option value.
+ * [url] is null for the `--load-info-json` form, where yt-dlp reads the extraction result from a file instead of
+ * extracting again; the gateway adds the end-of-options marker only when there is a URL.
+ */
+data class YtDlpCall(val options: List<YtDlpOption>, val url: String?)
 
 fun watchUrl(id: String): String = "https://www.youtube.com/watch?v=${requireVideoId(id)}"
 
@@ -81,6 +85,27 @@ fun downloadCall(id: String, outTemplate: String, cacheDir: String?): YtDlpCall 
 }
 
 /**
+ * resolver.js `downloadWithYtdlp` arguments for the form that reuses the lookup's JSON: yt-dlp reads [infoFile]
+ * (`--load-info-json`) instead of extracting again, so the call has no URL. [formatId] is the format the lookup chose
+ * ([NODE_FORMAT] when it is unknown). Every value is a constant or a path the app built.
+ */
+fun loadInfoDownloadCall(infoFile: String, formatId: String?, outPath: String, cacheDir: String?): YtDlpCall {
+    val options = mutableListOf(
+        YtDlpOption("--load-info-json", infoFile),
+        YtDlpOption("-f", formatId ?: NODE_FORMAT),
+        YtDlpOption("--no-playlist", null),
+        YtDlpOption("--no-warnings", null),
+        YtDlpOption("--no-progress", null),
+        YtDlpOption("--fixup", "never"),
+        YtDlpOption("--no-part", null),
+        YtDlpOption("--force-overwrites", null),
+        YtDlpOption("-o", outPath),
+    )
+    if (cacheDir != null) options += YtDlpOption("--cache-dir", cacheDir)
+    return YtDlpCall(options, null)
+}
+
+/**
  * [stderrTail] is the last few KiB (for the error text), [stderrHead] the first 64 KiB (for the
  * `-v` JS-runtime line, which yt-dlp prints before it extracts). Both may be empty.
  */
@@ -113,7 +138,13 @@ data class ResolvedInfo(
     val duration: Double,
     val filesize: Long,
     val formatId: String?,
-)
+    /** The raw `yt-dlp --dump-json` text, kept so a download can reuse it (`--load-info-json`). It holds signed URLs. */
+    val rawJson: String? = null,
+) {
+    /** Never prints the signed URL, the headers or [rawJson] (T-03-22): logs and events only see the descriptive fields. */
+    override fun toString(): String =
+        "ResolvedInfo(title=$title, ext=$ext, mime=$mime, duration=$duration, formatId=$formatId)"
+}
 
 private val MIME_BY_EXT = mapOf(
     "m4a" to "audio/mp4",
@@ -181,6 +212,7 @@ fun parseInfo(json: String, id: String): ResolvedInfo {
         duration = root.number("duration")?.takeIf { it.isFinite() } ?: 0.0,
         filesize = fmt.longNumber("filesize") ?: 0L,
         formatId = fmt.str("format_id"),
+        rawJson = json,
     )
 }
 
