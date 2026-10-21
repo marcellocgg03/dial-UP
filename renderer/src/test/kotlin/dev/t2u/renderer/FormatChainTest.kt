@@ -66,7 +66,7 @@ class FormatChainTest {
     }
 
     @Test
-    @DisplayName("uses MP3 only when the renderer advertises nothing better")
+    @DisplayName("MP3 only when the renderer advertises nothing better")
     fun usesMp3OnlyWhenNothingBetter() = withFake(FakeRenderer(sink = "http-get:*:audio/mpeg:*")) { fake ->
         RendererHarness(fake, config = ::auto).use { h ->
             h.renderer.init()
