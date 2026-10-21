@@ -70,6 +70,23 @@ class FakePlayer : Player() {
     override suspend fun doGetDuration(): Double = duration
 }
 
+/**
+ * A request handler that answers from a map of target video id to previous/next videos and records
+ * which ids it was asked about. [failOn] makes it throw for one id.
+ */
+class ScriptedHandler(private val answers: Map<String, PreviousNextVideos?>) : PlaylistRequestHandler {
+    val asked = CopyOnWriteArrayList<String>()
+
+    @Volatile
+    var failOn: String? = null
+
+    override suspend fun getPreviousNextVideos(target: Video, playlist: Playlist): PreviousNextVideos? {
+        asked += target.id
+        if (target.id == failOn) throw IllegalStateException("handler boom")
+        return answers[target.id]
+    }
+}
+
 /** PLAY-05 and CAST-08: sender commands become play, pause, stop, seek and volume calls with the sender's semantics. */
 class PlayerTest {
     private fun payload(
@@ -431,5 +448,126 @@ class PlayerTest {
         player.removeStateListener(listener)
         player.notifyExternalStateChange(PlayerStatus.PAUSED)
         assertEquals(1, got.size)
+    }
+
+    // ---- autoplay chain (plan 03-04, RESEARCH Pitfall 3)
+
+    private fun vid(id: String, index: Int? = null) =
+        Video(id, Client.YT, if (index != null) VideoContext("L", index) else null)
+
+    /** A index 0 of a one-song list L; A -> B (autoplay), B -> A / C, C -> B / nothing. */
+    private suspend fun chain(mode: AutoplayMode): Triple<FakePlayer, ScriptedHandler, MutableList<PlayerStateEvent>> {
+        val player = FakePlayer()
+        val handler = ScriptedHandler(
+            mapOf(
+                "A" to PreviousNextVideos(null, vid("B")),
+                "B" to PreviousNextVideos(vid("A", 0), vid("C")),
+                "C" to PreviousNextVideos(vid("B"), null),
+            ),
+        )
+        player.queue.requestHandler = handler
+        val events = CopyOnWriteArrayList<PlayerStateEvent>()
+        player.addStateListener { events += it }
+        player.queue.setAutoplayMode(mode)
+        player.queue.updateByMessage("setPlaylist", payload(listId = "L", videoIds = "A", videoId = "A"), Client.YT)
+        return Triple(player, handler, events)
+    }
+
+    @Test
+    fun tracerAnAutoplayChainKeepsGoingPastTheFirstHop() = runBlocking {
+        val (player, handler, _) = chain(AutoplayMode.ENABLED)
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        assertEquals(listOf("A"), handler.asked.toList())
+
+        assertTrue(player.next())
+        assertEquals("B", player.queue.current?.id)
+        assertTrue(player.queue.hasPrevious, "previous is refreshed after the hop")
+        assertEquals("C", player.queue.autoplay?.id)
+        assertEquals(listOf("A", "B"), handler.asked.toList())
+
+        assertTrue(player.next())
+        assertEquals("C", player.queue.current?.id)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+
+        assertFalse(player.next())
+        assertEquals(PlayerStatus.STOPPED, player.status)
+        assertEquals(listOf("play:A", "stop", "play:B", "stop", "play:C", "stop"), player.calls.toList())
+    }
+
+    @Test
+    fun withAutoplayDisabledTheChainStopsAfterTheFirstVideo() = runBlocking {
+        val (player, handler, _) = chain(AutoplayMode.DISABLED)
+        assertTrue(player.play(player.queue.current!!, 0.0))
+
+        assertFalse(player.next())
+        assertEquals(PlayerStatus.STOPPED, player.status)
+        assertEquals("A", player.queue.current?.id)
+        assertEquals(listOf("A"), handler.asked.toList(), "no hop, so no hop refresh")
+    }
+
+    @Test
+    fun navInfoCountsTheAutoplayVideoOnlyWhileAutoplayIsEnabled() = runBlocking {
+        val (enabled, _, _) = chain(AutoplayMode.ENABLED)
+        assertEquals(NavInfo(hasPrevious = false, hasNext = true, autoplayMode = AutoplayMode.ENABLED), enabled.getNavInfo())
+
+        val (disabled, _, _) = chain(AutoplayMode.DISABLED)
+        assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.DISABLED), disabled.getNavInfo())
+    }
+
+    @Test
+    fun navInfoInTheMiddleOfAListIsBothWaysRegardlessOfAutoplay() = runBlocking {
+        for (mode in listOf(AutoplayMode.ENABLED, AutoplayMode.DISABLED)) {
+            val player = FakePlayer()
+            player.queue.requestHandler = ScriptedHandler(mapOf("B" to PreviousNextVideos(vid("A", 0), vid("C", 2))))
+            player.queue.setAutoplayMode(mode)
+            player.queue.updateByMessage(
+                "setPlaylist",
+                payload(listId = "L", videoIds = "A,B,C", videoId = "B", currentIndex = "1"),
+                Client.YT,
+            )
+            assertEquals(NavInfo(hasPrevious = true, hasNext = true, autoplayMode = mode), player.getNavInfo(), mode.name)
+        }
+    }
+
+    @Test
+    fun playingANonAutoplayVideoLeavesNextAloneAndTriggersNoRefresh() = runBlocking {
+        val (player, handler, _) = chain(AutoplayMode.ENABLED)
+        val before = handler.asked.toList()
+        assertTrue(player.play(vid("X"), 0.0))
+        assertEquals(before, handler.asked.toList())
+        assertEquals("X", player.queue.current?.id)
+        assertEquals("B", player.queue.autoplay?.id, "the autoplay candidate is untouched by a non-autoplay video")
+    }
+
+    @Test
+    fun theHopRefreshRunsOncePerHopAfterPlayingAndAFinalStateFollowsIt() = runBlocking {
+        val (player, handler, events) = chain(AutoplayMode.ENABLED)
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        events.clear()
+
+        assertTrue(player.next())
+
+        assertEquals(listOf("A", "B"), handler.asked.toList(), "exactly one extra ask: B")
+        val statuses = events.map { it.current.status }
+        assertEquals(listOf(PlayerStatus.STOPPED, PlayerStatus.LOADING, PlayerStatus.PLAYING, PlayerStatus.PLAYING), statuses)
+        // The first PLAYING predates the refresh, the last one carries the refreshed previous and autoplay.
+        assertNull(events[2].current.queue.previous)
+        assertEquals("A", events.last().current.queue.previous?.id)
+        assertEquals("C", events.last().current.queue.autoplay?.id)
+    }
+
+    @Test
+    fun aHandlerThatThrowsDuringTheHopRefreshDoesNotBreakPlay() = runBlocking {
+        val (player, handler, _) = chain(AutoplayMode.ENABLED)
+        val reported = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") reported += fields }
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        handler.failOn = "B"
+
+        assertTrue(player.next())
+
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals("B", player.queue.current?.id)
+        assertTrue(reported.any { it["type"] == "hopRefreshFailed" })
     }
 }

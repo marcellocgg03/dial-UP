@@ -281,6 +281,66 @@ class PlaylistTest {
     }
 
     @Test
+    fun setAsCurrentReportsAHopOnlyForTheAutoplayVideo() = runBlocking {
+        val playlist = Playlist()
+        val c = Video("C", Client.YT)
+        playlist.requestHandler = LambdaHandler { PreviousNextVideos(null, c) }
+        playlist.updateByMessage("setPlaylist", setPayload(videoIds = "A,B", videoId = "B", currentIndex = "1"), Client.YT)
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+
+        assertFalse(playlist.setAsCurrent(playlist.current!!), "same video is not a hop")
+        assertFalse(playlist.setAsCurrent(Video("X", Client.YT)), "another video is not a hop")
+        assertEquals("X", playlist.current?.id)
+        assertEquals(c, playlist.autoplay, "next is untouched by a non-hop")
+
+        assertTrue(playlist.setAsCurrent(c), "the autoplay video is a hop")
+        assertEquals(c, playlist.current)
+        assertNull(playlist.autoplay)
+    }
+
+    @Test
+    fun refreshAfterHopAsksTheHandlerForAnIndexLessAutoplayVideo() = runBlocking {
+        val playlist = Playlist()
+        val a = Video("A", Client.YT, VideoContext("RDtest", 0))
+        val b = Video("B", Client.YT)
+        val d = Video("D", Client.YT)
+        val asked = CopyOnWriteArrayList<String>()
+        playlist.requestHandler = LambdaHandler { target ->
+            asked += target.id
+            when (target.id) {
+                "A" -> PreviousNextVideos(null, b)
+                "B" -> PreviousNextVideos(a, d)
+                else -> null
+            }
+        }
+        playlist.updateByMessage("setPlaylist", setPayload(videoIds = "A", videoId = "A"), Client.YT)
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        assertTrue(playlist.setAsCurrent(b))
+
+        playlist.refreshAfterHop()
+
+        assertEquals(listOf("A", "A", "B"), asked.toList())
+        assertTrue(playlist.hasPrevious)
+        assertEquals(d, playlist.autoplay)
+        assertFalse(playlist.isUpdating)
+    }
+
+    @Test
+    fun anIndexLessCurrentVideoStillSkipsTheNormalRefresh() = runBlocking {
+        val playlist = Playlist()
+        val asked = CopyOnWriteArrayList<String>()
+        playlist.requestHandler = LambdaHandler { target ->
+            asked += target.id
+            null
+        }
+        playlist.updateByMessage("setPlaylist", setPayload(videoIds = "A", videoId = "A"), Client.YT)
+        asked.clear()
+        playlist.setAsCurrent(Video("X", Client.YT))
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        assertTrue(asked.isEmpty(), "the original guard still applies without force")
+    }
+
+    @Test
     fun aSecondRefreshWhileTheFirstIsSuspendedCancelsTheFirst() = runBlocking {
         val playlist = Playlist()
         val firstEntered = CompletableDeferred<Unit>()
