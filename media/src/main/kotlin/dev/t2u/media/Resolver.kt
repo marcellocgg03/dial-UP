@@ -363,12 +363,14 @@ interface VideoResolver {
  * private scope, so one caller giving up does not cancel the lookup the others wait for.
  *
  * [onEvent] gets `{id, result: hit|miss|coalesced|fail, ms, urlHost, expire}` and never the URL itself (T-02-15).
+ * [verbose] adds yt-dlp's `-v` to every lookup; it is the `ytdlpVerbose` config switch (the app passes it in plan 03-11).
  */
 class CachingResolver(
     private val gateway: YtDlpGateway,
     private val cacheDir: String?,
     private val clock: () -> Long = System::currentTimeMillis,
     private val onEvent: (Map<String, Any?>) -> Unit = {},
+    private val verbose: Boolean = false,
 ) : VideoResolver {
     private class Cached(val info: ResolvedInfo, val expires: Long)
 
@@ -418,7 +420,7 @@ class CachingResolver(
 
     private suspend fun lookup(id: String): ResolvedInfo = withContext(Dispatchers.IO) {
         val result = try {
-            gateway.run(dumpJsonCall(id, cacheDir, verbose = false))
+            gateway.run(dumpJsonCall(id, cacheDir, verbose))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
