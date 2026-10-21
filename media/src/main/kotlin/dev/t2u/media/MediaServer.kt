@@ -347,6 +347,14 @@ class MediaServer(
         pipeMode: String,
     ) {
         out.pipeMode = pipeMode
+        if (!file.exists()) {
+            // Built, registered, then gone (the interim cleanup, or something outside): a plain 404, never an empty 200.
+            // Rebuilding a vanished file is Phase 4 (PLAY-10).
+            out.status = 404
+            out.note = "file vanished"
+            call.respond(HttpStatusCode.NotFound)
+            return
+        }
         val size = file.length()
         val rangeHeader = call.request.headers[HttpHeaders.Range]
         val range = if (rangeHeader != null) parseRange(rangeHeader, size) else null
