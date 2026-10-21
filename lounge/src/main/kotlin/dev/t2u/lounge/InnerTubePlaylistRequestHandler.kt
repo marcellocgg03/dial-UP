@@ -8,13 +8,12 @@ package dev.t2u.lounge
 
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.NoEvents
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -32,6 +31,19 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * Asks YouTube's InnerTube `/next` (as the TVHTML5 client, no API key) for the videos around a target.
+ *
+ * Every failure (HTTP error, malformed JSON, no network, oversized body, nothing found) gives
+ * `PreviousNextVideos(null, null)` and never throws, except CancellationException, which propagates so a stale
+ * refresh ends the call. Events carry only the video id, status, byte length and the top-level response keys: never a
+ * body, a ctt or a visitorData (T-03-01).
+ *
+ * The recently-asked guard replaces markWatched (a /player call plus a stats ping, not reproducible anonymously) only
+ * as far as stopping a two-video Mix loop (03-RESEARCH.md Pitfall 1): at the last queue item an autoplay candidate that
+ * was asked about in the last [InnerTubeConstants.RECENT_LIMIT] calls is dropped. It never applies to explicit
+ * previous or next navigation inside a list.
+ */
 class InnerTubePlaylistRequestHandler(
     http: OkHttpClient,
     private val endpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
@@ -45,21 +57,80 @@ class InnerTubePlaylistRequestHandler(
     @Volatile
     private var currentVisitor: String? = null
 
+    private val recent = ArrayDeque<String>()
+
     override suspend fun getPreviousNextVideos(target: Video, playlist: Playlist): PreviousNextVideos {
-        val visitor = currentVisitor ?: visitorData().also { currentVisitor = it }
-        val body = buildBody(target, visitor).toString().toRequestBody(JSON_MEDIA_TYPE)
-        val request = Request.Builder()
-            .url(endpoints.next)
-            .post(body)
-            .header("X-Youtube-Client-Name", InnerTubeConstants.CLIENT_NAME_ID)
-            .header("X-Youtube-Client-Version", InnerTubeConstants.CLIENT_VERSION)
-            .header("X-Goog-Visitor-Id", visitor)
-            .header("User-Agent", InnerTubeConstants.USER_AGENT)
-            .header("Origin", InnerTubeConstants.ORIGIN)
-            .build()
-        val (_, text) = executeForBody(client.newCall(request))
-        val root = Json.parseToJsonElement(text) as? JsonObject ?: return PreviousNextVideos(null, null)
-        return parseNext(root, target)
+        val empty = PreviousNextVideos(null, null)
+        remember(target.id)
+        return try {
+            val visitor = currentVisitor ?: visitorData().also { currentVisitor = it }
+            val body = buildBody(target, visitor).toString().toRequestBody(JSON_MEDIA_TYPE)
+            val request = Request.Builder()
+                .url(endpoints.next)
+                .post(body)
+                .header("X-Youtube-Client-Name", InnerTubeConstants.CLIENT_NAME_ID)
+                .header("X-Youtube-Client-Version", InnerTubeConstants.CLIENT_VERSION)
+                .header("X-Goog-Visitor-Id", visitor)
+                .header("User-Agent", InnerTubeConstants.USER_AGENT)
+                .header("Origin", InnerTubeConstants.ORIGIN)
+                .build()
+            val (status, text) = executeForBody(client.newCall(request))
+            if (status !in 200..299) {
+                log("innertubeHttpError", target, "status" to status, "bytes" to text.length)
+                return empty
+            }
+            val root = Json.parseToJsonElement(text) as? JsonObject
+            if (root == null) {
+                log("innertubeNoObject", target, "status" to status, "bytes" to text.length)
+                return empty
+            }
+            ((root["responseContext"] as? JsonObject)?.get("visitorData") as? JsonPrimitive)
+                ?.takeIf { it.isString && it.content.isNotEmpty() }
+                ?.let { currentVisitor = it.content }
+
+            val found = parseNext(root, target)
+            val result = applyGuard(found, playlist, target)
+            if (found.previous == null && found.next == null) {
+                log("innertube", target, "status" to status, "bytes" to text.length, "keys" to root.keys.sorted().joinToString(","), "found" to false)
+            } else {
+                log("innertube", target, "status" to status, "bytes" to text.length, "previous" to (result.previous != null), "next" to (result.next != null))
+            }
+            result
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Class name only: a parser's message can quote the response body.
+            log("innertubeFailed", target, "error" to (e::class.simpleName ?: "Exception"))
+            empty
+        }
+    }
+
+    override fun reset() {
+        synchronized(recent) { recent.clear() }
+    }
+
+    private fun remember(videoId: String) = synchronized(recent) {
+        recent.remove(videoId)
+        recent.addLast(videoId)
+        while (recent.size > InnerTubeConstants.RECENT_LIMIT) recent.removeFirst()
+    }
+
+    /** Drops an autoplay candidate that was already asked about, but only at the last queue item (never previous). */
+    private fun applyGuard(found: PreviousNextVideos, playlist: Playlist, target: Video): PreviousNextVideos {
+        val next = found.next ?: return found
+        if (!playlist.isLast) return found
+        val repeated = synchronized(recent) { next.id in recent }
+        if (!repeated) return found
+        log("autoplayRepeat", target)
+        return found.copy(next = null)
+    }
+
+    private fun log(type: String, target: Video, vararg fields: Pair<String, Any?>) {
+        try {
+            events.event("lounge", mapOf<String, Any?>("type" to type, "videoId" to target.id) + fields)
+        } catch (_: Exception) {
+            // An event sink must not break playback.
+        }
     }
 
     private fun buildBody(target: Video, visitor: String): JsonObject {
@@ -90,6 +161,16 @@ class InnerTubePlaylistRequestHandler(
                 putJsonObject("user") {
                     put("enableSafetyMode", false)
                     put("lockedSafetyMode", false)
+                    ctx?.ctt?.let { ctt ->
+                        putJsonArray("credentialTransferTokens") {
+                            add(
+                                buildJsonObject {
+                                    put("scope", "VIDEO")
+                                    put("token", ctt)
+                                },
+                            )
+                        }
+                    }
                 }
                 putJsonObject("request") {
                     put("useSsl", true)
@@ -110,7 +191,12 @@ class InnerTubePlaylistRequestHandler(
 
                 override fun onResponse(call: Call, response: Response) {
                     try {
-                        val text = response.use { it.body.string() }
+                        val text = response.use { r ->
+                            val source = r.body.source()
+                            val limit = InnerTubeConstants.MAX_RESPONSE_BYTES
+                            if (source.request(limit + 1)) throw IOException("response larger than $limit bytes")
+                            source.readUtf8()
+                        }
                         if (cont.isActive) cont.resume(response.code to text)
                     } catch (e: IOException) {
                         if (cont.isActive) cont.resumeWithException(e)
