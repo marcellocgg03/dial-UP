@@ -187,4 +187,85 @@ class UpnpTest {
     fun `xmlEsc escapes the five characters`() {
         assertEquals("&lt;&gt;&amp;&quot;&apos;", xmlEsc("<>&\"'"))
     }
+
+    // --- Plan 02-15 (G3): Kotlin-only tests, no Node titles ---
+
+    private val sampleDidl = DidlItem(
+        url = "http://192.168.50.38:8000/stream/abc.aac",
+        protocolInfo = "http-get:*:audio/aac:DLNA.ORG_PN=AAC_ADTS_320;DLNA.ORG_OP=00;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+        title = "I Hate Myself for Loving You",
+        artist = "Joan Jett & the Blackhearts",
+        album = "Up Your Alley",
+        albumArt = "https://i.ytimg.com/vi/V6m7b5xJq7Y/maxresdefault.jpg",
+        duration = 212.0,
+    )
+
+    @Test
+    @DisplayName("buildDidl matches the Node upnp.js output for a music track with an ampersand in the artist")
+    fun buildDidlMatchesNode() {
+        // Generated with Node, not by hand: lines 68-93 of reference/tube2upnp/src/upnp.js (esc, hms, buildDidl;
+        // Node commit 5bd3025) copied into a scratch .mjs without the `export`, then
+        // console.log(buildDidl({url, protocolInfo, title, artist, album, albumArt, duration: 212, isVideo: false}))
+        // with the values of sampleDidl. (The whole of upnp.js cannot be imported: it needs `elementtree`.)
+        val node = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="1"><dc:title>I Hate Myself for Loving You</dc:title><dc:creator>Joan Jett &amp; the Blackhearts</dc:creator><upnp:artist>Joan Jett &amp; the Blackhearts</upnp:artist><upnp:album>Up Your Alley</upnp:album><upnp:albumArtURI>https://i.ytimg.com/vi/V6m7b5xJq7Y/maxresdefault.jpg</upnp:albumArtURI><upnp:class>object.item.audioItem.musicTrack</upnp:class><res protocolInfo="http-get:*:audio/aac:DLNA.ORG_PN=AAC_ADTS_320;DLNA.ORG_OP=00;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000" duration="0:03:32.000">http://192.168.50.38:8000/stream/abc.aac</res></item></DIDL-Lite>"""
+        assertEquals(node, buildDidl(sampleDidl))
+    }
+
+    @Test
+    @DisplayName("summarizeDidl reads our own DIDL")
+    fun summarizeOwnDidl() {
+        val s = assertNotNull(summarizeDidl(buildDidl(sampleDidl)))
+        assertEquals("I Hate Myself for Loving You", s.title)
+        assertEquals("Joan Jett & the Blackhearts", s.creator)
+        assertEquals("Joan Jett & the Blackhearts", s.artist)
+        assertEquals("Up Your Alley", s.album)
+        assertEquals("https://i.ytimg.com/vi/V6m7b5xJq7Y/maxresdefault.jpg", s.albumArtUri)
+        assertEquals("object.item.audioItem.musicTrack", s.upnpClass)
+        assertEquals("", s.streamContent)
+    }
+
+    @Test
+    @DisplayName("summarizeDidl reads a Sonos-style track metadata with prefixes and r:streamContent")
+    fun summarizeSonosStyle() {
+        val xml = """<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" """ +
+            """xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">""" +
+            """<item id="-1" parentID="-1" restricted="true"><res protocolInfo="http-get:*:audio/aac:*">http://x/y.aac</res>""" +
+            """<r:streamContent>Now Playing</r:streamContent><dc:title>Some title</dc:title>""" +
+            """<upnp:class>object.item.audioItem.musicTrack</upnp:class><dc:creator>Some artist</dc:creator>""" +
+            """<upnp:albumArtURI>/getaa?s=1</upnp:albumArtURI></item></DIDL-Lite>"""
+        val s = assertNotNull(summarizeDidl(xml))
+        assertEquals("Some title", s.title)
+        assertEquals("Some artist", s.creator)
+        assertEquals("", s.artist)
+        assertEquals("Now Playing", s.streamContent)
+        assertEquals("/getaa?s=1", s.albumArtUri)
+    }
+
+    @Test
+    @DisplayName("summarizeDidl returns null for null, blank, NOT_IMPLEMENTED, junk and a document without an item")
+    fun summarizeNulls() {
+        assertNull(summarizeDidl(null))
+        assertNull(summarizeDidl("   "))
+        assertNull(summarizeDidl("NOT_IMPLEMENTED"))
+        assertNull(summarizeDidl("not_implemented"))
+        assertNull(summarizeDidl("hello <<< & junk"))
+        assertNull(summarizeDidl("<DIDL-Lite></DIDL-Lite>"))
+    }
+
+    @Test
+    @DisplayName("summarizeDidl caps its input and ignores DOCTYPE entities")
+    fun summarizeCapsAndIgnoresEntities() {
+        val big = "<DIDL-Lite><item><dc:title>" + "a".repeat(100_000) + "</dc:title><dc:creator>LATE</dc:creator></item></DIDL-Lite>"
+        val capped = assertNotNull(summarizeDidl(big))
+        assertTrue(capped.title.length <= 65_536, "title ${capped.title.length}")
+        assertEquals("", capped.creator, "everything past the cap is ignored")
+
+        val secret = java.io.File.createTempFile("didl-entity", ".txt").apply { writeText("SECRET-FROM-FILE"); deleteOnExit() }
+        val xml = "<?xml version=\"1.0\"?><!DOCTYPE d [<!ENTITY x \"INTERNAL-VALUE\">" +
+            "<!ENTITY y SYSTEM \"${secret.toURI()}\">]><DIDL-Lite><item><dc:title>[&x;][&y;]</dc:title></item></DIDL-Lite>"
+        val s = summarizeDidl(xml)
+        val title = s?.title ?: ""
+        assertFalse(title.contains("INTERNAL-VALUE"), title)
+        assertFalse(title.contains("SECRET-FROM-FILE"), title)
+    }
 }

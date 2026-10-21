@@ -6,7 +6,10 @@ package dev.t2u.upnp
 // non-standard serviceId spelling; both broke the original upnpTube. Kotlin additions over the Node
 // fake (also listed in PARITY.md "Adaptations"): SetVolume stores DesiredVolume into state.volume,
 // SetMute stores DesiredMute into state.mute, GetMute answers CurrentMute 1 or 0. Every other
-// action answers an empty u:<Action>Response, as the Node fake does.
+// action answers an empty u:<Action>Response, as the Node fake does. Plan 02-15 adds the track metadata
+// echo: SetAVTransportURI keeps the (unescaped) CurrentURIMetaData in state.currentMetaData and
+// GetPositionInfo answers it as TrackMetaData, or state.trackMetaData when a test sets one (a speaker
+// that rewrites or drops the metadata, or answers NOT_IMPLEMENTED).
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -50,6 +53,12 @@ class FakeState {
     @Volatile var relTime: String? = null
 
     @Volatile var reportedUri: String? = null
+
+    /** The DIDL of the last SetAVTransportURI, unescaped once as a speaker would read it. */
+    @Volatile var currentMetaData: String = ""
+
+    /** What GetPositionInfo answers as TrackMetaData instead of [currentMetaData], when not null. */
+    @Volatile var trackMetaData: String? = null
 }
 
 class FakeRenderer(
@@ -133,7 +142,10 @@ class FakeRenderer(
 
         var out = ""
         when (action) {
-            "SetAVTransportURI" -> state.currentUri = unescape(tag(body, "CurrentURI"))
+            "SetAVTransportURI" -> {
+                state.currentUri = unescape(tag(body, "CurrentURI"))
+                state.currentMetaData = unescape(tag(body, "CurrentURIMetaData"))
+            }
             "SetNextAVTransportURI" -> state.nextUri = unescape(tag(body, "NextURI"))
             "Play" -> state.transport = if (neverPlay) "STOPPED" else "PLAYING"
             "Stop" -> state.transport = "STOPPED"
@@ -146,7 +158,8 @@ class FakeRenderer(
             "GetPositionInfo" ->
                 out = "<TrackDuration>${state.trackDuration ?: "0:03:30"}</TrackDuration>" +
                     "<TrackURI>${xmlText(state.reportedUri ?: state.currentUri)}</TrackURI>" +
-                    "<RelTime>${state.relTime ?: "0:01:05"}</RelTime>"
+                    "<RelTime>${state.relTime ?: "0:01:05"}</RelTime>" +
+                    "<TrackMetaData>${xmlText(state.trackMetaData ?: state.currentMetaData)}</TrackMetaData>"
             "GetMediaInfo" -> out = "<CurrentURI>${xmlText(state.currentUri)}</CurrentURI>"
             "GetVolume" -> out = "<CurrentVolume>${state.volume}</CurrentVolume>"
             "GetMute" -> out = "<CurrentMute>${if (state.mute) 1 else 0}</CurrentMute>"
@@ -205,7 +218,13 @@ class FakeRenderer(
                     "CurrentTransportStatus" to "out",
                     "CurrentSpeed" to "out",
                 ),
-                "GetPositionInfo" to listOf("InstanceID" to "in", "TrackDuration" to "out", "TrackURI" to "out", "RelTime" to "out"),
+                "GetPositionInfo" to listOf(
+                    "InstanceID" to "in",
+                    "TrackDuration" to "out",
+                    "TrackURI" to "out",
+                    "RelTime" to "out",
+                    "TrackMetaData" to "out",
+                ),
             ),
             "RenderingControl" to mapOf(
                 "GetVolume" to listOf("InstanceID" to "in", "Channel" to "in", "CurrentVolume" to "out"),

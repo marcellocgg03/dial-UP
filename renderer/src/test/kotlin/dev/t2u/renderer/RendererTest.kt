@@ -523,4 +523,115 @@ class RendererTest {
             assertEquals(1, fake.count("Pause"))
         }
     }
+
+    private val jett = "Joan Jett & the Blackhearts"
+    private val alley = "Up Your Alley"
+
+    @Test
+    @DisplayName("the DIDL sent to the speaker carries title, artist twice, album, cover, class and duration in Node order")
+    fun didlSentToTheSpeakerHasNodeOrder() = withFake { fake ->
+        Harness(fake, artist = jett, album = alley).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            val didl = fake.state.currentMetaData
+            assertEquals(2, Regex(Regex.escape("Joan Jett &amp; the Blackhearts")).findAll(didl).count(), didl)
+            assertEquals(1, Regex(Regex.escape(alley)).findAll(didl).count(), didl)
+            val order = listOf(
+                "<dc:title>", "<dc:creator>", "<upnp:artist>", "<upnp:album>", "<upnp:albumArtURI>", "<upnp:class>", "<res ",
+            ).map { didl.indexOf(it) }
+            assertTrue(order.all { it >= 0 }, didl)
+            assertEquals(order.sorted(), order, didl)
+            assertTrue(didl.contains("object.item.audioItem.musicTrack"), didl)
+            assertTrue(didl.contains("duration=\"0:03:30.000\""), didl)
+            assertTrue(Regex("protocolInfo=\"http-get:\\*:audio/aac:").containsMatchIn(didl), didl)
+        }
+    }
+
+    @Test
+    @DisplayName("an empty artist sends no creator element and logs zero artist characters")
+    fun emptyArtistSendsNoCreator() = withFake { fake ->
+        Harness(fake, artist = "").use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            val didl = fake.state.currentMetaData
+            assertFalse(didl.contains("<dc:creator>"), didl)
+            assertFalse(didl.contains("<upnp:artist>"), didl)
+            assertEquals(0, h.notes("Sent").last()["artistChars"])
+        }
+    }
+
+    @Test
+    @DisplayName("each cast logs what was sent as lengths only")
+    fun castLogsLengthsOnly() = withFake { fake ->
+        Harness(fake, artist = jett, album = alley).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            val sent = h.notes("Sent").last()
+            assertEquals(27, sent["artistChars"])
+            assertEquals(13, sent["albumChars"])
+            assertEquals(true, sent["hasArt"])
+            assertEquals(fake.state.currentMetaData.length, sent["didlChars"])
+            assertEquals(false, sent["playDeferred"])
+            delay(150)
+            for ((kind, fields) in h.events) {
+                for ((key, value) in fields) {
+                    assertFalse(value.toString().contains("Joan Jett"), "$kind.$key carries the artist text")
+                    assertFalse(value.toString().contains(alley), "$kind.$key carries the album text")
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the speaker's own track metadata is reported once per load")
+    fun speakerMetadataReportedOncePerLoad() = withFake { fake ->
+        Harness(fake, artist = jett, album = alley).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            until(2000) { h.notes("Speaker reports track metadata").isNotEmpty() }
+            delay(300)
+            val reports = h.notes("Speaker reports track metadata")
+            assertEquals(1, reports.size)
+            val r = reports.single()
+            assertEquals(true, r["reported"])
+            assertEquals(27, r["creatorChars"])
+            assertEquals(27, r["artistChars"])
+            assertEquals(13, r["albumChars"])
+            assertEquals(true, r["hasArt"])
+            assertEquals("object.item.audioItem.musicTrack", r["upnpClass"])
+            assertTrue(h.renderer.seek(50.0))
+            until(2000) { h.notes("Speaker reports track metadata").size == 2 }
+            assertEquals(2, h.notes("Speaker reports track metadata").size, "one more report for the second load")
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that drops the artist is reported with zero creator characters")
+    fun speakerThatDropsTheArtist() = withFake { fake ->
+        fake.state.trackMetaData = "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><item id=\"0\"><dc:title>T</dc:title></item></DIDL-Lite>"
+        Harness(fake, artist = jett, album = alley).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            until(2000) { h.notes("Speaker reports track metadata").isNotEmpty() }
+            val r = h.notes("Speaker reports track metadata").single()
+            assertEquals(true, r["reported"])
+            assertEquals(1, r["titleChars"])
+            assertEquals(0, r["creatorChars"])
+            assertEquals(0, r["artistChars"])
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker without track metadata is reported as not reported")
+    fun speakerWithoutTrackMetadata() = withFake { fake ->
+        fake.state.trackMetaData = "NOT_IMPLEMENTED"
+        Harness(fake, artist = jett, album = alley).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(A), 0.0))
+            until(2000) { h.notes("Speaker reports track metadata").isNotEmpty() }
+            val r = h.notes("Speaker reports track metadata").single()
+            assertEquals(false, r["reported"])
+            assertEquals(0, r["creatorChars"])
+        }
+    }
 }
