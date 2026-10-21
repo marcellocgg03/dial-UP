@@ -77,11 +77,14 @@ class ConfigTest {
     }
 
     @Test
-    fun onlyThePipeFormatsAreValidInPhase2() {
-        Config(dataDir = File("data"), outputFormat = "mp3").validate()
-        Config(dataDir = File("data"), outputFormat = "adts").validate()
-        for (f in listOf("mp4", "flac", "direct", "auto", "")) {
-            assertFailsWith<IllegalArgumentException>(f) { Config(dataDir = File("data"), outputFormat = f).validate() }
+    fun outputFormatWhitelistHasTheSixNodeFormats() {
+        for (f in listOf("auto", "direct", "mp4", "adts", "flac", "mp3")) {
+            Config(dataDir = File("data"), outputFormat = f).validate()
         }
+        for (f in listOf("wav", "")) {
+            val e = assertFailsWith<IllegalArgumentException>(f) { Config(dataDir = File("data"), outputFormat = f).validate() }
+            assertTrue("outputFormat" in e.message.orEmpty())
+        }
+        assertEquals(setOf("auto", "direct", "mp4", "adts", "flac", "mp3"), OUTPUT_FORMATS)
     }
 }
