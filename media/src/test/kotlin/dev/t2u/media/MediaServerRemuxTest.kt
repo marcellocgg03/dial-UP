@@ -2,6 +2,8 @@ package dev.t2u.media
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -314,5 +316,135 @@ class MediaServerRemuxTest {
         val mp4 = fileBuildArgs("mp4", 16, 0, src, File(buildDir, "x.part"))
         assertTrue(mp4.containsAll(listOf("-c:a", "copy", "-movflags", "+faststart", "-f", "mp4")))
         assertFalse(mp4.contains("-ss"), "no seek at offset 0")
+    }
+
+    // ----- failures, cleanup, vanished files (Task 3) --------------------------------------------
+
+    /** Throws "HTTP Error 403" for the first [failures] calls, then leaves the (not really AAC) bytes "audio". */
+    private class FlakyDownloader(private val failures: Int, private val message: String = "yt-dlp download failed for x: ERROR: HTTP Error 403: Forbidden") : SourceDownloader {
+        val calls = AtomicInteger()
+
+        override suspend fun download(videoId: String, info: ResolvedInfo, target: File) {
+            if (calls.incrementAndGet() <= failures) throw IllegalStateException(message)
+            target.writeText("audio")
+        }
+    }
+
+    @Test
+    @DisplayName("download retries with a fresh extraction after a 403")
+    fun downloadRetriesWithAFreshExtractionAfterA403() = runBlocking {
+        val resolver = StubResolver()
+        val downloader = FlakyDownloader(failures = 2)
+        val ms = serve(downloader, resolver, retryDelaysMs = listOf(10L, 10L))
+        // The stub "audio" is not real AAC, so the remux after the download may fail: that is fine here.
+        runCatching { ms.prepare(VideoEntry("iiiiiiiiiii", "mp4")) }
+        assertEquals(3, downloader.calls.get())
+        assertEquals(3, resolver.resolves.get(), "each retry uses a fresh extraction")
+        assertEquals(2, resolver.invalidations.get())
+        Unit
+    }
+
+    @Test
+    @DisplayName("download gives up after the configured retries")
+    fun downloadGivesUpAfterTheConfiguredRetries() = runBlocking {
+        val downloader = FlakyDownloader(failures = 99, message = "nope")
+        val ms = serve(downloader, retryDelaysMs = listOf(10L))
+        val e = assertFailsWith<Exception> { ms.prepare(VideoEntry("jjjjjjjjjjj", "mp4")) }
+        assertTrue(e.message!!.contains("nope"), e.message)
+        // coroutine stack-trace recovery may add copies on the way; the downloader's own exception stays at the root
+        assertEquals("nope", generateSequence<Throwable>(e) { it.cause }.last().message, "the cause is kept")
+        assertEquals(2, downloader.calls.get())
+        Unit
+    }
+
+    @Test
+    fun aFailedDownloadLeavesNothingAndIsNotCached() = runBlocking {
+        val downloader = FlakyDownloader(failures = 99, message = "nope")
+        val ms = serve(downloader, retryDelaysMs = emptyList())
+        assertFailsWith<Exception> { ms.prepare(VideoEntry("kkkkkkkkkkk", "mp4")) }
+        assertEquals(emptyList(), buildDir.listFiles()!!.map { it.name }.filter { it.endsWith(".part") || it.endsWith(".download") })
+        assertFailsWith<Exception> { ms.prepare(VideoEntry("kkkkkkkkkkk", "mp4")) }
+        assertEquals(2, downloader.calls.get(), "a failure is not cached: the second prepare downloads again")
+        Unit
+    }
+
+    @Test
+    fun aSourceFfmpegCannotReadMakesPrepareThrowAndLeavesNoPartFile() = runBlocking {
+        val garbage = SourceDownloader { _, _, target -> target.writeBytes(ByteArray(2048) { (it * 31).toByte() }) }
+        val ms = serve(garbage)
+        val e = assertFailsWith<FileBuildException> { ms.prepare(VideoEntry("lllllllllll", "mp4")) }
+        assertTrue(Regex("exited -?\\d+").containsMatchIn(e.message!!), e.message)
+        assertFalse(Regex("https?://\\S*\\?").containsMatchIn(e.message!!), "no URL with a query string")
+        assertEquals(emptyList(), buildDir.listFiles()!!.map { it.name }.filter { it.endsWith(".part") })
+        assertFailsWith<IllegalStateException> { ms.registerVideo(VideoEntry("lllllllllll", "mp4")) }
+        Unit
+    }
+
+    @Test
+    fun cancellingOneWaiterDoesNotCancelTheBuildForTheOther() = runBlocking {
+        val slow = SourceDownloader { _, _, target ->
+            delay(400)
+            source.copyTo(target, overwrite = true)
+        }
+        val ms = serve(slow)
+        val entry = VideoEntry("mmmmmmmmmmm", "mp4")
+        val first = async { ms.prepare(entry) }
+        val second = async { ms.prepare(entry) }
+        delay(100)
+        first.cancelAndJoin()
+        second.await()
+        assertTrue(File(buildDir, "mmmmmmmmmmm-mp4-0.m4a").length() > 0)
+        assertEquals(1, launcher.starts.get())
+        Unit
+    }
+
+    @Test
+    fun onlyTheNewestSixBuildsStayAndStartThenStopLeavesTheDirectoryEmpty() = runBlocking {
+        buildDir.mkdirs()
+        File(buildDir, "stale-from-an-earlier-run.m4a").writeText("old")
+        val ms = serve(FakeSourceDownloader(source), maxKept = 6)
+        assertEquals(emptyList(), buildDir.listFiles()!!.toList(), "start() wipes an earlier run")
+        val ids = (0..6).map { "ooooooooooo".dropLast(1) + it }
+        for (id in ids) ms.prepare(VideoEntry(id, "mp4"))
+        val names = buildDir.listFiles()!!.map { it.name }.sorted()
+        val finals = names.filter { it.endsWith(".m4a") }
+        assertEquals(ids.drop(1).map { "$it-mp4-0.m4a" }, finals, "the newest six final files remain")
+        assertEquals(ids.drop(1).map { "$it.source" }, names.filter { it.endsWith(".source") }, "sources stay for videos that still have a build")
+        ms.stop()
+        assertEquals(emptyList(), buildDir.listFiles()!!.toList(), "stop() leaves the build directory empty")
+    }
+
+    @Test
+    fun aRegisteredFileThatVanishedAnswers404ForGetAndHead() = runBlocking {
+        val ms = serve(FakeSourceDownloader(source))
+        val entry = VideoEntry("ppppppppppp", "mp4")
+        ms.prepare(entry)
+        val path = ms.registerVideo(entry)
+        val tokens = ms.tokenCount()
+        File(buildDir, "ppppppppppp-mp4-0.m4a").delete()
+        assertEquals(404, get(ms, path).status)
+        assertEquals(404, RawHttp.request(ms.resolvedPort(), "HEAD", path).status)
+        assertTrue(seen.any { it.status == 404 && it.note == "file vanished" }, seen.toString())
+        assertEquals(tokens, ms.tokenCount(), "the token table is unchanged")
+        Unit
+    }
+
+    @Test
+    fun ffmpegStartsWithOnlyTheValidatedIdTheOffsetAndPathsInsideTheBuildDirectory() = runBlocking {
+        val builder = FileBuilder(buildDir, launcher, StubResolver(), FakeSourceDownloader(source), retryDelaysMs = emptyList())
+        builder.ensure("qqqqqqqqqqq", "flac", 12)
+        val args = launcher.argLists.single()
+        val root = buildDir.absoluteFile.path
+        for (a in args) {
+            if (a.contains('/')) assertTrue(a.startsWith("$root/"), "path outside the build directory: $a")
+        }
+        assertTrue(args.any { it.startsWith("$root/qqqqqqqqqqq-flac-12.flac") })
+        for (bad in listOf("../../etc/passwd", "abc; rm -rf /", "short", "has space 1", "ab/cdefghijk")) {
+            assertFailsWith<IllegalArgumentException> { builder.ensure(bad, "mp4", 0) }
+        }
+        assertFailsWith<IllegalArgumentException> { builder.ensure("qqqqqqqqqqq", "mp3", 0) }
+        assertFailsWith<IllegalArgumentException> { builder.ensure("qqqqqqqqqqq", "mp4", -1) }
+        assertEquals(1, launcher.starts.get(), "refused requests start nothing")
+        builder.close()
     }
 }
