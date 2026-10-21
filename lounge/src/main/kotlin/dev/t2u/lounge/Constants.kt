@@ -21,6 +21,37 @@ class LoungeEndpoints(val base: String = "https://www.youtube.com") {
     val bind: String = "$base/api/lounge/bc/bind"
 }
 
+/**
+ * The InnerTube API URLs. [base] is injectable so tests can point the handler at a fake /next server.
+ * Source of every value here and in [InnerTubeConstants]: 03-RESEARCH.md Pattern 1.
+ */
+class InnerTubeEndpoints(val base: String = "https://www.youtube.com") {
+    val next: String = "$base/youtubei/v1/next?prettyPrint=false&alt=json"
+}
+
+/** The TVHTML5 client identity and limits of the InnerTube /next call (03-RESEARCH.md Pattern 1). */
+object InnerTubeConstants {
+    const val CLIENT_NAME = "TVHTML5"
+    const val CLIENT_NAME_ID = "7"
+    const val CLIENT_VERSION = "7.20230405.08.01"
+    const val USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.142 Safari/537.36; SMART-TV; Tizen 4.0,gzip(gfe)"
+    const val OS_NAME = "Windows"
+    const val OS_VERSION = "10.0"
+    const val PLATFORM = "DESKTOP"
+    const val ORIGIN = "https://www.youtube.com"
+    const val ORIGINAL_URL = "https://www.youtube.com/tv"
+
+    /** setPlaylist awaits the refresh, so first-play latency is bounded by this (RESEARCH Pitfall 4). */
+    const val CALL_TIMEOUT_MS = 10000L
+
+    /** A hostile or broken response larger than this is refused unread (2 MiB). */
+    const val MAX_RESPONSE_BYTES = 2L * 1024 * 1024
+
+    /** How many recently asked-about video ids the Mix ping-pong guard remembers. */
+    const val RECENT_LIMIT = 8
+}
+
 object LoungeConstants {
     // lib/Constants.js CONF_DEFAULTS
     const val SCREEN_APP = "ytcr"

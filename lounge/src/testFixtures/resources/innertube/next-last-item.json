@@ -1,0 +1,50 @@
+{
+  "responseContext": {
+    "visitorData": "SERVERVISITOR1"
+  },
+  "contents": {
+    "singleColumnWatchNextResults": {
+      "autoplay": {
+        "autoplay": {
+          "sets": [
+            {
+              "mode": "NORMAL",
+              "previousVideoRenderer": {
+                "autoplayEndpointRenderer": {
+                  "endpoint": {
+                    "watchEndpoint": {
+                      "videoId": "bbbbbbbbbb2",
+                      "playlistId": "PLtest",
+                      "index": 1,
+                      "params": "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D"
+                    }
+                  }
+                }
+              },
+              "nextVideoRenderer": {
+                "maybeHistoryEndpointRenderer": {
+                  "endpoint": {
+                    "watchEndpoint": {
+                      "videoId": "dddddddddd4",
+                      "params": "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D"
+                    }
+                  }
+                }
+              },
+              "autoplayVideoRenderer": {
+                "autonavEndpointRenderer": {
+                  "endpoint": {
+                    "watchEndpoint": {
+                      "videoId": "dddddddddd4",
+                      "params": "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

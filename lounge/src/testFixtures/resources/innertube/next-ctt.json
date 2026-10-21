@@ -1,0 +1,51 @@
+{
+  "responseContext": {
+    "visitorData": "SERVERVISITOR1"
+  },
+  "contents": {
+    "singleColumnWatchNextResults": {
+      "autoplay": {
+        "autoplay": {
+          "sets": [
+            {
+              "mode": "NORMAL",
+              "previousVideoRenderer": {
+                "autoplayEndpointRenderer": {
+                  "endpoint": {
+                    "watchEndpoint": {
+                      "videoId": "aaaaaaaaaa1",
+                      "playlistId": "PLtest",
+                      "index": 0,
+                      "params": "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D"
+                    }
+                  }
+                }
+              },
+              "nextVideoRenderer": {
+                "autoplayEndpointRenderer": {
+                  "endpoint": {
+                    "watchEndpoint": {
+                      "videoId": "cccccccccc3",
+                      "playlistId": "PLtest",
+                      "index": 2,
+                      "params": "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D",
+                      "watchEndpointSupportedAuthorizationTokenConfig": {
+                        "videoAuthorizationToken": {
+                          "credentialTransferTokens": [
+                            {
+                              "token": "CTTSECRETTOKEN-from-server"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
