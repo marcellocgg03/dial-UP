@@ -394,7 +394,7 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
      * is destroyed (byebye, DIAL port closed, loungeScreenDisconnected), then the SSDP client, the responder and the media
      * server stop. Each step is isolated, so one failure never skips the rest. Safe to call twice.
      */
-    suspend fun stop() {
+    suspend fun stop(clearSpeakers: Boolean = false) {
         if (!stopped.compareAndSet(false, true)) return
         withContext(NonCancellable) {
             step("handlers") { handlerJob.cancelAndJoin() }

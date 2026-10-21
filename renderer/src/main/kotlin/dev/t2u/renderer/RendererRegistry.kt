@@ -44,6 +44,7 @@ class RendererRegistry(
     private val factory: RendererFactory,
     private val events: EventSink = NoEvents,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val clearBudgetMs: Long = CLEAR_BUDGET_MS,
 ) {
     companion object {
         /** index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. */
@@ -224,7 +225,7 @@ class RendererRegistry(
     }
 
     /** Shutdown (index.js shutdown): stop every receiver so they leave the cast menu. */
-    suspend fun removeAll() {
+    suspend fun removeAll(clearSpeakers: Boolean = false) {
         val udns = lock.withLock { running.keys.toList() }
         coroutineScope {
             udns.map { udn -> async { runCatching { removeRenderer(udn) } } }.awaitAll()

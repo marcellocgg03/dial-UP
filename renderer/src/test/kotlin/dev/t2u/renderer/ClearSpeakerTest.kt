@@ -9,16 +9,56 @@ package dev.t2u.renderer
 import dev.t2u.lounge.Video
 import dev.t2u.upnp.FakeCall
 import dev.t2u.upnp.FakeRenderer
+import dev.t2u.upnp.RENDERER_ST
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val DQW = "dQw4w9WgXcQ"
 private const val OTHER = "http://192.168.1.50/other.mp3"
+
+/** A speaker as the registry sees it, recording clear and destroy in one shared timeline. */
+private class StubSpeaker(
+    override val udn: String,
+    override val address: String,
+    override val port: Int,
+    private val timeline: CopyOnWriteArrayList<String>,
+    private val onClear: suspend () -> Unit = {},
+) : ManagedRenderer {
+    override val location = "http://$address:1400/xml/device_description.xml"
+    override val name: String? = "Stub $udn"
+    @Volatile override var lastSeen: Long = 0
+    val clearCalls = AtomicInteger()
+    val destroyCalls = AtomicInteger()
+    @Volatile var stale = false
+
+    override fun refresh(maxAge: Int) {}
+
+    override fun isStale(now: Long): Boolean = stale
+
+    override suspend fun init(): Boolean = true
+
+    override suspend fun destroy() {
+        destroyCalls.incrementAndGet()
+        timeline.add("destroy:$udn")
+    }
+
+    override suspend fun clearSpeaker() {
+        clearCalls.incrementAndGet()
+        timeline.add("clear-start:$udn")
+        onClear()
+        timeline.add("clear-end:$udn")
+    }
+}
 
 class ClearSpeakerTest {
     private fun withFake(fake: FakeRenderer = FakeRenderer(), block: suspend (FakeRenderer) -> Unit) {
@@ -203,6 +243,116 @@ class ClearSpeakerTest {
                 h.renderer.reset()
 
                 assertTrue(h.notes("the speaker refused an empty transport URI").isNotEmpty(), h.events.toString())
+            }
+        }
+    }
+
+    // ---- Task 2: the registry clears on an explicit stop only ----
+
+    private class RegistryRig(clearBudgetMs: Long = CLEAR_BUDGET_MS, val onClear: (String) -> suspend () -> Unit = { { } }) {
+        val timeline = CopyOnWriteArrayList<String>()
+        val speakers = CopyOnWriteArrayList<StubSpeaker>()
+        val now = java.util.concurrent.atomic.AtomicLong(1_000_000)
+        private val dir = Files.createTempDirectory("clear-registry-").toFile().also { it.deleteOnExit() }
+        val registry = RendererRegistry(
+            Config(dataDir = dir),
+            PortRegistry(dir, 3000).load(),
+            { udn, _, address, _, port -> StubSpeaker(udn, address, port, timeline, onClear(udn)).also { speakers.add(it) } },
+            clock = { now.get() },
+            clearBudgetMs = clearBudgetMs,
+        )
+
+        suspend fun alive(udn: String, ip: String) {
+            registry.onAlive(
+                mapOf(
+                    "ST" to RENDERER_ST,
+                    "USN" to "uuid:$udn::$RENDERER_ST",
+                    "LOCATION" to "http://$ip:1400/xml/device_description.xml",
+                    "CACHECONTROL" to "max-age=1800",
+                ),
+                InetSocketAddress(InetAddress.getByName(ip), 1900),
+            )
+        }
+
+        fun speaker(udn: String) = speakers.first { it.udn == udn }
+    }
+
+    @Test
+    @DisplayName("removeAll(clearSpeakers = true) clears every speaker in parallel before it is destroyed")
+    fun removeAllClearsInParallelThenDestroys() {
+        runBlocking<Unit> {
+            val rig = RegistryRig(onClear = { { delay(300) } })
+            rig.alive("a", "192.168.50.41")
+            rig.alive("b", "192.168.50.42")
+
+            val t0 = System.nanoTime()
+            rig.registry.removeAll(clearSpeakers = true)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+
+            assertTrue(ms < 600, "took $ms ms, so the clears ran one after the other")
+            val tl = rig.timeline
+            val firstDestroy = tl.indexOfFirst { it.startsWith("destroy:") }
+            assertTrue(tl.indexOf("clear-start:a") in 0 until firstDestroy && tl.indexOf("clear-start:b") in 0 until firstDestroy, tl.toString())
+            for (u in listOf("a", "b")) {
+                assertTrue(tl.indexOf("clear-end:$u") < tl.indexOf("destroy:$u"), tl.toString())
+                assertEquals(1, rig.speaker(u).destroyCalls.get())
+            }
+            assertEquals(0, rig.registry.count.value)
+        }
+    }
+
+    @Test
+    @DisplayName("a clear that never returns is cut at the registry budget and the speaker is still destroyed")
+    fun hangingClearIsCutAndDestroyed() {
+        runBlocking<Unit> {
+            val rig = RegistryRig(clearBudgetMs = 200, onClear = { { delay(Long.MAX_VALUE) } })
+            rig.alive("a", "192.168.50.41")
+
+            val t0 = System.nanoTime()
+            rig.registry.removeAll(clearSpeakers = true)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+
+            assertTrue(ms < 1500, "took $ms ms")
+            assertEquals(1, rig.speaker("a").clearCalls.get())
+            assertEquals(1, rig.speaker("a").destroyCalls.get())
+        }
+    }
+
+    @Test
+    @DisplayName("a clear that throws does not stop the others from being cleared or destroyed")
+    fun throwingClearDoesNotStopTheOthers() {
+        runBlocking<Unit> {
+            val rig = RegistryRig(onClear = { udn -> { if (udn == "a") throw IllegalStateException("boom") } })
+            rig.alive("a", "192.168.50.41")
+            rig.alive("b", "192.168.50.42")
+
+            rig.registry.removeAll(clearSpeakers = true)
+
+            for (u in listOf("a", "b")) {
+                assertEquals(1, rig.speaker(u).clearCalls.get(), u)
+                assertEquals(1, rig.speaker(u).destroyCalls.get(), u)
+            }
+            assertTrue(rig.timeline.contains("clear-end:B"))
+        }
+    }
+
+    @Test
+    @DisplayName("removeAll() by default, a goodbye and a stale speaker never clear")
+    fun otherRemovalsNeverClear() {
+        runBlocking<Unit> {
+            val rig = RegistryRig()
+            rig.alive("a", "192.168.50.41")
+            rig.alive("b", "192.168.50.42")
+            rig.alive("c", "192.168.50.43")
+
+            rig.registry.onByebye(mapOf("USN" to "uuid:a::$RENDERER_ST", "NTS" to "ssdp:byebye"))
+            rig.speaker("b").stale = true
+            rig.registry.prune()
+            rig.registry.removeAll()
+
+            for (u in listOf("a", "b", "c")) {
+                assertEquals(0, rig.speaker(u).clearCalls.get(), u)
+                assertEquals(1, rig.speaker(u).destroyCalls.get(), u)
             }
         }
     }
