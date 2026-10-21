@@ -4,8 +4,8 @@ package dev.t2u.renderer
 //
 // One UPnP MediaRenderer exposed as one YouTube cast receiver. The renderer is the lounge Player: play,
 // pause, stop, seek and volume from the sender become SOAP calls to the speaker. Left for later phases:
-// the format chain and format learning (Phase 3: the stream format is Config.outputFormat, "adts"),
-// gapless SetNextAVTransportURI and prefetch (Phase 4), SponsorBlock and play history (v2).
+// gapless SetNextAVTransportURI and prefetch (Phase 4), SponsorBlock and play history (v2). The format chain
+// and per-speaker format learning (Phase 3) live in this class and in FormatChain.kt.
 
 import dev.t2u.lounge.CastReceiver
 import dev.t2u.lounge.Player
@@ -15,8 +15,10 @@ import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.Volume
+import dev.t2u.media.FALLBACK_CHAIN
 import dev.t2u.media.FORMATS
 import dev.t2u.media.MediaRegistrar
+import dev.t2u.media.ResolvedInfo
 import dev.t2u.media.VideoEntry
 import dev.t2u.media.VideoResolver
 import dev.t2u.media.dlnaFeatures
@@ -42,6 +44,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
@@ -182,8 +185,12 @@ class Renderer(
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
 
+    /** This speaker's persistent store, created in [init] and shared with the cast receiver. */
+    @Volatile private var store: RendererDataStore? = null
+
     init {
         events = deps.events
+        deps.playlistRequestHandlerFactory?.let { queue.requestHandler = it() }
     }
 
     override fun refresh(maxAge: Int) {
@@ -206,6 +213,11 @@ class Renderer(
             return false
         }
 
+        if (!config.nameFilter.accepts(desc.friendlyName)) {
+            note("info", "\"${desc.friendlyName}\" does not pass the name filter - skipping")
+            return false
+        }
+
         val displayName = receiverName(config.nameTemplate, config.nameSuffix, desc.friendlyName, desc.manufacturer, desc.modelName)
         name = displayName
 
@@ -214,6 +226,10 @@ class Renderer(
         ip = config.advertiseIp ?: withContext(Dispatchers.IO) { localAddressFor(address) }
 
         val store = RendererDataStore(config.dataDir, udn) { message, error -> note("warn", "$message: ${error.message}") }
+        this.store = store
+        // T-03-19: a stored value counts only when it names a chain format.
+        learnedFormat = (store.get(LEARNED_FORMAT_KEY) as? JsonPrimitive)
+            ?.takeIf { it.isString }?.content?.takeIf { it in FALLBACK_CHAIN }
         val rec = deps.createReceiver.create(
             this,
             ReceiverOptions(
@@ -332,10 +348,31 @@ class Renderer(
         }
     }
 
-    /** Resolve and register a track; returns everything needed to play it. */
+    /**
+     * Resolve a track and get it ready for the speaker. In auto mode a format that cannot be prepared or
+     * registered (a failed download, say) hands over to the next accepted format within the same load; with
+     * a forced format, or when the chain is used up, the failure goes to the caller.
+     */
     private suspend fun prepareItem(video: Video, position: Double, format: String?): PreparedItem {
         val info = deps.resolver.resolve(video.id)
-        val fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        val address = checkNotNull(ip) { "renderer was not initialised" }
+        var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        while (true) {
+            try {
+                return buildItem(video, position, info, fmt, address)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val next = if (config.outputFormat == "auto") nextFormat(fmt, protocols, info.mime) else null
+                if (next == null) throw e
+                note("warn", "Preparing $fmt failed (${e.message}) - trying $next")
+                fmt = next
+            }
+        }
+    }
+
+    /** Prepare, register and describe one track in [fmt]. */
+    private suspend fun buildItem(video: Video, position: Double, info: ResolvedInfo, fmt: String, address: String): PreparedItem {
         val mime = mimeOf(fmt, info.mime)
         // Seekable formats start at 0 and use AVTransport Seek; streams start ffmpeg at the offset.
         val seekable = FORMATS[fmt]?.seekable ?: false
@@ -348,7 +385,6 @@ class Renderer(
         deps.media.prepare(entry)
         val streamPath = deps.media.registerVideo(entry)
         cur.streamPath = streamPath
-        val address = checkNotNull(ip) { "renderer was not initialised" }
         val url = "http://$address:${config.mediaPort}$streamPath"
         val protocolInfo = "http-get:*:$mime:${dlnaFeatures(fmt)}"
         val metadata = buildDidl(
@@ -627,7 +663,10 @@ class Renderer(
 
         when {
             state == "PLAYING" -> {
-                sawPlaying = true
+                if (!sawPlaying) {
+                    sawPlaying = true
+                    if (c != null) confirmFormat(c)
+                }
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
@@ -664,10 +703,43 @@ class Renderer(
     }
 
     /**
-     * The speaker accepted the URL but never started playing. Phase 2 has a single fixed format, so there
-     * is no next format to try (renderer.js with OUTPUT_FORMAT=adts): stop and say why.
+     * The first PLAYING of a load proves [c]'s format works on this speaker: in auto mode remember it, in the
+     * speaker's store, so the next start (and the next run of the app) begins with it. A forced format is
+     * the user's choice and is never written.
      */
-    private fun handleStartFailure(c: Current) {
+    private suspend fun confirmFormat(c: Current) {
+        if (config.outputFormat != "auto" || learnedFormat == c.format) return
+        learnedFormat = c.format
+        note("info", "Format ${c.format} works on this speaker - remembered")
+        store?.set(LEARNED_FORMAT_KEY, JsonPrimitive(c.format))
+    }
+
+    /**
+     * The speaker accepted the URL but never started playing (a refused upstream host, a format it cannot
+     * decode and a firewall all look the same from here). In auto mode the format chain moves on: forget
+     * the remembered format, then reload the same track at the same position in the next format the speaker
+     * accepts; the 12 s clock of that attempt starts at its own Play. With a forced format, or at the end of
+     * the chain, stop and say why.
+     */
+    private suspend fun handleStartFailure(c: Current) {
+        val auto = config.outputFormat == "auto"
+        val next = if (auto) nextFormat(c.format, protocols, c.sourceMime) else null
+        if (auto && learnedFormat != null) {
+            learnedFormat = null
+            store?.set(LEARNED_FORMAT_KEY, null)
+        }
+        if (next != null) {
+            note("warn", "Renderer did not start ${c.format} - trying $next")
+            stopPolling()
+            val resumeAt = position?.rel ?: c.startAt.toDouble()
+            val before = loadSeq.get()
+            scope.launch {
+                val started = load(c.video, resumeAt, next, startPlaying = true)
+                // Only a failure of this reload counts; a newer play, a stop or removal has moved loadSeq on.
+                if (!started && !destroyed && loadSeq.get() == before + 1) notifyExternalStateChange(PlayerStatus.STOPPED)
+            }
+            return
+        }
         val why = if (c.fetched) "fetched the stream but never started playing" else "never requested the stream"
         lastError = "Renderer $why"
         note(
