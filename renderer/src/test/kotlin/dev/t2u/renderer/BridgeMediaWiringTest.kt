@@ -1,0 +1,155 @@
+package dev.t2u.renderer
+
+// Whole-bridge media wiring (plan 03-10; PLAY-04, SVC-07): the bridge hands the media server its upstream fetcher, its
+// file builder and the config knobs, so every format of the chain is reachable from a speaker. The "upstream" is a JDK
+// HttpServer on loopback; the file formats use the real ffmpeg when the machine has one (assumeTrue otherwise).
+// GPL-3.0-only.
+//
+// Every test is `= h.run<Unit> { ... }`: JUnit silently skips a test whose expression body returns a value.
+
+import dev.t2u.media.JvmPipeLauncher
+import dev.t2u.media.SourceDownloader
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
+import java.io.File
+import java.net.URI
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+private const val VID = "AAAAAAAAAAA"
+
+/** PLAY-04: all formats of the chain are reachable through the running bridge; production proxies googlevideo only. */
+class BridgeMediaWiringTest {
+    private var h = BridgeHarness()
+    private val tmp: File = Files.createTempDirectory("bridge-media-").toFile().also { it.deleteOnExit() }
+
+    @AfterEach
+    fun tearDown() {
+        h.close()
+        tmp.deleteRecursively()
+    }
+
+    /** Starts the bridge, pairs the sender and casts [VID] alone; returns once the speaker was told to load something. */
+    private suspend fun castOne(bridge: Bridge) {
+        h.innerTube.scriptNext(VID, previousId = null, nextId = null)
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        h.rpc("cl", "setPlaylist", h.playlist(VID))
+        h.awaitUntil("SetAVTransportURI on the speaker") { h.setAvTransportUris().isNotEmpty() }
+    }
+
+    private fun get(url: String, range: String? = null): HttpResponse<ByteArray> {
+        val req = HttpRequest.newBuilder(URI(url)).GET().also { if (range != null) it.header("Range", range) }.build()
+        return h.http.send(req, HttpResponse.BodyHandlers.ofByteArray())
+    }
+
+    @Test
+    @DisplayName("auto format with a speaker that lists the video's MIME hands out the direct proxy, relayed from the upstream")
+    fun directProxyIsRelayedFromTheUpstream() = h.run<Unit> {
+        val body = ByteArray(5000) { (it % 251).toByte() }
+        h.resolvedUrl = h.startUpstream(body) + "/audio.m4a"
+        val bridge = h.newBridge(h.testConfig(outputFormat = "auto"), upstreamPolicy = UpstreamPolicy { true })
+        castOne(bridge)
+
+        val uri = h.setAvTransportUris().first()
+        assertTrue(Regex("http://127\\.0\\.0\\.1:\\d+/stream/[0-9a-f]{32}\\.m4a").matches(uri), "CurrentURI was $uri")
+        val ranged = get(uri, "bytes=0-9")
+        assertEquals(206, ranged.statusCode())
+        assertContentEquals(body.copyOfRange(0, 10), ranged.body())
+        assertEquals("audio/mp4", ranged.headers().firstValue("Content-Type").get())
+        assertTrue(
+            h.upstreamSeen.any { it.method == "GET" && it.headers["accept-encoding"] == "identity" },
+            "the upstream saw Accept-Encoding identity: ${h.upstreamSeen.map { it.headers }}",
+        )
+    }
+
+    @Test
+    @DisplayName("with the default policy a loopback upstream is refused with 502 and the start-failure path moves on to the next format")
+    fun defaultPolicyRefusesALoopbackUpstreamAndTheChainMovesOn() {
+        // a speaker that accepts the URL but never plays it, as one whose upstream fetch was refused
+        h.close()
+        h = BridgeHarness(neverPlay = true)
+        h.run<Unit> {
+            h.resolvedUrl = h.startUpstream(ByteArray(2000)) + "/audio.m4a"
+            val bridge = h.newBridge(h.testConfig(outputFormat = "auto", startTimeoutMs = 800)) // no upstreamPolicy: production default
+            castOne(bridge)
+
+            val first = h.setAvTransportUris().first()
+            assertTrue(first.endsWith(".m4a"), "auto chose the direct format first: $first")
+            assertEquals(502, get(first, "bytes=0-9").statusCode())
+            assertTrue(h.upstreamSeen.none { it.method == "GET" }, "the loopback upstream was never contacted")
+
+            h.awaitUntil("a further format after the start timeout", 15_000) { h.setAvTransportUris().size >= 2 }
+            val second = h.setAvTransportUris()[1]
+            assertTrue(second.endsWith(".aac") || second.endsWith(".mp4") || second.endsWith(".mp3"), "the next format of the chain: $second")
+        }
+    }
+
+    @Test
+    @DisplayName("a forced flac format with the real ffmpeg serves a FLAC file with byte ranges from a sub-directory of the buffer directory")
+    fun forcedFlacServesAFileWithRanges() = h.run<Unit> {
+        assumeTrue(h.findFfmpeg() != null, "ffmpeg is not installed")
+        val source = File(tmp, "source/sine.m4a")
+        assumeTrue(h.makeSineSource(source), "could not make the sine source with ffmpeg")
+        val buffer = File(tmp, "buffer").also { it.mkdirs() }
+        val downloader = SourceDownloader { _, _, target ->
+            target.parentFile?.mkdirs()
+            source.copyTo(target, overwrite = true)
+        }
+        val bridge = h.newBridge(
+            h.testConfig(outputFormat = "flac"),
+            launcher = JvmPipeLauncher(h.findFfmpeg()!!),
+            bufferDir = buffer,
+            sourceDownloader = downloader,
+        )
+        castOne(bridge)
+
+        val uri = h.setAvTransportUris().first()
+        assertTrue(Regex("http://127\\.0\\.0\\.1:\\d+/stream/[0-9a-f]{32}\\.flac").matches(uri), "CurrentURI was $uri")
+        val ranged = get(uri, "bytes=0-3")
+        assertEquals(206, ranged.statusCode())
+        assertContentEquals("fLaC".toByteArray(Charsets.US_ASCII), ranged.body())
+        val built = File(buffer, "files").listFiles().orEmpty().filter { it.name.endsWith(".flac") }
+        assertTrue(built.isNotEmpty(), "the built file is in <bufferDir>/files, not in the buffer directory itself")
+        assertTrue(buffer.listFiles().orEmpty().none { it.name.endsWith(".flac") })
+
+        // Stop wipes the builder's directory and leaves the buffer directory
+        bridge.stop()
+        assertTrue(File(buffer, "files").listFiles().orEmpty().isEmpty(), "no built file survives Stop")
+        assertTrue(buffer.isDirectory, "the buffer directory itself stays")
+    }
+
+    @Test
+    @DisplayName("a launcher without a source downloader means file builds are unavailable: a forced mp4 cast fails, the bridge keeps running")
+    fun withoutASourceDownloaderAFileFormatFailsButTheBridgeRuns() = h.run<Unit> {
+        val buffer = File(tmp, "buffer").also { it.mkdirs() }
+        val bridge = h.newBridge(
+            h.testConfig(outputFormat = "mp4"),
+            launcher = JvmPipeLauncher("/usr/bin/ffmpeg"),
+            bufferDir = buffer,
+        )
+        h.innerTube.scriptNext(VID, previousId = null, nextId = null)
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        h.rpc("cl", "setPlaylist", h.playlist(VID))
+
+        var error: String? = null
+        h.awaitUntil("the renderer reports a failure") {
+            error = bridge.state()["renderers"].toString().let { Regex("\"lastError\":\"([^\"]*)\"").find(it)?.groupValues?.get(1) }
+            error != null
+        }
+        assertTrue(assertNotNull(error).contains("file builder"), "lastError was $error")
+        assertTrue(h.setAvTransportUris().isEmpty(), "nothing was loaded on the speaker")
+        assertTrue(bridge.state()["renderers"].toString().contains("\"status\":\"STOPPED\""), "the renderer is stopped: ${bridge.state()}")
+        assertEquals("true", bridge.state()["running"].toString())
+    }
+}
