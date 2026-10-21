@@ -70,6 +70,12 @@ class FakeRenderer(
     val calls: MutableList<FakeCall> = CopyOnWriteArrayList()
     val state = FakeState()
 
+    /**
+     * Runs for every SOAP action after the fake updated [state] and before it answers, so a test speaker built on
+     * this fake (the G4 Sonos mimic) can override the state it reports or react to Play and Pause. Null by default.
+     */
+    @Volatile var onAction: ((action: String) -> Unit)? = null
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var port: Int = 0
@@ -165,6 +171,7 @@ class FakeRenderer(
             "GetMute" -> out = "<CurrentMute>${if (state.mute) 1 else 0}</CurrentMute>"
             "GetProtocolInfo" -> out = "<Source></Source><Sink>$sink</Sink>"
         }
+        onAction?.let { hook -> runCatching { hook(action) } }
         call.respondText(
             """<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>""" +
                 """<u:${action}Response xmlns:u="urn:schemas-upnp-org:service:$svc:1">$out</u:${action}Response></s:Body></s:Envelope>""",
