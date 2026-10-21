@@ -38,6 +38,13 @@ interface ManagedRenderer {
     suspend fun init(): Boolean
 
     suspend fun destroy()
+
+    /**
+     * Empties the speaker's transport URI when it still holds a stream this app loaded (CAST-06). Bounded,
+     * never throws and does nothing once destroyed. The default does nothing; the registry calls it only
+     * on an explicit service Stop, before [destroy].
+     */
+    suspend fun clearSpeaker() {}
 }
 
 /** Creates the renderer for a newly seen speaker; the registry owns the port claim. */
