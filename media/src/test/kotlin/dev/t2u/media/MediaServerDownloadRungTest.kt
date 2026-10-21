@@ -24,7 +24,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Port of the remux.test.js title 'adts/mp3: falls back to the yt-dlp download when YouTube keeps refusing ffmpeg',
+ * Port of the remux.test.js test about the yt-dlp download as the last rung for adts and mp3,
  * plus the order of the ladder and the time bound on prepare, against real /usr/bin/ffmpeg. The "YouTube" upstream
  * answers every request with 403; the "download" copies a generated 60 s fragmented M4A.
  */
