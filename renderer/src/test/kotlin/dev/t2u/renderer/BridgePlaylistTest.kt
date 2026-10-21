@@ -122,4 +122,88 @@ class BridgePlaylistTest {
         delay(500)
         assertEquals(seen, h.innerTube.requests.size, "nothing asks InnerTube after Stop")
     }
+
+    @Test
+    @DisplayName("a cast that starts at the last item plays C, then the autoplay video D, then D's next E: the mix keeps going")
+    fun theAutoplayMixKeepsGoing() = h.run<Unit> {
+        h.innerTube.scriptNext(C, previousId = B, nextId = null, autoplayId = D, index = 2)
+        h.innerTube.scriptNext(D, previousId = null, nextId = E, index = 0) // a mix: no previous
+        h.innerTube.scriptNext(E, previousId = null, nextId = null)
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        h.rpc("cl", "setPlaylist", h.playlist(C, videoIds = listOf(A, B, C), currentIndex = 2))
+
+        h.awaitUntil("C loaded on the speaker") { h.setAvTransportUris().isNotEmpty() && h.speakerCount("Play") >= 1 }
+        h.awaitUntil("a /next request for C") { C in h.askedAbout() }
+        h.awaitUntil("the sender is told a next track exists (the autoplay video)") {
+            h.messages().any { it.first == "onHasPreviousNextChanged" && it.second["hasNext"] == "true" }
+        }
+
+        // C finishes: the autoplay video D plays, InnerTube is asked about D, the sender sees previous and next after the hop
+        waitForPlayingReported()
+        trackFinishes()
+        h.awaitUntil("D loaded on the speaker") { h.setAvTransportUris().size >= 2 }
+        h.awaitUntil("the sender sees D") { h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == D } }
+        h.awaitUntil("a /next request for D") { D in h.askedAbout() }
+        h.awaitUntil("hasNext true after the hop") { h.messages().last { it.first == "onHasPreviousNextChanged" }.second["hasNext"] == "true" }
+
+        // D finishes: E (D's next in the mix) plays
+        nextTrackStartsAtZero()
+        delay(400)
+        trackFinishes()
+        h.awaitUntil("E loaded on the speaker") { h.setAvTransportUris().size >= 3 }
+        h.awaitUntil("the sender sees E") { h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == E } }
+        h.awaitUntil("a /next request for E") { E in h.askedAbout() }
+        assertEquals(3, h.setAvTransportUris().distinct().size, "three different token URLs")
+        assertEquals(listOf(C, D, E), h.resolved.distinct())
+    }
+
+    @Test
+    @DisplayName("an InnerTube that answers 500 still lets the cast track play: no next, a track end stops, and the log holds no request or token text")
+    fun aFailingInnerTubeStillPlaysTheCastTrack() = h.run<Unit> {
+        h.innerTube.status = 500
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        h.rpc("cl", "setPlaylist", h.playlist(A, videoIds = listOf(A, B, C), currentIndex = 0))
+
+        h.awaitUntil("A loaded and playing") { h.setAvTransportUris().isNotEmpty() && h.speakerCount("Play") >= 1 }
+        waitForPlayingReported()
+        h.awaitUntil("InnerTube was asked") { A in h.askedAbout() }
+        assertTrue(h.messages().none { it.first == "onHasPreviousNextChanged" && it.second["hasNext"] == "true" }, "no next track was announced")
+
+        trackFinishes()
+        h.awaitUntil("the renderer is stopped") { bridge.state()["renderers"].toString().contains("\"status\":\"STOPPED\"") }
+        delay(300)
+        assertEquals(1, h.setAvTransportUris().size, "no second track was loaded")
+        assertEquals("true", bridge.state()["running"].toString())
+
+        val notes = h.events.filter { it.first == "lounge" && (it.second["type"] as? String)?.startsWith("innertube") == true }
+        assertTrue(notes.any { it.second["type"] == "innertubeHttpError" && it.second["status"] == 500 }, "the failure is noted: $notes")
+        val text = h.events.joinToString("\n") { "${it.first} ${it.second}" }
+        for (forbidden in listOf("ctt", "visitorData", "enableMdxAutoplay", "clientVersion", "SERVERVISITOR1")) {
+            assertTrue(!text.contains(forbidden), "the event log must not hold $forbidden")
+        }
+    }
+
+    // The only slow test of this file: it waits for the handler's real 10 s call timeout (about 11 s).
+    @Test
+    @DisplayName("an InnerTube slower than the call timeout does not hold the first play for more than the timeout plus one second")
+    fun aSlowInnerTubeDoesNotHoldTheFirstPlay() = h.run<Unit> {
+        h.innerTube.delayMs = InnerTubeConstants.CALL_TIMEOUT_MS + 5000
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+
+        val t0 = System.nanoTime()
+        h.rpc("cl", "setPlaylist", h.playlist(A, videoIds = listOf(A, B, C), currentIndex = 0))
+        h.awaitUntil("the first SetAVTransportURI", timeoutMs = InnerTubeConstants.CALL_TIMEOUT_MS + 5000) { h.setAvTransportUris().isNotEmpty() }
+        val waitedMs = (System.nanoTime() - t0) / 1_000_000
+        assertTrue(waitedMs <= InnerTubeConstants.CALL_TIMEOUT_MS + 1000, "the first play waited $waitedMs ms")
+        assertTrue(A in h.askedAbout(), "InnerTube was asked (and timed out)")
+    }
 }
