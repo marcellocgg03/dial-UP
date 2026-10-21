@@ -8,10 +8,10 @@ import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CachingResolver
 import dev.t2u.media.MediaRequest
+import dev.t2u.media.YtDlpSourceDownloader
 import dev.t2u.renderer.Bridge
 import dev.t2u.renderer.BridgeDeps
 import dev.t2u.renderer.BridgeNetwork
-import dev.t2u.renderer.Config
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
 import dev.t2u.upnp.lanHttpClient
@@ -41,10 +41,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * is in :renderer and below, tested on the JVM.
  *
  * Every OkHttp client in the app derives from `lanHttpClient()` (SVC-05); nothing here builds one directly.
+ *
+ * The optional `files/config.json` (see :renderer ConfigFile.kt for the keys) is read each time the bridge starts; what
+ * was applied is logged as a `config` event and shown under "config" by `cast-state`, and `reload-config` restarts the
+ * bridge (without clearing the speakers) so an edited file takes effect without reinstalling.
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
-    override val commands: Set<String> = setOf("reannounce", "cast-state")
+    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config")
 
     private val lifecycle = Mutex()
     private var host: SpikeHost? = null
@@ -54,6 +58,9 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var settings: Settings? = null
 
     @Volatile private var bridge: Bridge? = null
+
+    /** What the last bridge start applied from files/config.json (counts and switches only, never pattern text). */
+    @Volatile private var configSummaryJson: JsonObject? = null
 
     /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log. */
     @Volatile private var lastIp: String? = null
@@ -111,17 +118,22 @@ class CastFeature : SpikeFeature, CastCountSource {
             CommandReply(true, """{"ok":true}""")
         }
         "cast-state" -> CommandReply(true, state().toString())
+        "reload-config" -> {
+            host?.evidence?.event("reload-config", emptyMap())
+            scheduleRebind("config")
+            CommandReply(true, """{"ok":true,"note":"restarting the bridge; playback is interrupted"}""")
+        }
         else -> CommandReply(false, """{"error":"unknown command"}""")
     }
 
     override fun state(): JsonObject {
         val base = bridge?.state() ?: JsonObject(mapOf("running" to JsonPrimitive(false)))
-        return JsonObject(
-            base + mapOf(
-                "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
-                "denied" to JsonPrimitive(denied.get()),
-            ),
+        val extra = mapOf(
+            "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
+            "denied" to JsonPrimitive(denied.get()),
         )
+        val config = configSummaryJson
+        return JsonObject(if (config == null) base + extra else base + extra + ("config" to config))
     }
 
     // ----- lifecycle -----------------------------------------------------------------------------
@@ -139,16 +151,23 @@ class CastFeature : SpikeFeature, CastCountSource {
         val appSettings = checkNotNull(settings) { "settings not initialised" }
         val payloads = h.payloads()
         val cacheDir = File(h.context.cacheDir, "yt-dlp").also { it.mkdirs() }
+        val loaded = loadAppConfig(h.context.filesDir)
+        configSummaryJson = configSummary(loaded)
+        h.evidence.event("config", configEvidenceFields(loaded))
+        loaded.warnings.take(MAX_CONFIG_WARNING_EVENTS).forEach { h.evidence.event("config-warning", mapOf("text" to it)) }
+        // one gateway serves the resolver and the downloader that builds the mp4/flac source files
+        val gateway = AndroidYtDlpGateway(h.context, h.evidence)
         val resolver = CachingResolver(
-            AndroidYtDlpGateway(h.context, h.evidence),
+            gateway,
             cacheDir = cacheDir.absolutePath,
             onEvent = { h.evidence.event("resolve", it) },
+            verbose = loaded.config.ytdlpVerbose,
         )
         val nif = NetworkInterface.getByName(ifaceName)
         val b = Bridge(
             BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false))),
             BridgeDeps(
-                config = Config(dataDir = File(h.context.filesDir, "cast")),
+                config = loaded.config,
                 resolver = resolver,
                 launcher = FfmpegRunner(payloads, h.context.cacheDir, h.evidence),
                 http = lanHttpClient(),
@@ -159,6 +178,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 bufferDir = File(h.context.cacheDir, "media-buffer").also { it.mkdirs() },
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
+                sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
             ),
         )
         b.start()
@@ -295,6 +315,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     private companion object {
         const val REBIND_DEBOUNCE_MS = 2000L
         const val WARMUP_WAIT_MS = 15_000L
+        const val MAX_CONFIG_WARNING_EVENTS = 20
         const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
     }
 }

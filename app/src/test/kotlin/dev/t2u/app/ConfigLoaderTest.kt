@@ -149,4 +149,18 @@ class ConfigLoaderTest {
             f.setReadable(true, false)
         }
     }
+
+    @Test
+    fun evidenceFieldsArePlainValues() {
+        write("""{"outputFormat":"flac","ytdlpVerbose":true,"include":"kitchenSECRET","zzz":1}""")
+        val f = configEvidenceFields(loadAppConfig(dir))
+        assertEquals("flac", f["format"])
+        assertEquals(true, f["ytdlpVerbose"])
+        assertEquals(1L, f["includeCount"])
+        assertEquals(true, f["found"])
+        val w = f["warnings"] as List<*>
+        assertEquals(1, w.size)
+        assertTrue(w.all { it is String })
+        assertFalse("kitchenSECRET" in f.toString())
+    }
 }

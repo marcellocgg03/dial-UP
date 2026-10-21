@@ -8,8 +8,12 @@ import dev.t2u.renderer.Config
 import dev.t2u.renderer.ConfigFileResult
 import dev.t2u.renderer.loadConfigFile
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 import java.io.IOException
 
@@ -58,4 +62,15 @@ fun configSummary(result: ConfigFileResult): JsonObject {
             "warnings" to JsonArray(result.warnings.map { JsonPrimitive(it) }),
         ),
     )
+}
+
+/** [configSummary] as plain Kotlin values, the shape the evidence log writes (a JsonPrimitive would print quoted twice). */
+fun configEvidenceFields(result: ConfigFileResult): Map<String, Any?> =
+    configSummary(result).mapValues { (_, v) -> plain(v) }
+
+private fun plain(e: JsonElement): Any? = when (e) {
+    is JsonNull -> null
+    is JsonArray -> e.map { plain(it) }
+    is JsonObject -> e.mapValues { (_, v) -> plain(v) }
+    is JsonPrimitive -> if (e.isString) e.content else e.booleanOrNull ?: e.longOrNull ?: e.content
 }
