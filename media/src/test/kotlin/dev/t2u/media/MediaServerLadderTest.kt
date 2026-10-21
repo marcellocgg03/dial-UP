@@ -785,7 +785,7 @@ class MediaServerLadderTest {
         t.join(60_000)
         assertEquals(206, r.status, "reported: $seen")
         val body = assertNotNull(first).body
-        assertEquals(200, first?.status)
+        assertEquals(200, first.status)
         assertEquals("bytes 5000-${body.size - 1}/${body.size}", r.header("Content-Range"), "the true total, equal to what the first GET sent")
         assertTrue(body.copyOfRange(5000, body.size).contentEquals(r.body))
         assertEquals(2, launcher.starts.get(), "the live run and the fill")

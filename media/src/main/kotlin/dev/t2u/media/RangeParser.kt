@@ -39,5 +39,19 @@ fun parseRange(header: String?, size: Long): ByteRange? {
     return if (start <= end && start < size) ByteRange.Span(start, end) else ByteRange.Unsatisfiable
 }
 
-/** STUB (plan 02-16 Task 2, RED step). */
-fun isResumeRange(header: String?): Boolean = false
+/**
+ * True for a header worth filling a cold token for: it matches the same anchored pattern [parseRange] uses and either
+ * starts at a number above 0 (`bytes=N-`, `bytes=N-M`) or is a suffix form (`bytes=-N`, N above 0). A header that
+ * starts at 0, names an end below its start, is malformed or has both numbers empty is not. This only decides
+ * whether a token with no finished run is worth one bounded fill; the answer itself is still [parseRange] through
+ * `serveFile`.
+ */
+fun isResumeRange(header: String?): Boolean {
+    val m = RANGE.matchEntire(header?.trim().orEmpty()) ?: return false
+    val first = m.groupValues[1]
+    val last = m.groupValues[2]
+    if (first.isEmpty()) return last.isNotEmpty() && number(last) > 0
+    val start = number(first)
+    if (start <= 0) return false
+    return last.isEmpty() || number(last) >= start
+}

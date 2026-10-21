@@ -125,8 +125,12 @@ data class MediaRequest(
  * Ranged GETs on video pipe tokens (plan 02-16, G4): the first response is always the live chunked stream, with no
  * length and no Accept-Ranges. While it streams, the bytes are also kept in a bounded file under
  * `bufferDir/range-cache` ([PipeRangeCache], limits in [pipeRanges]); once the run has ended cleanly, a `Range`
- * request on that token is answered 206 with the true total from those bytes, without a new ffmpeg run. Node's
- * `#pipe` ignores Range; this is a Kotlin-only addition (PARITY.md Adaptation 11).
+ * request on that token is answered 206 with the true total from those bytes, without a new ffmpeg run. A
+ * resume-type Range on an adts token with no finished run (the speaker hung up the first fetch, or the request
+ * overtook it) gets one bounded ffmpeg fill into a temp file instead ([coldFill]); mp3 is not filled, because its
+ * file output differs from its pipe output, but its warm cache is served as usual. Anything the caps or the time
+ * budget refuse falls back to today's live 200 from byte 0. Files are removed when their token is evicted, on
+ * [stop] and on [start]. Node's `#pipe` ignores Range; this is a Kotlin-only addition (PARITY.md Adaptation 11).
  */
 class MediaServer(
     private val host: String,
@@ -149,6 +153,7 @@ class MediaServer(
 
     fun start() {
         check(server == null) { "already started" }
+        rangeCache?.clear() // files of an earlier run are never reused
         // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
         val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
             reuseAddress = true
@@ -167,6 +172,7 @@ class MediaServer(
     fun stop() {
         server?.stop(200, 1000)
         server = null
+        rangeCache?.clear()
     }
 
     fun isRunning(): Boolean = server != null
@@ -175,8 +181,8 @@ class MediaServer(
 
     fun tokenCount(): Int = synchronized(tokens) { tokens.size }
 
-    /** STUB (plan 02-16 Task 2, RED step). */
-    fun rangeCacheStats(): PipeRangeStats = PipeRangeStats(0, 0)
+    /** What the range cache holds now (zeros when range answering is off or there is no buffer directory). */
+    fun rangeCacheStats(): PipeRangeStats = rangeCache?.stats() ?: PipeRangeStats(0, 0)
 
     /**
      * Registers [entry] and returns the path to hand to a renderer: `/stream/<token>.<ext>`. The token is 16
@@ -187,10 +193,16 @@ class MediaServer(
         val ext = extensionOf(entry.format)
         val raw = ByteArray(16).also(random::nextBytes)
         val token = raw.joinToString("") { "%02x".format(it) }
+        val evicted = ArrayList<String>()
         synchronized(tokens) {
             tokens[token] = entry
-            while (tokens.size > MAX_TOKENS) tokens.remove(tokens.keys.first())
+            while (tokens.size > MAX_TOKENS) {
+                val oldest = tokens.keys.first()
+                tokens.remove(oldest)
+                evicted += oldest
+            }
         }
+        evicted.forEach { rangeCache?.drop(it) } // a token that left the table takes its cached bytes with it
         return "/stream/$token.$ext"
     }
 
@@ -445,6 +457,16 @@ class MediaServer(
                 serveFile(call, entry, cached.file, false, out, "cached-range")
                 return
             }
+            // No finished run for this token (the speaker hung up the first fetch, or this request overtook it).
+            // A resume-type Range is worth one bounded fill into a temp file: then 206 with the true total.
+            if (cached == null && isResumeRange(rangeHeader) && entry.format in COLD_FILL_FORMATS && !cache.isOversize(token)) {
+                val filled = coldFill(cache, token, attempts, l, tail, out)
+                if (filled != null) {
+                    out.note = "range $rangeHeader of ${filled.size} bytes from a bounded fill"
+                    serveFile(call, entry, filled.file, false, out, "range-fill")
+                    return
+                }
+            }
         }
 
         val failures = mutableListOf<String>()
@@ -547,6 +569,71 @@ class MediaServer(
         call.respond(HttpStatusCode.BadGateway)
     }
 
+    /**
+     * Runs the attempt ladder once with ffmpeg writing straight into a part file and registers the result, or
+     * returns null so the caller falls back to the live path (which then produces the usual 200 or 502). Bounded
+     * three ways (threat T-02-56, T-02-57): the file may not pass the per-token cap (the token is then remembered as
+     * too big), the whole fill may not pass [PipeRangeConfig.coldFillTimeoutMs], and a cancelled request kills it.
+     * The cache also limits how many part files exist at once, so a fill may be refused outright.
+     *
+     * Only formats whose file output is byte-identical to their pipe output may be filled ([COLD_FILL_FORMATS]);
+     * the offset the speaker holds indexes the pipe bytes. The adts equality is measured with ffmpeg 4.4.2 only;
+     * the phone's ffmpeg 7.1.1 is checked in the device retest by comparing a fill's total with a plain GET.
+     */
+    private suspend fun coldFill(
+        cache: PipeRangeCache,
+        token: String,
+        attempts: List<PipeAttempt>,
+        l: PipeLauncher,
+        outputArgs: List<String>,
+        out: Outcome,
+    ): CachedStream? {
+        val part = withContext(Dispatchers.IO) { cache.newPartFile() } ?: return null
+        var handedOver = false
+        try {
+            for (attempt in attempts) {
+                val input = try {
+                    attempt.input()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    continue // the live path that follows a failed fill records the failure
+                }
+                if (!currentCoroutineContext().isActive) return null
+                withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
+                val proc = withContext(Dispatchers.IO) { l.start(listOf("-y") + input + outputArgs + part.absolutePath) }
+                try {
+                    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
+                    while (true) {
+                        val exited = withContext(Dispatchers.IO) { proc.waitFor(FILL_POLL_MS, TimeUnit.MILLISECONDS) }
+                        if (exited) break
+                        if (part.length() > pipeRanges.maxBytesPerToken) {
+                            cache.markOversize(token)
+                            out.note = "range fill passed the size cap"
+                            return null
+                        }
+                        if (System.nanoTime() > deadline) {
+                            out.note = "range fill passed the ${pipeRanges.coldFillTimeoutMs} ms budget"
+                            return null
+                        }
+                    }
+                    if (proc.exitValue() != 0 || part.length() == 0L) continue
+                    if (part.length() > pipeRanges.maxBytesPerToken) {
+                        cache.markOversize(token)
+                        return null
+                    }
+                } finally {
+                    killAndWait(proc)
+                }
+                handedOver = true
+                return withContext(Dispatchers.IO) { cache.promote(token, part) }
+            }
+            return null
+        } finally {
+            if (!handedOver) withContext(NonCancellable + Dispatchers.IO) { cache.discard(part) }
+        }
+    }
+
     /** HTTP/1.0 path: run ffmpeg to completion into a temp file, serve it like a file entry, delete it. */
     private suspend fun serveBuffered(
         call: ApplicationCall,
@@ -610,6 +697,10 @@ class MediaServer(
         private const val PIPE_CHUNK = 16 * 1024
         private const val MP3_BITRATE = "192k"
         private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
+        private const val FILL_POLL_MS = 50L
+
+        /** Formats a cold token may be filled for: their file output equals their pipe output (see [coldFill]). mp3's does not. */
+        private val COLD_FILL_FORMATS = setOf("adts")
         private const val BUFFER_TIMEOUT_SEC = 180L
         private const val MAX_NOTE = 400
         private val TOKEN_PATH = Regex("^/stream/([0-9a-f]{32})\\.\\w+$")

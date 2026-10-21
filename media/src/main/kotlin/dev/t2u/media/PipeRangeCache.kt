@@ -6,6 +6,11 @@ package dev.t2u.media
 // SYMFONISK Lamp sends after an early Pause: `Range: bytes=N-`, plan 02-16 G4) can be answered with a correct
 // 206 from the bytes the speaker already received, without a new ffmpeg run. Every method here is best effort:
 // a cache problem returns null/false and must never throw into the live stream.
+//
+// Bounds (threat T-02-56): [PipeRangeConfig.maxBytesPerToken] per run (a longer run is never kept and its token is
+// remembered as too big), [PipeRangeConfig.maxBytesTotal] over all finished runs (least recently used removed
+// first), and at most [PipeRangeConfig.maxConcurrentParts] part files being written at a time (a live tee or a
+// cold fill each hold one), so the disk in use never exceeds total + parts x per-token.
 
 import java.io.File
 import java.io.FileOutputStream
@@ -19,7 +24,10 @@ import java.nio.file.StandardCopyOption
  */
 const val PIPE_RANGE_ANSWERING_DEFAULT = true
 
-/** Limits of the range cache. [enabled] false means no tee, no cached answer, no cold fill. */
+/**
+ * Limits of the range cache. [enabled] false means no tee, no cached answer, no cold fill. [coldFillTimeoutMs] is
+ * the time budget of one cold fill, [maxConcurrentParts] the number of part files written at the same time.
+ */
 data class PipeRangeConfig(
     val enabled: Boolean = PIPE_RANGE_ANSWERING_DEFAULT,
     val maxBytesPerToken: Long = 32L * 1024 * 1024,
@@ -43,42 +51,77 @@ data class PipeRangeStats(val entries: Int, val bytes: Long)
 
 /**
  * Finished runs under [dir], keyed by token. Token strings are the 32 lowercase hex characters the media server
- * already validated, so they are safe as file names. The directory is created on first use.
+ * already validated, so they are safe as file names. The directory is created on first use; `.part` and `.bin`
+ * files an earlier process left behind are removed when the cache is constructed.
  */
 class PipeRangeCache(private val dir: File, private val config: PipeRangeConfig) {
     private val lock = Any()
+
+    /** Finished runs, least recently used first. */
     private val entries = LinkedHashMap<String, CachedStream>()
 
-    /** The complete stream for [token], or null. */
+    /** Part files being written; each holds one of the [PipeRangeConfig.maxConcurrentParts] slots. */
+    private val activeParts = HashSet<File>()
+
+    /** Tokens whose run passed the per-token cap, oldest first, bounded like the token table. */
+    private val oversize = LinkedHashSet<String>()
+
+    init {
+        removeLeftovers()
+    }
+
+    /** The complete stream for [token], or null. A hit makes it the most recently used. */
     fun lookup(token: String): CachedStream? = synchronized(lock) {
-        val cached = entries[token] ?: return null
-        if (!cached.file.exists()) {
-            entries.remove(token)
-            return null
-        }
+        val cached = entries.remove(token) ?: return null
+        if (!cached.file.exists()) return null
+        entries[token] = cached
         cached
     }
 
-    /** A new empty part file in [dir], or null when the directory cannot be created or written. */
-    fun newPartFile(): File? = try {
-        if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) null else File.createTempFile("run-", ".part", dir)
-    } catch (_: IOException) {
-        null
-    } catch (_: SecurityException) {
-        null
+    /**
+     * A new empty part file in [dir], or null when the directory cannot be created or written or when
+     * [PipeRangeConfig.maxConcurrentParts] part files are already open. Finish it with [promote] or [discard].
+     */
+    fun newPartFile(): File? = synchronized(lock) {
+        if (!config.enabled || activeParts.size >= config.maxConcurrentParts) return null
+        try {
+            if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) return null
+            File.createTempFile("run-", ".part", dir).also { activeParts.add(it) }
+        } catch (_: IOException) {
+            null
+        } catch (_: SecurityException) {
+            null
+        }
+    }
+
+    /** Deletes an unfinished [part] and frees its slot. */
+    fun discard(part: File) {
+        synchronized(lock) {
+            activeParts.remove(part)
+            part.delete()
+        }
     }
 
     /**
-     * Moves the finished [part] to [token]'s final name and returns it. A token that is already cached keeps its
-     * first stream (the part is deleted); an empty part is deleted and gives null.
+     * Moves the finished [part] to [token]'s final name and returns it, then deletes least recently used runs until
+     * the total is within the cap (the new run is never the victim). A token that is already cached keeps its first
+     * stream (the part is deleted); an empty part, or one above the per-token cap, is deleted and gives null.
      */
     fun promote(token: String, part: File): CachedStream? = synchronized(lock) {
-        entries[token]?.let { existing ->
+        activeParts.remove(part)
+        val existing = entries.remove(token)
+        if (existing != null && existing.file.exists()) {
+            entries[token] = existing
             part.delete()
             return existing
         }
         val size = part.length()
         if (size <= 0L) {
+            part.delete()
+            return null
+        }
+        if (size > config.maxBytesPerToken) {
+            markOversizeLocked(token)
             part.delete()
             return null
         }
@@ -89,39 +132,76 @@ class PipeRangeCache(private val dir: File, private val config: PipeRangeConfig)
             part.delete()
             return null
         }
-        CachedStream(target, size).also { entries[token] = it }
+        val stream = CachedStream(target, size)
+        entries[token] = stream
+        var total = entries.values.sumOf { it.size }
+        val iter = entries.entries.iterator()
+        while (total > config.maxBytesTotal && iter.hasNext()) {
+            val victim = iter.next()
+            if (victim.key == token) continue
+            total -= victim.value.size
+            victim.value.file.delete()
+            iter.remove()
+        }
+        stream
     }
 
-    /** A tee that copies a live run for [token] into a part file, or null when the cache cannot take it. */
+    /**
+     * A tee that copies a live run for [token] into a part file, or null when the cache cannot take it: disabled,
+     * the token is known to be too long, it is already cached, no part-file slot is free or the file cannot be made.
+     */
     fun openTee(token: String): TeeFill? {
-        if (!config.enabled) return null
+        if (!config.enabled || isOversize(token)) return null
+        if (lookup(token) != null) return null
         val part = newPartFile() ?: return null
         return try {
             TeeFill(this, token, part, FileOutputStream(part), config.maxBytesPerToken)
         } catch (_: IOException) {
-            part.delete()
+            discard(part)
             null
         }
     }
 
-    // STUBS (plan 02-16 Task 2, RED step): names only, behaviour arrives with the next commit.
-    fun drop(token: String) {}
+    /** Deletes [token]'s file and forgets it, including the too-big mark (the token left the media server's table). */
+    fun drop(token: String) {
+        synchronized(lock) {
+            entries.remove(token)?.file?.delete()
+            oversize.remove(token)
+        }
+    }
 
-    fun isOversize(token: String): Boolean = false
+    fun isOversize(token: String): Boolean = synchronized(lock) { token in oversize }
 
-    fun markOversize(token: String) {}
+    /** Remembers that [token]'s run is longer than the per-token cap, so it is neither teed nor filled again. */
+    fun markOversize(token: String) {
+        synchronized(lock) { markOversizeLocked(token) }
+    }
 
-    fun discard(part: File) {}
+    private fun markOversizeLocked(token: String) {
+        oversize.remove(token)
+        oversize.add(token)
+        while (oversize.size > MAX_OVERSIZE) oversize.remove(oversize.first())
+    }
 
-    /** Deletes every cached file and forgets them. */
+    /** Deletes every cached and part file and forgets every run and mark. Open part slots free themselves when their owner ends. */
     fun clear() {
         synchronized(lock) {
             entries.clear()
-            dir.listFiles()?.forEach { runCatching { it.delete() } }
+            oversize.clear()
+            removeLeftovers()
         }
     }
 
     fun stats(): PipeRangeStats = synchronized(lock) { PipeRangeStats(entries.size, entries.values.sumOf { it.size }) }
+
+    private fun removeLeftovers() {
+        dir.listFiles { f -> f.isFile && (f.name.endsWith(".part") || f.name.endsWith(".bin")) }
+            ?.forEach { runCatching { it.delete() } }
+    }
+
+    private companion object {
+        const val MAX_OVERSIZE = 256
+    }
 }
 
 /**
@@ -142,6 +222,7 @@ class TeeFill internal constructor(
     fun write(buf: ByteArray, off: Int, len: Int): Boolean {
         if (closed) return false
         if (written + len > maxBytes) {
+            cache.markOversize(token)
             abort()
             return false
         }
@@ -164,7 +245,7 @@ class TeeFill internal constructor(
             stream.close()
             cache.promote(token, part)
         } catch (_: IOException) {
-            part.delete()
+            cache.discard(part)
             null
         }
     }
@@ -175,6 +256,6 @@ class TeeFill internal constructor(
         if (closed) return
         closed = true
         runCatching { stream.close() }
-        part.delete()
+        cache.discard(part)
     }
 }
