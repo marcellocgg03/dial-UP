@@ -18,6 +18,9 @@ import dev.t2u.media.YtDlpGateway
  *    added with `addCommands` lands between the options and the URL (threat T-01-10).
  *  - `execute()` adds `--js-runtimes quickjs:<libqjs.so>` and `--ffmpeg-location` itself, and adds
  *    `--no-cache-dir` unless the request carries a `--cache-dir` option.
+ *  - `YoutubeDLRequest(List<String>)` accepts an empty list and `execute()` does not insist on a URL, so a
+ *    [YtDlpCall] whose url is null (the `--load-info-json` download form, plan 03-07) runs without a URL and
+ *    without the `--` marker. Its on-device behaviour is checked in plan 03-14.
  *  - `execute()` throws [com.yausername.youtubedl_android.YoutubeDLException] on a non-zero exit
  *    (its message is the process stderr), so a failure arrives here as an exception, not an exit code.
  */
@@ -29,13 +32,16 @@ class AndroidYtDlpGateway(
         checkOffMain()
         NativePayloads.ensure(context, evidence)
 
-        val request = YoutubeDLRequest(call.url)
+        // A call with no URL is the `--load-info-json` form: yt-dlp reads the extraction from a file. Never add a watch
+        // URL next to that option, yt-dlp would extract again.
+        val url = call.url
+        val request = if (url == null) YoutubeDLRequest(emptyList<String>()) else YoutubeDLRequest(url)
         for (option in call.options) {
             val value = option.value
             if (value == null) request.addOption(option.name) else request.addOption(option.name, value)
         }
-        // "--" after the options and before the URL: nothing in the URL can be read as an option.
-        request.addCommands(listOf("--"))
+        // "--" after the options and before the URL: nothing in the URL can be read as an option. Only with a URL.
+        if (url != null) request.addCommands(listOf("--"))
 
         val t0 = SystemClock.elapsedRealtime()
         return try {
