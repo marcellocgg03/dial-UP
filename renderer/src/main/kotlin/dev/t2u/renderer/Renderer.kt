@@ -60,6 +60,9 @@ private const val SERVICE_ID_PREFIX = "urn:upnp-org:serviceId:"
 private const val SEEK_AFTER_PLAY_WAIT_MS = 8000L
 private const val TRANSPORT_WAIT_STEP_MS = 300L
 
+/** Step of the wait for a playlist refresh in flight at a track end. */
+private const val QUEUE_SETTLE_STEP_MS = 100L
+
 /**
  * Upper bound on how long a Pause waits for a speaker that is still starting. A Pause that lands while the
  * speaker is fetching its first bytes makes it drop that connection and refetch the stream at the next Play
@@ -797,13 +800,49 @@ class Renderer(
                 if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
             }
             (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING -> {
-                // The track ended on the speaker (or someone pressed stop on it): advance the YouTube queue.
-                // next() runs in its own coroutine because it stops and restarts polling, which would
-                // cancel this one in the middle of the call.
+                // The speaker stopped. Both the launched coroutines below run outside this one, because they
+                // stop and restart polling, which would cancel the poll in the middle of the call.
                 stopPolling()
-                note("info", "Track finished on renderer - advancing queue")
-                scope.launch { next() }
+                val p = position
+                if (trackEnded(p, c?.startAt ?: 0)) {
+                    note("info", "Track finished on renderer - advancing queue")
+                    advanceAfterTrackEnd()
+                } else {
+                    // Stop pressed on the speaker, or a stream that died early: mirror it, do not skip the song.
+                    // The track stays loaded (clearing is only for a disconnect and the service Stop).
+                    note(
+                        "info",
+                        "Track stopped on the speaker at ${p?.rel?.toInt()} of ${p?.dur?.toInt()} s - mirroring the stop, not advancing",
+                    )
+                    scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
+                }
             }
+        }
+    }
+
+    /**
+     * Does a stop seen on the speaker mean the track played to its end? Yes when the end cannot be told apart
+     * from a stop (length unknown, no position, the position never moved off the start: the old Node
+     * behaviour applies) or when the last polled position is within [TRACK_END_TOLERANCE_S] of the length.
+     */
+    private fun trackEnded(p: PollPosition?, startAt: Int): Boolean =
+        p == null || p.dur <= 1 || p.rel - startAt < 1 || p.rel >= p.dur - TRACK_END_TOLERANCE_S
+
+    /**
+     * Moves the queue on after a track end. A playlist refresh in flight makes [next] a no-op, so the move waits
+     * for it, bounded by [Config.queueSettleTimeoutMs] on the injected clock; a newer play, a stop or removal
+     * that overtakes the wait ends it. When nothing could be advanced the player ends STOPPED, so the senders
+     * and the notification do not show a playing track that has silently stopped (T-03-29).
+     */
+    private fun advanceAfterTrackEnd() {
+        val seq = loadSeq.get()
+        scope.launch {
+            val deadline = deps.clock() + config.queueSettleTimeoutMs
+            while (queue.isUpdating && !superseded(seq) && deps.clock() < deadline) delay(QUEUE_SETTLE_STEP_MS)
+            if (superseded(seq)) return@launch
+            if (queue.isUpdating) note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
+            val advanced = next()
+            if (!advanced && !superseded(seq) && status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.STOPPED)
         }
     }
 

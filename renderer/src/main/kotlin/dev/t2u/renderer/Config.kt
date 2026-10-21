@@ -81,6 +81,8 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
  * @property outputFormat "auto" (the Node default) walks the format chain direct, mp4, adts, flac, mp3 with the
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
+ * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
+ *   next track; tuning for tests, not readable from config.json (plan 03-09).
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
  *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
  */
@@ -104,6 +106,7 @@ data class Config(
     val flacBits: Int = 16,
     val ytdlpVerbose: Boolean = false,
     val ffmpegLogLevel: String = "error",
+    val queueSettleTimeoutMs: Long = 10_000,
 ) {
     /** Throws [IllegalArgumentException] naming the offending setting. */
     fun validate() {
@@ -118,6 +121,7 @@ data class Config(
         require(mediaPort in 1..65535) { "mediaPort $mediaPort is not a port" }
         require(pollIntervalMs > 0) { "pollIntervalMs must be positive" }
         require(startTimeoutMs > 0) { "startTimeoutMs must be positive" }
+        require(queueSettleTimeoutMs >= 0) { "queueSettleTimeoutMs must not be negative" }
     }
 }
 
