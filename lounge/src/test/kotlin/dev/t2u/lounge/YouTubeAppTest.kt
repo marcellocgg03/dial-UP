@@ -359,4 +359,100 @@ class YouTubeAppTest {
         assertTrue("loungeScreenDisconnected" in messages("m").map { it.first })
         assertNotNull(store.text(StoreKeys.APP_PID))
     }
+
+    // ---- previous/next availability follows the queue (plan 03-04)
+
+    private fun vid(id: String, index: Int? = null) =
+        Video(id, Client.YT, if (index != null) VideoContext("LIST1", index) else null)
+
+    /** First -> autoplay second -> autoplay third: the scripted chain the hop tests walk. */
+    private fun installChain() {
+        player.queue.requestHandler = ScriptedHandler(
+            mapOf(
+                "VID00000001" to PreviousNextVideos(null, vid("VID00000002")),
+                "VID00000002" to PreviousNextVideos(vid("VID00000001", 0), vid("VID00000003")),
+                "VID00000003" to PreviousNextVideos(vid("VID00000002"), null),
+            ),
+        )
+    }
+
+    private fun navMessages(): List<Map<String, String>> = messages("cl").filter { it.first == "onHasPreviousNextChanged" }.map { it.second }
+
+    @Test
+    fun anAutoplayHopTellsTheSenderThatPreviousAndNextAreNowAvailable() = run {
+        installChain()
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        // one-song list with autoplay on: next is available through autoplay, previous is not
+        assertEquals("true", navMessages().last()["hasNext"])
+        assertEquals("false", navMessages().last()["hasPrevious"])
+
+        rpc("cl", "next")
+        awaitUntil(what = "hop to the autoplay video") { "play:VID00000002" in player.calls && player.status == PlayerStatus.PLAYING }
+        awaitUntil(what = "previous reported after the hop refresh") { navMessages().any { it["hasPrevious"] == "true" } }
+        assertTrue(messages("cl").any { it.first == "nowPlaying" && it.second["videoId"] == "VID00000002" })
+        assertEquals("true", navMessages().last()["hasNext"], "the next autoplay video exists")
+        awaitUntil(what = "autoplayUpNext for the new autoplay video") {
+            messages("cl").any { it.first == "autoplayUpNext" && it.second["videoId"] == "VID00000003" }
+        }
+    }
+
+    @Test
+    fun aStateEventThatChangesNoAvailabilitySendsNoExtraNavMessage() = run {
+        installChain()
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        barrier("cl")
+        val before = navMessages().size
+
+        // (a seek or a resume re-reports now playing and availability by the existing rules; pause and volume do not)
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "33"); put("muted", "false") })
+        awaitUntil(what = "volume") { "volume:33:false" in player.calls }
+        rpc("cl", "pause")
+        awaitUntil(what = "pause") { "pause" in player.calls }
+        barrier("cl")
+
+        assertEquals(before, navMessages().size, "same availability as the last one sent: nothing new")
+    }
+
+    @Test
+    fun theAvailabilitySentAtConnectIsRememberedSoLaterIdenticalStatesAddNoMessage() = run {
+        startedApp()
+        connect()
+        assertEquals("false", navMessages().last()["hasPrevious"])
+        // the first state event ever has no previous state and re-reports everything by the existing rules
+        player.notifyExternalStateChange(null)
+        barrier("cl")
+        val afterConnect = navMessages().size
+        player.position = 12.0
+        player.notifyExternalStateChange(null)
+        player.position = 13.0
+        player.notifyExternalStateChange(null)
+        barrier("cl")
+        assertEquals(afterConnect, navMessages().size, "same availability as at connect: no new message")
+    }
+
+    @Test
+    fun anInactiveSessionStatusMessageNeverOverwritesTheRememberedAvailability() = run {
+        installChain()
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "next")
+        awaitUntil(what = "previous reported") { navMessages().any { it["hasPrevious"] == "true" } }
+        barrier("cl")
+        val before = navMessages().size
+
+        // an unrelated loungeStatus on the inactive theme answers with a null availability
+        rpc("m", "loungeStatus", loungeStatus(emptyList(), "nobody"))
+        awaitUntil(what = "inactive answer") { messages("m").any { it.first == "onHasPreviousNextChanged" } }
+        assertEquals("false", messages("m").first { it.first == "onHasPreviousNextChanged" }.second["hasPrevious"])
+
+        player.position = 5.0
+        player.notifyExternalStateChange(null)
+        barrier("cl")
+        assertEquals(before, navMessages().size, "the inactive branch did not touch the remembered availability")
+    }
 }
