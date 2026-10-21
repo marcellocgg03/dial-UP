@@ -10,6 +10,7 @@ package dev.t2u.renderer
 import dev.t2u.lounge.CastReceiver
 import dev.t2u.lounge.Player
 import dev.t2u.lounge.PlayerStatus
+import dev.t2u.lounge.PlaylistRequestHandler
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Video
@@ -76,6 +77,7 @@ data class RendererDeps(
     val scope: CoroutineScope,
     val events: EventSink = NoEvents,
     val clock: () -> Long = System::currentTimeMillis,
+    val playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
 )
 
 /** What the speaker is playing, for the status UI and the notification. */

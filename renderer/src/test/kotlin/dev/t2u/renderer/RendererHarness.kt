@@ -5,6 +5,7 @@ package dev.t2u.renderer
 // observable (what was prepared, what was registered, in what order) and failable.
 
 import dev.t2u.lounge.CastReceiver
+import dev.t2u.lounge.PlaylistRequestHandler
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Sender
@@ -59,6 +60,7 @@ internal class RendererHarness(
     private val prepareDelayMs: Long = 0,
     @Volatile var prepareFailure: (VideoEntry) -> Throwable? = { null },
     private val directDelegate: MediaRegistrar? = null,
+    playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
 ) : AutoCloseable {
     val registered = CopyOnWriteArrayList<VideoEntry>()
     val prepared = CopyOnWriteArrayList<VideoEntry>()
@@ -128,6 +130,7 @@ internal class RendererHarness(
             },
             scope = scope,
             events = EventSink { kind, fields -> events.add(kind to fields) },
+            playlistRequestHandlerFactory = playlistRequestHandlerFactory,
         ),
     )
 
