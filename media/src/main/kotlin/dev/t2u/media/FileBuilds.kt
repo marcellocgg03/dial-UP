@@ -50,9 +50,17 @@ fun fileBuildArgs(
     require(startAt >= 0) { "startAt must not be negative" }
     val codec = when (format) {
         "mp4" -> listOf("-c:a", "copy", "-movflags", "+faststart", "-f", "mp4")
+        // AAC decodes to float: store it as 16- or 24-bit integer PCM, losslessly compressed.
+        "flac" -> {
+            require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
+            val depth = if (flacBits == 24) listOf("-sample_fmt", "s32", "-bits_per_raw_sample", "24") else listOf("-sample_fmt", "s16")
+            listOf("-c:a", "flac") + depth + listOf("-compression_level", "5", "-f", "flac")
+        }
         else -> throw IllegalArgumentException("format $format is not a file format")
     }
-    return listOf("-hide_banner", "-loglevel", logLevel, "-y") +
+    // Input-side -ss: ffmpeg seeks in the source instead of decoding up to the offset.
+    val seek = if (startAt > 0) listOf("-ss", startAt.toString()) else emptyList()
+    return listOf("-hide_banner", "-loglevel", logLevel, "-y") + seek +
         listOf("-i", source.path, "-vn") + codec + output.path
 }
 
@@ -75,6 +83,10 @@ class FileBuilder(
     private val retryDelaysMs: List<Long> = listOf(2000L, 5000L),
     private val onEvent: (Map<String, Any?>) -> Unit = {},
 ) {
+    init {
+        require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
+    }
+
     private val dir: File = dir.absoluteFile
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
