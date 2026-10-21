@@ -395,7 +395,9 @@ class Renderer(
 
     /**
      * Plays. For a stream loaded while paused this is the first Play it gets: the start-failure clock
-     * restarts here, so a long wait for the sender does not count as a failed start.
+     * restarts here, so a long wait for the sender does not count as a failed start. The same holds for a
+     * Play after a Pause when the speaker was never seen PLAYING for this load (an early Pause, G4): the
+     * 12 s check then measures from the Play and not from the load (Node measures from the load only).
      */
     override suspend fun doResume(): Boolean {
         val c = current
@@ -406,6 +408,10 @@ class Renderer(
             val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
             if (played) c.playSent = true
             return played
+        }
+        if (c != null && !sawPlaying) {
+            c.loadedAt = deps.clock()
+            note("info", "Start clock restarted at Play (speaker not yet seen playing)")
         }
         return ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
     }
