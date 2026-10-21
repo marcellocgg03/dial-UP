@@ -14,6 +14,8 @@ import dev.t2u.dial.DialAccessMode
 import dev.t2u.dial.DialAccessPolicy
 import dev.t2u.dial.DialRequest
 import dev.t2u.lounge.DialAdvertiser
+import dev.t2u.lounge.InnerTubeEndpoints
+import dev.t2u.lounge.InnerTubePlaylistRequestHandler
 import dev.t2u.lounge.LoungeEndpoints
 import dev.t2u.lounge.Player
 import dev.t2u.lounge.PlayerStatus
@@ -23,6 +25,7 @@ import dev.t2u.lounge.YouTubeCastReceiver
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.MediaServer
 import dev.t2u.media.PipeLauncher
+import dev.t2u.media.SourceDownloader
 import dev.t2u.media.VideoResolver
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
@@ -86,6 +89,11 @@ data class BridgeCount(val casting: Int, val total: Int)
  * Everything the bridge needs from the app around it. [accessMode] is read per request (D-01). [http] must come from
  * `lanHttpClient()` (SVC-05); every client the bridge hands on is derived from it. [scope] is the service scope.
  * [launcher] runs ffmpeg for the media server (null: streams answer 501, as in JVM tests).
+ *
+ * The last three are injectable so tests can stand in for YouTube and googlevideo, and default to production: [innerTubeEndpoints]
+ * is www.youtube.com, [upstreamPolicy] proxies googlevideo hosts over https only (T-03-31), and [sourceDownloader] (wired in
+ * plan 03-11 on Android) is what the file formats mp4 and flac download their source with; without it, or without [launcher]
+ * or [bufferDir], file builds are unavailable.
  */
 data class BridgeDeps(
     val config: Config,
@@ -100,6 +108,9 @@ data class BridgeDeps(
     val loungeEndpoints: LoungeEndpoints = LoungeEndpoints(),
     val onMediaRequest: (MediaRequest) -> Unit = {},
     val onDialRequest: (DialRequest) -> Unit = {},
+    val innerTubeEndpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
+    val sourceDownloader: SourceDownloader? = null,
+    val upstreamPolicy: UpstreamPolicy = UpstreamPolicy.GOOGLEVIDEO,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -207,7 +218,17 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
                     address,
                     maxAge,
                     port,
-                    RendererDeps(config, deps.resolver, media, deps.http, receivers, deps.scope, deps.events),
+                    RendererDeps(
+                        config,
+                        deps.resolver,
+                        media,
+                        deps.http,
+                        receivers,
+                        deps.scope,
+                        deps.events,
+                        // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
+                        playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
+                    ),
                 )
             }
             val reg = RendererRegistry(config, ports, factory, deps.events)
