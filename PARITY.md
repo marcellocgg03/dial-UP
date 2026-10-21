@@ -143,6 +143,11 @@ Deliberate differences from the Node code, each with its reason. Filled during t
 4. **SOAP transport.** `SoapClient` posts a `ByteArray` body through OkHttp (byte-exact `Content-Length`), where Node sets the header by hand from `Buffer.length`. A per-call timeout comes from `Call.timeout()`; cancelling the coroutine cancels the call.
 5. **Cleartext guard (SVC-05).** Node has no equivalent. `PrivateLanGuard` refuses plain HTTP to names and to non-private IPs, and `lanHttpClient()` disables redirects, because the manifest allows cleartext app-wide.
 6. **DIDL text.** `buildDidl` strips code points outside the XML 1.0 Char production before escaping (RESEARCH Pitfall 10); `upnp.js` only escapes.
+7. **Paused seek stays paused.** `Player.seek` on a paused player leaves it paused; yt-cast-receiver resumes it.
+8. **Restart-seek while paused.** A restart-seek on a paused player loads the stream without Play and sends Play at resume; Node's `#load` always sends Play.
+9. **Pause waits for a starting speaker.** Pause waits, bounded, for a speaker that is still starting; Node sends it at once.
+10. **Speaker metadata evidence.** `FakeRenderer` answers `TrackMetaData` and the renderer logs the speaker's metadata as lengths. Kotlin-only evidence, no Node counterpart.
+11. **Range on live video pipes.** Live video pipe tokens (adts, mp3) answer ranged GETs from the bytes of the first run: 206 with the true total, a bounded cache (32 MiB per token, 64 MiB total) and a bounded cold fill (8 s). Node's `#pipe` ignores Range and answers 200 from byte 0, which made the Lamp hang up after an early Pause. The switch `PIPE_RANGE_ANSWERING_DEFAULT` ended true (Kitchen Amp retest, forced adts, 2026-10-21). The start clock also restarts at a Play that follows a Pause when the speaker was never seen PLAYING; Node measures from the load only.
 
 ## (e) Licence notices
 
