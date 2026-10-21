@@ -77,6 +77,13 @@ data class VideoEntry(
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
 interface MediaRegistrar {
+    /**
+     * Builds whatever [entry]'s format needs before the URL is handed to a speaker: the file formats (mp4, flac)
+     * are downloaded and converted here. The renderer calls it before [registerVideo], so the speaker's start clock
+     * does not include the build. The default does nothing, so stubs that implement only [registerVideo] keep compiling.
+     */
+    suspend fun prepare(entry: VideoEntry) {}
+
     /** @return `/stream/<token>.<ext>`. @throws IllegalArgumentException for an invalid ID or a non-pipe format. */
     fun registerVideo(entry: VideoEntry): String
 }
@@ -149,6 +156,7 @@ class MediaServer(
     private val resolver: VideoResolver? = null,
     private val pipeRanges: PipeRangeConfig = PipeRangeConfig(),
     private val upstream: UpstreamFetcher? = null,
+    private val files: FileBuilder? = null,
 ) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -163,6 +171,7 @@ class MediaServer(
     fun start() {
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
+        files?.wipe()
         // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
         val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
             reuseAddress = true
@@ -182,6 +191,7 @@ class MediaServer(
         server?.stop(200, 1000)
         server = null
         rangeCache?.clear()
+        files?.close()
     }
 
     fun isRunning(): Boolean = server != null
@@ -214,13 +224,30 @@ class MediaServer(
         return "/stream/$token.$ext"
     }
 
+    override suspend fun prepare(entry: VideoEntry) {
+        if (entry.format !in FILE_FORMATS) return
+        val builder = files ?: throw IllegalStateException("no file builder: format ${entry.format} cannot be prepared")
+        builder.ensure(entry.videoId, entry.format, entry.startAt)
+    }
+
     override fun registerVideo(entry: VideoEntry): String {
         requireVideoId(entry.videoId)
         if (entry.format == "direct") return registerDirect(entry)
+        // Without a FileBuilder the file formats are not served at all: that stays the pipe-format refusal below.
+        if (entry.format in FILE_FORMATS && files != null) return registerFile(entry)
         require(outputArgs(entry.format) != null) { "format ${entry.format} is not a pipe format (adts or mp3)" }
         require(entry.startAt >= 0) { "startAt must not be negative" }
         val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
         return register(StreamEntry(StreamSource.VideoPipe(entry), entry.format, mime, entry.videoId))
+    }
+
+    /** A file format: the file must have been built by [prepare]; the token serves it with byte ranges. */
+    private fun registerFile(entry: VideoEntry): String {
+        require(entry.startAt >= 0) { "startAt must not be negative" }
+        val file = files?.fileFor(entry.videoId, entry.format, entry.startAt)
+            ?: throw IllegalStateException("prepare() must complete first for ${entry.format} of ${entry.videoId}")
+        val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
+        return register(StreamEntry(StreamSource.FileSource(file), entry.format, mime, entry.videoId))
     }
 
     private fun registerDirect(entry: VideoEntry): String {
