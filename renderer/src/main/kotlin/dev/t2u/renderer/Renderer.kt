@@ -194,6 +194,13 @@ class Renderer(
 
     private val loadSeq = AtomicInteger()
 
+    /**
+     * Counts the Pause and Play commands this app sends. A poll that began before such a command finished read
+     * the speaker's state from before it, so its mirror would put the old state back for one poll (and tell the
+     * senders); the poll compares the count and leaves the mirror out when it moved (plan 03-09, PLAY-07).
+     */
+    private val commandEpoch = AtomicInteger()
+
     @Volatile private var expectStop = false
 
     @Volatile private var sawPlaying = false
@@ -469,6 +476,15 @@ class Renderer(
      * A stop, a newer load or removal that overtakes the wait cancels the Pause.
      */
     override suspend fun doPause(): Boolean {
+        commandEpoch.incrementAndGet()
+        try {
+            return pauseNow()
+        } finally {
+            commandEpoch.incrementAndGet()
+        }
+    }
+
+    private suspend fun pauseNow(): Boolean {
         val seq = loadSeq.get()
         val c = current
         if (c != null && c.playSent) {
@@ -489,6 +505,15 @@ class Renderer(
      * 12 s check then measures from the Play and not from the load (Node measures from the load only).
      */
     override suspend fun doResume(): Boolean {
+        commandEpoch.incrementAndGet()
+        try {
+            return resumeNow()
+        } finally {
+            commandEpoch.incrementAndGet()
+        }
+    }
+
+    private suspend fun resumeNow(): Boolean {
         val c = current
         if (c != null && !c.playSent) {
             c.loadedAt = deps.clock()
@@ -753,6 +778,7 @@ class Renderer(
     private suspend fun poll() {
         if (expectStop) return
         polls++
+        val epoch = commandEpoch.get()
         val state = transportState()
         if (state == null || destroyed) return
         transport = state
@@ -776,6 +802,8 @@ class Renderer(
             }
         }
         if (destroyed) return
+        // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
+        if (epoch != commandEpoch.get()) return
 
         // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
         val c = current
