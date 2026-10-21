@@ -43,7 +43,8 @@ fun interface PlayerStateListener {
  * Semantics are those of yt-cast-receiver's Player (PLAY-05): pause acts only while PLAYING, resume
  * only while PAUSED (or replays the current video when stopped), stop is a no-op returning true
  * when already STOPPED or IDLE, play on a PLAYING player stops it first. One deliberate difference:
- * a seek on a PAUSED player leaves it paused (yt-cast-receiver resumes it).
+ * a seek on a PAUSED player leaves it paused (yt-cast-receiver resumes it). A second one: [getNavInfo]
+ * counts the autoplay video as a next video.
  */
 abstract class Player {
     val queue: Playlist = Playlist()
@@ -98,7 +99,7 @@ abstract class Player {
     suspend fun play(video: Video, position: Double = 0.0, aid: Int? = null): Boolean {
         if (status == PlayerStatus.PLAYING) stop()
         log("play", "video" to video.id, "position" to position)
-        queue.setAsCurrent(video)
+        val hop = queue.setAsCurrent(video)
         setStatusAndEmit(PlayerStatus.LOADING, aid)
         val result = try {
             doPlay(video, position)
@@ -109,6 +110,18 @@ abstract class Player {
             false
         }
         setStatusAndEmit(if (result) PlayerStatus.PLAYING else PlayerStatus.STOPPED, aid)
+        if (result && hop) {
+            // Playback already runs; look up the videos around the autoplay video so previous is no longer
+            // stale and the next autoplay video exists (RESEARCH Pitfall 3), then tell the listeners.
+            try {
+                queue.refreshAfterHop()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("hopRefreshFailed", "error" to (e.message ?: e::class.simpleName))
+            }
+            setStatusAndEmit(null, aid)
+        }
         return result
     }
 
@@ -256,7 +269,16 @@ abstract class Player {
         }
     }
 
-    fun getNavInfo(): NavInfo = NavInfo(queue.hasPrevious, queue.hasNext, autoplayMode)
+    /**
+     * What the sender's buttons can do. Deliberate deviation from yt-cast-receiver, which reports
+     * queue.hasNext only: [NavInfo.hasNext] is also true while autoplay is ENABLED and an autoplay
+     * video exists, so the phone enables next whenever the queue or autoplay has one.
+     */
+    fun getNavInfo(): NavInfo = NavInfo(
+        hasPrevious = queue.hasPrevious,
+        hasNext = queue.hasNext || (autoplayMode == AutoplayMode.ENABLED && queue.autoplay != null),
+        autoplayMode = autoplayMode,
+    )
 
     suspend fun getState(): PlayerState = PlayerState(
         status = status,

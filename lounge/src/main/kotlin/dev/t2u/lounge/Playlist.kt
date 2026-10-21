@@ -199,11 +199,26 @@ class Playlist {
         autoplay = autoplay,
     )
 
-    /** Makes [video] the current one without asking the handler (the player is about to play it). */
-    fun setAsCurrent(video: Video) {
-        if (current?.id == video.id) return
-        if (autoplay?.id == video.id) nextVideo = null
+    /**
+     * Makes [video] the current one without asking the handler (the player is about to play it).
+     * Returns true only when this is a hop: [video] differs from the current one and is the autoplay
+     * video, so the caller should run [refreshAfterHop] once playback runs.
+     */
+    fun setAsCurrent(video: Video): Boolean {
+        if (current?.id == video.id) return false
+        val hop = autoplay?.id == video.id
+        if (hop) nextVideo = null
         current = video
+        return hop
+    }
+
+    /**
+     * Asks the handler about the autoplay video the player just hopped to. An autoplay video comes from
+     * the handler and has no playlist index, so the normal refresh would skip it and leave previous
+     * stale and next empty after the first hop (RESEARCH Pitfall 3); this one is forced.
+     */
+    suspend fun refreshAfterHop() {
+        refreshPreviousNext(force = true)
     }
 
     private fun abortRefresh() {
@@ -213,14 +228,15 @@ class Playlist {
 
     /**
      * Asks the handler for the videos around the current one. A refresh that starts while another is
-     * suspended cancels the first, which then returns without touching previous or next.
+     * suspended cancels the first, which then returns without touching previous or next. A current video
+     * without a playlist index is skipped unless [force] is true (an autoplay hop, see [refreshAfterHop]).
      */
-    private suspend fun refreshPreviousNext() {
+    private suspend fun refreshPreviousNext(force: Boolean = false) {
         abortRefresh()
         previousVideo = null
         nextVideo = null
         val cur = current ?: return
-        if ((cur.context?.index ?: -1) < 0) return
+        if (!force && (cur.context?.index ?: -1) < 0) return
 
         var aborted = false
         val nav = coroutineScope {
