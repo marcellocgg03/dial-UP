@@ -10,6 +10,8 @@ package dev.t2u.renderer
 //    default D-04 suffix.
 //  * Mute assertions rely on the FakeRenderer SetMute/GetMute extension (the Node fake has neither).
 //  * Receivers, resolver and media registrar are stubs, as in Node (deps.createReceiver, resolver, mediaServer).
+//  * A restart-seek while paused loads without Play and Play is sent at resume (Node's #load always sends Play).
+//  * A Pause waits, bounded, for a starting speaker to report PLAYING (Node sends it at once).
 
 import dev.t2u.lounge.CastReceiver
 import dev.t2u.lounge.PlayerStatus
@@ -23,6 +25,7 @@ import dev.t2u.media.ResolvedInfo
 import dev.t2u.media.VideoEntry
 import dev.t2u.media.VideoResolver
 import dev.t2u.media.extensionOf
+import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.FakeRenderer
 import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -75,11 +78,16 @@ class RendererTest {
         config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
         resolveDelayMs: Long = 0,
         locationOverride: String? = null,
+        private val artist: String = "Band",
+        private val album: String = "",
     ) : AutoCloseable {
         val dataDir: File = Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
         val registered = CopyOnWriteArrayList<VideoEntry>()
         val resolves = CopyOnWriteArrayList<String>()
         val receiver = FakeReceiver()
+
+        /** Every evidence event the renderer reported: kind and fields. */
+        val events = CopyOnWriteArrayList<Pair<String, Map<String, Any?>>>()
 
         @Volatile var receiverOptions: ReceiverOptions? = null
 
@@ -96,8 +104,8 @@ class RendererTest {
                     mime = "audio/mp4",
                     headers = emptyMap(),
                     title = "Song & Dance – Pitypang ő ű $videoId",
-                    artist = "Band",
-                    album = "",
+                    artist = artist,
+                    album = album,
                     thumbnail = "https://i/x.jpg",
                     duration = 210.0,
                     filesize = 0,
@@ -133,8 +141,13 @@ class RendererTest {
                     receiver
                 },
                 scope = scope,
+                events = EventSink { kind, fields -> events.add(kind to fields) },
             ),
         )
+
+        /** The renderer events whose message starts with [prefix]. */
+        fun notes(prefix: String): List<Map<String, Any?>> =
+            events.filter { it.first == "renderer" && (it.second["message"] as? String)?.startsWith(prefix) == true }.map { it.second }
 
         override fun close() {
             runBlocking { renderer.destroy() }
@@ -390,6 +403,124 @@ class RendererTest {
             assertTrue(r.doStop())
             assertEquals(0, fake.count("SetVolume"))
             assertEquals(0, fake.count("SetMute"))
+        }
+    }
+
+    @Test
+    @DisplayName("a seek while paused keeps the speaker paused at the new offset")
+    fun seekWhilePausedKeepsTheSpeakerPausedAtTheNewOffset() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            assertTrue(r.pause())
+            val seen = CopyOnWriteArrayList<Pair<PlayerStatus, Double>>()
+            r.addStateListener { seen.add(it.current.status to it.current.position) }
+
+            assertTrue(r.seek(50.0))
+
+            assertEquals(2, fake.count("SetAVTransportURI"))
+            assertEquals(1, fake.count("Play"), "no Play reached the speaker")
+            assertEquals(listOf("adts" to 0, "adts" to 50), h.registered.map { it.format to it.startAt })
+            assertTrue(fake.state.transport != "PLAYING", fake.state.transport)
+            assertEquals(PlayerStatus.PAUSED, r.status)
+            assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PAUSED), seen.map { it.first })
+            assertEquals(50.0, seen.last().second, "the sender sees the new position, not the speaker's 0:01:05")
+            assertEquals(true, h.notes("Sent").last()["playDeferred"])
+            delay(300)
+            assertEquals(PlayerStatus.PAUSED, r.status)
+            assertEquals(1, fake.count("Play"))
+        }
+    }
+
+    @Test
+    @DisplayName("Play after a paused seek starts the new stream once")
+    fun playAfterAPausedSeekStartsTheNewStreamOnce() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            assertTrue(r.pause())
+            assertTrue(r.seek(50.0))
+
+            assertTrue(r.resume())
+
+            assertEquals(2, fake.count("Play"))
+            assertEquals(2, fake.count("SetAVTransportURI"))
+            assertEquals(2, h.registered.size)
+            assertEquals("PLAYING", fake.state.transport)
+            assertEquals(PlayerStatus.PLAYING, r.status)
+        }
+    }
+
+    @Test
+    @DisplayName("the start clock restarts at Play after a deferred load")
+    fun startClockRestartsAtPlayAfterADeferredLoad() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.doPlay(Video(A), 0.0))
+            r.notifyExternalStateChange(PlayerStatus.PAUSED)
+            assertTrue(r.seek(50.0))
+            delay(700) // longer than the start timeout: the deferred load must not count as a failed start
+
+            assertEquals(PlayerStatus.PAUSED, r.status)
+            assertTrue(r.resume())
+            delay(100)
+            assertEquals(PlayerStatus.PLAYING, r.status)
+            assertNull(r.lastError)
+
+            delay(600)
+            assertEquals(PlayerStatus.STOPPED, r.status)
+            assertTrue(r.lastError?.contains("stream") == true, r.lastError)
+        }
+    }
+
+    @Test
+    @DisplayName("a seek while playing keeps playing")
+    fun seekWhilePlayingKeepsPlaying() = withFake { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            assertTrue(r.seek(50.0))
+            assertEquals(2, fake.count("SetAVTransportURI"))
+            assertEquals(2, fake.count("Play"))
+            assertEquals(PlayerStatus.PLAYING, r.status)
+            assertEquals(false, h.notes("Sent").last()["playDeferred"])
+        }
+    }
+
+    @Test
+    @DisplayName("a Pause during start-up waits for PLAYING before it is sent")
+    fun aPauseDuringStartupWaitsForPlayingBeforeItIsSent() = withFake { fake ->
+        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.doPlay(Video(A), 0.0))
+            fake.state.transport = "TRANSITIONING"
+            val pause = h.scope.async { r.doPause() }
+            delay(300)
+            assertEquals(0, fake.count("Pause"))
+            assertTrue(pause.isActive, "the Pause is still waiting")
+            fake.state.transport = "PLAYING"
+            assertTrue(pause.await())
+            assertEquals(1, fake.count("Pause"))
+        }
+    }
+
+    @Test
+    @DisplayName("a Pause is sent anyway when the speaker never starts")
+    fun aPauseIsSentAnywayWhenTheSpeakerNeverStarts() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        Harness(fake).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.doPlay(Video(A), 0.0))
+            val t0 = System.currentTimeMillis()
+            assertTrue(r.doPause())
+            val took = System.currentTimeMillis() - t0
+            assertTrue(took in 100..2000, "waited $took ms")
+            assertEquals(1, fake.count("Pause"))
         }
     }
 }

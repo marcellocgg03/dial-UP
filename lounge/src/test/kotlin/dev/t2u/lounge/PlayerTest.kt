@@ -269,15 +269,29 @@ class PlayerTest {
     }
 
     @Test
-    fun seekWhilePausedResumesPlayback() = runBlocking {
+    fun seekWhilePausedStaysPausedAtTheNewPosition() = runBlocking {
         val (player, events) = playing()
         player.pause()
         events.clear()
         player.calls.clear()
+        player.position = 10.0
         assertTrue(player.seek(10.0))
-        assertEquals(listOf("seek:10.0", "resume"), player.calls.toList())
-        assertEquals(PlayerStatus.LOADING, events.first().current.status)
-        assertEquals(PlayerStatus.PLAYING, events.last().current.status)
+        assertEquals(listOf("seek:10.0"), player.calls.toList(), "no resume after a paused seek")
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PAUSED), events.map { it.current.status })
+        assertEquals(10.0, events.last().current.position)
+        assertEquals(PlayerStatus.PAUSED, player.status)
+    }
+
+    @Test
+    fun resumeAfterAPausedSeekCallsDoResumeOnce() = runBlocking {
+        val (player, _) = playing()
+        player.pause()
+        player.position = 10.0
+        assertTrue(player.seek(10.0))
+        player.calls.clear()
+        assertTrue(player.resume())
+        assertEquals(listOf("resume"), player.calls.toList())
+        assertEquals(PlayerStatus.PLAYING, player.status)
     }
 
     @Test
