@@ -15,17 +15,70 @@ const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
  */
 const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
 
-/** Output formats that exist in Phase 2: the two ffmpeg pipe formats (mp4/flac/direct/auto come later). */
-private val PHASE2_OUTPUT_FORMATS = setOf("adts", "mp3")
+/** Every value `outputFormat` may take (config.js): "auto" walks the learned chain, the rest force one format. */
+val OUTPUT_FORMATS = setOf("auto", "direct", "mp4", "adts", "flac", "mp3")
+
+/** The ffmpeg `-loglevel` names a config may select (T-03-09: a whitelist, never free text in an argument list). */
+val FFMPEG_LOG_LEVELS = setOf("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug")
+
+/** `mp3Bitrate` shape: a number then `k`, 64..320 (checked by [isValidMp3Bitrate]). */
+private val MP3_BITRATE = Regex("""^(\d{2,3})k$""")
+
+/** True for "64k" through "320k" (T-03-09: only this shape can reach an ffmpeg argument). */
+fun isValidMp3Bitrate(value: String): Boolean =
+    MP3_BITRATE.matchEntire(value)?.groupValues?.get(1)?.toInt()?.let { it in 64..320 } == true
 
 /**
- * Runtime configuration with the Node defaults. In Phase 2 this is built in code; reading it from
- * config.json is Phase 3 (SVC-07). RESEARCH Open Question 3 / A1: the Docker server runs on another
+ * DISC-04: which speakers appear. The patterns are case-insensitive regular expressions tested with a
+ * find-anywhere match against the speaker's friendly name (renderer.js tests `desc.friendlyName`, not
+ * the templated cast-menu name). A name is accepted when [include] is empty or any include pattern
+ * matches, and no [exclude] pattern matches. Held as the pattern strings so [Config] equality works;
+ * the compiled form is built once per filter. A pattern that does not compile never matches (and is
+ * reported by [problems]).
+ */
+data class NameFilter(val include: List<String> = emptyList(), val exclude: List<String> = emptyList()) {
+    private val includeRegexes: List<Regex> by lazy(LazyThreadSafetyMode.PUBLICATION) { compile(include) }
+    private val excludeRegexes: List<Regex> by lazy(LazyThreadSafetyMode.PUBLICATION) { compile(exclude) }
+
+    fun accepts(friendlyName: String): Boolean =
+        (include.isEmpty() || includeRegexes.any { it.containsMatchIn(friendlyName) }) &&
+            excludeRegexes.none { it.containsMatchIn(friendlyName) }
+
+    /** Patterns that do not compile, by key and index only (never the pattern text). */
+    fun problems(): List<String> =
+        problemsOf("include", include) + problemsOf("exclude", exclude)
+
+    private fun compile(patterns: List<String>): List<Regex> = patterns.mapNotNull { compileOrNull(it) }
+
+    private fun problemsOf(key: String, patterns: List<String>): List<String> =
+        patterns.mapIndexedNotNull { i, p -> if (compileOrNull(p) == null) "$key[$i] is not a valid regular expression" else null }
+
+    companion object {
+        val ALLOW_ALL = NameFilter()
+
+        /** Compiles a name pattern the way the filter does, or null when it is invalid. */
+        fun compileOrNull(pattern: String): Regex? =
+            try {
+                Regex(pattern, RegexOption.IGNORE_CASE)
+            } catch (_: java.util.regex.PatternSyntaxException) {
+                null
+            }
+    }
+}
+
+/**
+ * Runtime configuration with the Node defaults. Built in code, optionally overlaid by config.json
+ * (see [parseConfigFile], SVC-07). RESEARCH Open Question 3 / A1: the Docker server runs on another
  * host, so the Node ports (DIAL 3000+, media 8000) do not collide.
  *
  * @property excludeServers case-insensitive SERVER-header substrings of devices that are never speakers
  *   (RESEARCH Open Question 5: the QuickShare NOTIFY flood). This is not the DISC-04 include/exclude
- *   filter, which is Phase 3.
+ *   filter, which is [nameFilter].
+ * @property nameFilter DISC-04 include/exclude patterns on the friendly name; applied in Renderer.init (plan 03-06).
+ * @property mp3Bitrate ffmpeg bitrate for the mp3 format.
+ * @property flacBits bit depth for the flac format.
+ * @property ytdlpVerbose debug switch, consumed by the bridge (plan 03-10).
+ * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
  *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
  */
@@ -44,12 +97,21 @@ data class Config(
     val startTimeoutMs: Long = 12000,
     val autoplayOnConnect: Boolean = true,
     val excludeServers: List<String> = listOf("QuickShareUPnP"),
+    val nameFilter: NameFilter = NameFilter.ALLOW_ALL,
+    val mp3Bitrate: String = "192k",
+    val flacBits: Int = 16,
+    val ytdlpVerbose: Boolean = false,
+    val ffmpegLogLevel: String = "error",
 ) {
     /** Throws [IllegalArgumentException] naming the offending setting. */
     fun validate() {
-        require(outputFormat in PHASE2_OUTPUT_FORMATS) {
-            "outputFormat \"$outputFormat\" is not available in Phase 2 (only ${PHASE2_OUTPUT_FORMATS.joinToString(" and ")})"
+        require(outputFormat in OUTPUT_FORMATS) {
+            "outputFormat \"$outputFormat\" is not one of ${OUTPUT_FORMATS.joinToString(", ")}"
         }
+        require(isValidMp3Bitrate(mp3Bitrate)) { "mp3Bitrate must be a number from 64 to 320 followed by k" }
+        require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
+        require(ffmpegLogLevel in FFMPEG_LOG_LEVELS) { "ffmpegLogLevel must be one of ${FFMPEG_LOG_LEVELS.joinToString(", ")}" }
+        require(nameFilter.problems().isEmpty()) { nameFilter.problems().joinToString("; ") }
         require(receiverBasePort in 1..65535) { "receiverBasePort $receiverBasePort is not a port" }
         require(mediaPort in 1..65535) { "mediaPort $mediaPort is not a port" }
         require(pollIntervalMs > 0) { "pollIntervalMs must be positive" }
