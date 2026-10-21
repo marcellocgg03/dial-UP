@@ -64,10 +64,13 @@ class FakeState {
 class FakeRenderer(
     private val sink: String = "http-get:*:audio/mpeg:*,http-get:*:audio/mp4:*",
     private val neverPlay: Boolean = false,
-    private val bareFaultOn: Set<String> = emptySet(),
+    bareFaultOn: Set<String> = emptySet(),
     private val noGapless: Boolean = false,
 ) : AutoCloseable {
     val calls: MutableList<FakeCall> = CopyOnWriteArrayList()
+
+    /** Actions answered with a bare 500; a test may change it mid-run (a speaker that rejects Seek, then accepts it). */
+    @Volatile var bareFaultOn: Set<String> = bareFaultOn
     val state = FakeState()
 
     /**

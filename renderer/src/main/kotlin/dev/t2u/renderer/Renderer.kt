@@ -16,6 +16,7 @@ import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.Volume
 import dev.t2u.media.FALLBACK_CHAIN
+import dev.t2u.media.FILE_FORMATS
 import dev.t2u.media.FORMATS
 import dev.t2u.media.MediaRegistrar
 import dev.t2u.media.ResolvedInfo
@@ -72,6 +73,12 @@ private const val PAUSE_START_WAIT_MS = 3000L
  * Stop (whose join is 10 s), and speakers are cleared in parallel, so the worst case is one budget.
  */
 const val CLEAR_BUDGET_MS = 4000L
+
+/**
+ * How close to the end of the track (seconds) the last polled position must be for a stop seen on the speaker
+ * to count as the track ending. The poll interval is 2 s by default, so this covers one or two missed polls.
+ */
+const val TRACK_END_TOLERANCE_S = 10.0
 
 private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
 
@@ -305,11 +312,17 @@ class Renderer(
      * streams, which never come through a restart-seek. Without Play the speaker stays loaded and silent
      * and [doResume] sends the first Play of this stream.
      */
-    private suspend fun load(video: Video, position: Double, format: String? = null, startPlaying: Boolean = true): Boolean {
+    private suspend fun load(
+        video: Video,
+        position: Double,
+        format: String? = null,
+        startPlaying: Boolean = true,
+        forceOffset: Boolean = false,
+    ): Boolean {
         val seq = loadSeq.incrementAndGet()
         stopPolling()
         try {
-            val item = prepareItem(video, position, format)
+            val item = prepareItem(video, position, format, forceOffset)
             if (superseded(seq)) return false
 
             expectStop = true
@@ -364,13 +377,13 @@ class Renderer(
      * registered (a failed download, say) hands over to the next accepted format within the same load; with
      * a forced format, or when the chain is used up, the failure goes to the caller.
      */
-    private suspend fun prepareItem(video: Video, position: Double, format: String?): PreparedItem {
+    private suspend fun prepareItem(video: Video, position: Double, format: String?, forceOffset: Boolean = false): PreparedItem {
         val info = deps.resolver.resolve(video.id)
         val address = checkNotNull(ip) { "renderer was not initialised" }
         var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
         while (true) {
             try {
-                return buildItem(video, position, info, fmt, address)
+                return buildItem(video, position, info, fmt, address, forceOffset)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -383,11 +396,19 @@ class Renderer(
     }
 
     /** Prepare, register and describe one track in [fmt]. */
-    private suspend fun buildItem(video: Video, position: Double, info: ResolvedInfo, fmt: String, address: String): PreparedItem {
+    private suspend fun buildItem(
+        video: Video,
+        position: Double,
+        info: ResolvedInfo,
+        fmt: String,
+        address: String,
+        forceOffset: Boolean,
+    ): PreparedItem {
         val mime = mimeOf(fmt, info.mime)
-        // Seekable formats start at 0 and use AVTransport Seek; streams start ffmpeg at the offset.
+        // Seekable formats start at 0 and use AVTransport Seek, unless the speaker rejected it ([forceOffset]);
+        // streams start ffmpeg at the offset.
         val seekable = FORMATS[fmt]?.seekable ?: false
-        val startAt = if (!seekable && position > 1) Math.floor(position).toInt() else 0
+        val startAt = restartOffset(position, info.duration, !seekable || forceOffset)
         val cur = Current(video, fmt, startAt, info.mime)
         val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
             if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
@@ -411,6 +432,17 @@ class Renderer(
             ),
         )
         return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata)
+    }
+
+    /**
+     * The offset a stream or file starts at: `floor(position)` when [offsetStart] and the position is above 1 s,
+     * else 0. When the length is known it is clamped to one second before the end, so a seek past the end still
+     * yields a stream with something in it (T-03-30).
+     */
+    private fun restartOffset(position: Double, duration: Double, offsetStart: Boolean): Int {
+        if (!offsetStart || position <= 1) return 0
+        val offset = Math.floor(position).toInt()
+        return if (duration > 1) offset.coerceIn(0, maxOf(0, Math.floor(duration).toInt() - 1)) else maxOf(0, offset)
     }
 
     /** Make [item] the current track after the speaker was told to play it. */
@@ -540,12 +572,24 @@ class Renderer(
         loadedThisSession = false
     }
 
+    /**
+     * Seeks the speaker. Three paths, as in renderer.js `doSeek`:
+     *  * a format that is not seekable (adts, mp3) restarts the stream at the offset (the Play is deferred while
+     *    paused, so a paused seek stays paused);
+     *  * a seekable format (direct, mp4, flac) gets a native AVTransport Seek. The target is relative to the file
+     *    the speaker plays: a file that was built to start at an offset ([Current.startAt]) is sought at
+     *    `position - startAt`;
+     *  * when the speaker rejects the Seek, or the target lies before the start of an offset file, mp4 and flac load
+     *    a new file that starts at the position (clamped to one second before the end, see [restartOffset]). `direct`
+     *    has no such fallback: the seek is reported as failed.
+     * Only Seek, Stop, SetAVTransportURI and Play reach the speaker; nothing touches the volume.
+     */
     override suspend fun doSeek(position: Double): Boolean {
         val c = current ?: return false
+        val paused = status == PlayerStatus.PAUSED
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
             // has to reconnect), but works on every speaker.
-            val paused = status == PlayerStatus.PAUSED
             note(
                 "info",
                 "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream" +
@@ -553,7 +597,20 @@ class Renderer(
             )
             return load(c.video, position, c.format, startPlaying = !paused)
         }
-        return ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
+        val base = c.startAt
+        val before = position < base
+        if (!before) {
+            val target = position - base
+            if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) return true
+        }
+        if (c.format !in FILE_FORMATS) {
+            note("warn", "Renderer rejected Seek - ${c.format} has no restart fallback")
+            return false
+        }
+        val at = Math.floor(position).toInt()
+        val why = if (before) "Seek to ${at}s is before the start of the ${c.format} file (${base}s)" else "Renderer rejected Seek"
+        note("info", "$why - restarting ${c.format} at ${at}s" + if (paused) ", Play deferred until resume" else "")
+        return load(c.video, position, c.format, startPlaying = !paused, forceOffset = true)
     }
 
     /**

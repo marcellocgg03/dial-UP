@@ -50,7 +50,8 @@ internal class HarnessReceiver : CastReceiver {
 /**
  * One [Renderer] wired to a [FakeRenderer], a [HarnessReceiver], a stub resolver and a recording media
  * registrar. [prepareFailure] may return a throwable for an entry about to be prepared; [prepareDelayMs]
- * makes every prepare slow; [directDelegate] serves `direct` entries from a real media server.
+ * makes every prepare slow; [directDelegate] serves `direct` entries from a real media server; [duration] is the
+ * length the stub resolver reports (0 means unknown).
  * [close] destroys the renderer.
  */
 internal class RendererHarness(
@@ -61,6 +62,7 @@ internal class RendererHarness(
     @Volatile var prepareFailure: (VideoEntry) -> Throwable? = { null },
     private val directDelegate: MediaRegistrar? = null,
     playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
+    private val duration: Double = 210.0,
 ) : AutoCloseable {
     val registered = CopyOnWriteArrayList<VideoEntry>()
     val prepared = CopyOnWriteArrayList<VideoEntry>()
@@ -86,7 +88,7 @@ internal class RendererHarness(
                 artist = "Band",
                 album = "",
                 thumbnail = "https://i/x.jpg",
-                duration = 210.0,
+                duration = duration,
                 filesize = 0,
                 formatId = null,
             )
