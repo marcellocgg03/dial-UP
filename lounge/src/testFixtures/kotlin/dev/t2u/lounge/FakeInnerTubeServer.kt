@@ -21,6 +21,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -83,6 +86,54 @@ class FakeInnerTubeServer : AutoCloseable {
     /** Answers a request whose body has this videoId with literal JSON [json]. */
     fun onJson(videoId: String, json: String) {
         perVideo[videoId] = json
+    }
+
+    /**
+     * Scripts the answer for [videoId] in the shapes of the next-middle and next-last-item fixtures (03-RESEARCH.md
+     * Pattern 1), so the handler's real parser paths run. [index] is the index of [videoId] in its list: the previous
+     * video gets index - 1 and the next one index + 1. With a [nextId] the answer is the middle shape (the next video
+     * is also the autoplay video unless [autoplayId] names another). With only an [autoplayId] it is the last-item
+     * shape: the next renderer is the maybeHistory endpoint (no playlist, no index) and the autoplay renderer the
+     * autonav endpoint. All ids must be valid 11-character video ids. Keep every shape here, in this one function.
+     */
+    fun scriptNext(videoId: String, previousId: String?, nextId: String?, autoplayId: String? = null, playlistId: String = "PLTEST", index: Int = 0) {
+        val params = "EAEYAcABAdoBBAgBKgDyBQIKAA%3D%3D"
+        fun watch(id: String, withList: Boolean, at: Int) = buildJsonObject {
+            put("videoId", id)
+            if (withList) {
+                put("playlistId", playlistId)
+                put("index", at)
+            }
+            put("params", params)
+        }
+        fun renderer(kind: String, id: String, withList: Boolean, at: Int) = buildJsonObject {
+            putJsonObject(kind) { putJsonObject("endpoint") { put("watchEndpoint", watch(id, withList, at)) } }
+        }
+        val set = buildJsonObject {
+            put("mode", "NORMAL")
+            if (previousId != null) put("previousVideoRenderer", renderer("autoplayEndpointRenderer", previousId, true, (index - 1).coerceAtLeast(0)))
+            if (nextId != null) {
+                put("nextVideoRenderer", renderer("autoplayEndpointRenderer", nextId, true, index + 1))
+                put(
+                    "autoplayVideoRenderer",
+                    if (autoplayId != null) renderer("autonavEndpointRenderer", autoplayId, false, 0) else renderer("autoplayEndpointRenderer", nextId, true, index + 1),
+                )
+            } else if (autoplayId != null) {
+                put("nextVideoRenderer", renderer("maybeHistoryEndpointRenderer", autoplayId, false, 0))
+                put("autoplayVideoRenderer", renderer("autonavEndpointRenderer", autoplayId, false, 0))
+            }
+        }
+        val root = buildJsonObject {
+            putJsonObject("responseContext") { put("visitorData", "SERVERVISITOR1") }
+            putJsonObject("contents") {
+                putJsonObject("singleColumnWatchNextResults") {
+                    putJsonObject("autoplay") {
+                        putJsonObject("autoplay") { put("sets", kotlinx.serialization.json.JsonArray(listOf(set))) }
+                    }
+                }
+            }
+        }
+        perVideo[videoId] = root.toString()
     }
 
     override fun close() {
