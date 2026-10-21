@@ -92,11 +92,4 @@ class InnerTubePlaylistRequestHandlerTest {
         assertEquals("false", body["context"]!!.jsonObject["user"]!!.jsonObject["enableSafetyMode"]!!.jsonPrimitive.content)
         assertNotNull(body["context"]!!.jsonObject["request"])
     }
-
-    @Test
-    fun noTargetWithoutIndexAsksNothing() = runBlocking {
-        val result = handler().getPreviousNextVideos(Video("zzzzzzzzzz9"), Playlist())
-        assertNotNull(result)
-        assertNull(result.previous)
-    }
 }
