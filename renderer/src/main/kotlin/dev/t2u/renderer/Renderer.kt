@@ -44,6 +44,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
 import java.util.Locale
@@ -64,6 +65,13 @@ private const val TRANSPORT_WAIT_STEP_MS = 300L
  * (Lamp session B, 19:47:43), so the Pause is held back until the speaker reports PLAYING.
  */
 private const val PAUSE_START_WAIT_MS = 3000L
+
+/**
+ * Upper bound on one speaker clear (CAST-06): the Stop, the emptied SetAVTransportURI and the read of the
+ * current URI together. A speaker that does not answer must not hold up the lounge handler or the service
+ * Stop (whose join is 10 s), and speakers are cleared in parallel, so the worst case is one budget.
+ */
+const val CLEAR_BUDGET_MS = 4000L
 
 private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
 
@@ -181,6 +189,9 @@ class Renderer(
     @Volatile private var sawPlaying = false
 
     @Volatile private var destroyed = false
+
+    /** True once a track was handed to the speaker and until the speaker was cleared (CAST-06 guard). */
+    @Volatile private var loadedThisSession = false
 
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
@@ -412,6 +423,7 @@ class Renderer(
         sawPlaying = false
         metaReported = false
         expectStop = false
+        loadedThisSession = true
         startPolling()
     }
 
@@ -459,9 +471,9 @@ class Renderer(
     }
 
     /**
-     * Stops the speaker and forgets the track. CAST-06 seam (Phase 3): on cast disconnect the speaker's
-     * current track must also be cleared (Stop plus an emptied SetAVTransportURI); that reset belongs
-     * next to this method, not here yet.
+     * Stops the speaker and forgets the track. A plain Stop deliberately leaves the track loaded on the
+     * speaker, as after any stop; emptying it is [doClear] (CAST-06), which only a disconnect, a reset and the
+     * service Stop reach.
      */
     override suspend fun doStop(): Boolean {
         loadSeq.incrementAndGet() // cancel any pending load
@@ -473,6 +485,59 @@ class Renderer(
         val stopped = ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
         nowPlaying = null
         return stopped
+    }
+
+    /** CAST-06: the last sender is gone, so leave the speaker with nothing loaded (see [clearSpeaker]). */
+    override suspend fun doClear() {
+        clearSpeaker()
+    }
+
+    /**
+     * Stops the speaker and empties its transport URI, so the Sonos app has no track to resume. Only when this
+     * app loaded something this session and the speaker's current URI is still one of this app's own streams
+     * (T-03-26: another source's playback is never touched). The prefix check ignores the scheme, so a speaker
+     * that rewrites it still matches. Bounded by [CLEAR_BUDGET_MS] (T-03-27), never throws, does nothing once
+     * destroyed. The outcome is written to the evidence log (T-03-28): an empty URI the speaker refuses is the
+     * evidence plan 03-14 needs to pick a Sonos-specific alternative. Only Stop and SetAVTransportURI are
+     * sent, never a volume command.
+     */
+    override suspend fun clearSpeaker() {
+        if (destroyed || !loadedThisSession) return
+        try {
+            val finished = withTimeoutOrNull(CLEAR_BUDGET_MS) { clearNow() }
+            if (finished == null) {
+                note("warn", "clear gave up: the speaker did not answer within ${CLEAR_BUDGET_MS / 1000} s")
+                // The track is gone from our side either way; the speaker may still hold it.
+                forgetTrack()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("warn", "clear failed: ${e.message}")
+        }
+    }
+
+    private suspend fun clearNow() {
+        val uri = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.get("CurrentURI").orEmpty()
+        if (uri.isEmpty() || !uri.contains("$ip:${config.mediaPort}/stream/")) {
+            note("info", "clear skipped: the speaker is on another source")
+            return
+        }
+        loadSeq.incrementAndGet() // cancels a pending load
+        expectStop = true
+        stopPolling()
+        safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+        val emptied = ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
+        forgetTrack()
+        if (emptied) note("info", "Cleared the speaker") else note("warn", "the speaker refused an empty transport URI")
+    }
+
+    private fun forgetTrack() {
+        current = null
+        nowPlaying = null
+        position = null
+        transport = "STOPPED"
+        loadedThisSession = false
     }
 
     override suspend fun doSeek(position: Double): Boolean {
