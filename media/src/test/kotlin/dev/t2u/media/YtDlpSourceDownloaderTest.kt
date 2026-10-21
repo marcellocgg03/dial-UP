@@ -67,7 +67,7 @@ class YtDlpSourceDownloaderTest {
 
     @Test
     @DisplayName("yt-dlp info JSON is private and never written through a planted symlink")
-    fun ytDlpInfoJsonIsPrivateAndNeverWrittenThroughAPlantedSymlink() = runBlocking {
+    fun ytDlpInfoJsonIsPrivateAndNeverWrittenThroughAPlantedSymlink() = runBlocking<Unit> {
         val target = File(dir, "$videoId.source")
         val victim = File(dir, "victim").also { it.writeText("keep me") }
         try {
@@ -88,7 +88,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun theLoadInfoJsonCallHasTheNodeOptionsAndNoUrl() = runBlocking {
+    fun theLoadInfoJsonCallHasTheNodeOptionsAndNoUrl() = runBlocking<Unit> {
         val target = File(dir, "$videoId.source")
         val gw = writesAudio()
         YtDlpSourceDownloader(gw).download(videoId, info(), target)
@@ -106,14 +106,14 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun aMissingFormatIdFallsBackToTheNodeFormat() = runBlocking {
+    fun aMissingFormatIdFallsBackToTheNodeFormat() = runBlocking<Unit> {
         val gw = writesAudio()
         YtDlpSourceDownloader(gw).download(videoId, info(formatId = null), File(dir, "$videoId.source"))
         assertEquals(NODE_FORMAT, option(gw.seen.single().call, "-f"))
     }
 
     @Test
-    fun withoutRawJsonTheCallIsTheUrlForm() = runBlocking {
+    fun withoutRawJsonTheCallIsTheUrlForm() = runBlocking<Unit> {
         val target = File(dir, "$videoId.source")
         val gw = writesAudio()
         YtDlpSourceDownloader(gw, cacheDir = "/c/yt-dlp").download(videoId, info(raw = null), target)
@@ -128,7 +128,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun theInfoFileIsRemovedWhenYtDlpFailsAndTheMessageCarriesTheLastTwoLines() = runBlocking {
+    fun theInfoFileIsRemovedWhenYtDlpFailsAndTheMessageCarriesTheLastTwoLines() = runBlocking<Unit> {
         val target = File(dir, "$videoId.source")
         val stderr = "first line\nsecond line\nERROR: unable to download https://rr1.googlevideo.com/videoplayback?sig=SECRET: HTTP Error 403: Forbidden\n"
         val gw = FakeGateway { _, _ -> GatewayResult(1, "", stderr, 1) }
@@ -141,7 +141,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun aFailureWithoutA403IsNotForbidden() = runBlocking {
+    fun aFailureWithoutA403IsNotForbidden() = runBlocking<Unit> {
         val gw = FakeGateway { _, _ -> GatewayResult(1, "", "ERROR: boom", 1) }
         val e = assertFailsWith<DownloadException> {
             YtDlpSourceDownloader(gw).download(videoId, info(), File(dir, "$videoId.source"))
@@ -150,7 +150,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun aSuccessfulExitWithNoFileOrAnEmptyFileThrows() = runBlocking {
+    fun aSuccessfulExitWithNoFileOrAnEmptyFileThrows() = runBlocking<Unit> {
         val none = FakeGateway { _, _ -> GatewayResult(0, "", "", 1) }
         val t1 = File(dir, "one.source")
         assertFailsWith<DownloadException> { YtDlpSourceDownloader(none).download(videoId, info(), t1) }
@@ -173,7 +173,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun aLeftoverInfoFileIsReplacedNotAppendedTo() = runBlocking {
+    fun aLeftoverInfoFileIsReplacedNotAppendedTo() = runBlocking<Unit> {
         val target = File(dir, "$videoId.source")
         File(target.path + ".info.json").writeText("stale content that is longer than the new json ".repeat(10))
         val gw = writesAudio()
@@ -193,7 +193,7 @@ class YtDlpSourceDownloaderTest {
     }
 
     @Test
-    fun aCachingResolverLookupAttachesTheStdoutJsonAsRawJson() = runBlocking {
+    fun aCachingResolverLookupAttachesTheStdoutJsonAsRawJson() = runBlocking<Unit> {
         val stdout = """{"url":"https://h.googlevideo.com/videoplayback?sig=SECRET","ext":"m4a","format_id":"140","title":"T","duration":60}"""
         val gw = object : YtDlpGateway {
             override fun run(call: YtDlpCall) = GatewayResult(0, stdout, "", 1)
