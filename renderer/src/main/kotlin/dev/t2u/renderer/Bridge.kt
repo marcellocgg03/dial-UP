@@ -22,6 +22,7 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverDeps
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.YouTubeCastReceiver
+import dev.t2u.media.FileBuilder
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.MediaServer
 import dev.t2u.media.PipeLauncher
@@ -162,7 +163,37 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
         try {
             val wifi = net.wifiIp.hostAddress.orEmpty()
-            val media = MediaServer(wifi, base.mediaPort, deps.launcher, deps.onMediaRequest, deps.bufferDir, deps.resolver)
+            // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder wipes
+            // its directory at start and stop, so it gets a sub-directory of the buffer directory, never the buffer
+            // directory itself (RESEARCH Pitfall 7). The media server owns the builder's lifetime.
+            val launcher = deps.launcher
+            val bufferDir = deps.bufferDir
+            val downloader = deps.sourceDownloader
+            val files = if (launcher != null && bufferDir != null && downloader != null) {
+                FileBuilder(
+                    File(bufferDir, "files"),
+                    launcher,
+                    deps.resolver,
+                    downloader,
+                    flacBits = base.flacBits,
+                    ffmpegLogLevel = base.ffmpegLogLevel,
+                    onEvent = { fields -> emit("filebuild", *fields.map { it.key to it.value }.toTypedArray()) },
+                )
+            } else {
+                null
+            }
+            val media = MediaServer(
+                wifi,
+                base.mediaPort,
+                launcher,
+                deps.onMediaRequest,
+                bufferDir,
+                deps.resolver,
+                upstream = OkHttpUpstreamFetcher(deps.http, deps.upstreamPolicy),
+                files = files,
+                mp3Bitrate = base.mp3Bitrate,
+                ffmpegLogLevel = base.ffmpegLogLevel,
+            )
             media.start()
             mediaServer = media
             val config = base.copy(mediaPort = media.resolvedPort())

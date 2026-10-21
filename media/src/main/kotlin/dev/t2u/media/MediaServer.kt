@@ -92,10 +92,11 @@ interface MediaRegistrar {
 /**
  * The input side of mediaServer.js `#urlInputArgs`: ffmpeg reads [info]'s URL itself with the headers yt-dlp
  * chose, reconnects on a dropped read, and (input-side `-ss`) range-requests from [startAt] instead of reading from 0.
+ * [logLevel] is the `ffmpegLogLevel` config switch (a name from the validated whitelist).
  */
-fun urlInputArgs(info: ResolvedInfo, startAt: Int): List<String> {
+fun urlInputArgs(info: ResolvedInfo, startAt: Int, logLevel: String = "error"): List<String> {
     val hdrs = info.headers.entries.joinToString("") { (k, v) -> "$k: $v\r\n" }
-    val args = mutableListOf("-hide_banner", "-loglevel", "error")
+    val args = mutableListOf("-hide_banner", "-loglevel", logLevel)
     if (hdrs.isNotEmpty()) args += listOf("-headers", hdrs)
     args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
     if (startAt > 0) args += listOf("-ss", startAt.toString())
@@ -105,10 +106,10 @@ fun urlInputArgs(info: ResolvedInfo, startAt: Int): List<String> {
 
 /**
  * The input side of mediaServer.js `#fileInputArgs`: ffmpeg reads the downloaded file at [path], seeking on the
- * input side to [startAt] seconds when that is positive.
+ * input side to [startAt] seconds when that is positive. [logLevel] is the `ffmpegLogLevel` config switch.
  */
-fun fileInputArgs(path: String, startAt: Int): List<String> {
-    val args = mutableListOf("-hide_banner", "-loglevel", "error")
+fun fileInputArgs(path: String, startAt: Int, logLevel: String = "error"): List<String> {
+    val args = mutableListOf("-hide_banner", "-loglevel", logLevel)
     if (startAt > 0) args += listOf("-ss", startAt.toString())
     args += listOf("-i", path, "-vn")
     return args
@@ -146,6 +147,9 @@ data class MediaRequest(
  * OutgoingContent content length: a Content-Length header written by hand is duplicated by Ktor CIO
  * (RESEARCH Pitfall 4).
  *
+ * [mp3Bitrate] and [ffmpegLogLevel] are the `mp3Bitrate` and `ffmpegLogLevel` config switches (plan 03-10): the caller
+ * passes values that already passed `Config.validate`, so only a whitelisted name or a `NNNk` shape reaches ffmpeg.
+ *
  * [bufferDir] is where HTTP/1.0 clients get ffmpeg output buffered first (they cannot parse chunked framing,
  * RESEARCH Pitfall 6).
  *
@@ -170,6 +174,8 @@ class MediaServer(
     private val upstream: UpstreamFetcher? = null,
     private val files: FileBuilder? = null,
     private val prepareTimeoutMs: Long = 120_000,
+    private val mp3Bitrate: String = MP3_BITRATE,
+    private val ffmpegLogLevel: String = "error",
 ) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -542,7 +548,7 @@ class MediaServer(
     /** Output side of the ffmpeg command per format (mediaServer.js lines 123-124); null for non-pipe formats. */
     private fun outputArgs(format: String): List<String>? = when (format) {
         "adts" -> listOf("-c:a", "copy", "-f", "adts")
-        "mp3" -> listOf("-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-f", "mp3")
+        "mp3" -> listOf("-c:a", "libmp3lame", "-b:a", mp3Bitrate, "-f", "mp3")
         else -> null
     }
 
@@ -569,14 +575,14 @@ class MediaServer(
             val id = src.entry.videoId
             val startAt = src.entry.startAt
             val attempts = mutableListOf(
-                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt) },
+                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel) },
                 PipeAttempt("a fresh extraction") {
                     r.invalidate(id)
-                    urlInputArgs(r.resolve(id), startAt)
+                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel)
                 },
             )
             files?.let { f ->
-                attempts += PipeAttempt("the yt-dlp download") { fileInputArgs(f.sourceFile(id).path, startAt) }
+                attempts += PipeAttempt("the yt-dlp download") { fileInputArgs(f.sourceFile(id).path, startAt, ffmpegLogLevel) }
                 // Node moves the last attempt to the front when the source is there already.
                 if (f.hasSource(id)) attempts.add(0, attempts.removeAt(attempts.lastIndex))
             }
