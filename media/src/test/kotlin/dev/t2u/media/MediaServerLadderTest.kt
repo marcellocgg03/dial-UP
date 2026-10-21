@@ -114,8 +114,12 @@ class MediaServerLadderTest {
         if (::upstream.isInitialized) upstream.stop(0)
     }
 
-    private fun serve(resolver: VideoResolver?, host: String = "127.0.0.1"): MediaServer =
-        MediaServer(host, 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver).also {
+    private fun serve(
+        resolver: VideoResolver?,
+        host: String = "127.0.0.1",
+        pipeRanges: PipeRangeConfig = PipeRangeConfig(enabled = true),
+    ): MediaServer =
+        MediaServer(host, 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges).also {
             it.start()
             server = it
         }
@@ -370,6 +374,96 @@ class MediaServerLadderTest {
             ),
             bare,
         )
+    }
+
+    // ------------------------------------------------------------------------ plan 02-16 (G4): Range on live pipes
+
+    /** One plain GET that runs to its clean end; returns the path, the body and leaves the cache warm. */
+    private fun warmUp(ms: MediaServer, id: String = "rrrrrrrrrrr", format: String = "adts", startAt: Int = 10): Pair<String, ByteArray> {
+        val path = ms.registerVideo(VideoEntry(id, format, startAt = startAt))
+        val first = get(ms, path)
+        assertEquals(200, first.status)
+        assertTrue(first.body.size > 100_000, "body ${first.body.size}")
+        awaitReport { it.uri == path && it.status == 200 && it.pipeMode == "chunked" }
+        return path to first.body
+    }
+
+    @Test
+    @DisplayName("a Range request after a complete live GET is answered 206 from the bytes the speaker already received")
+    fun aRangeRequestAfterACompleteLiveGetIsAnswered206FromTheBytesTheSpeakerAlreadyReceived() {
+        val resolver = TestResolver(okUrls())
+        val ms = serve(resolver)
+        val path = ms.registerVideo(VideoEntry("rrrrrrrrrrr", "adts", startAt = 10))
+        val first = get(ms, path)
+        assertEquals(200, first.status)
+        assertEquals("chunked", first.header("Transfer-Encoding")?.lowercase())
+        assertNull(first.header("Content-Length"), first.headerLines.toString())
+        assertNull(first.header("Content-Range"))
+        assertNull(first.header("Accept-Ranges"))
+        val total = first.body.size
+        assertTrue(total > 100_000, "body $total")
+        awaitReport { it.uri == path && it.status == 200 }
+
+        val r = get(ms, path, mapOf("Range" to "bytes=7227-"))
+        assertEquals(206, r.status, "reported: $seen")
+        assertEquals("bytes 7227-${total - 1}/$total", r.header("Content-Range"))
+        assertEquals((total - 7227).toString(), r.header("Content-Length"))
+        assertTrue(first.body.copyOfRange(7227, total).contentEquals(r.body), "the tail must equal what the first GET sent")
+        assertEquals("bytes", r.header("Accept-Ranges"))
+        assertEquals("audio/aac", r.header("Content-Type"))
+        assertEquals(dlnaFeatures("adts"), r.header("contentFeatures.dlna.org"))
+        assertEquals("Streaming", r.header("transferMode.dlna.org"))
+        assertEquals("no-store", r.header("Cache-Control"))
+        assertEquals(1, launcher.starts.get(), "a cached answer starts no ffmpeg")
+        assertEquals(1, resolver.resolves.get(), "a cached answer resolves nothing")
+        val rep = awaitReport { it.uri == path && it.status == 206 }
+        assertEquals("cached-range", rep.pipeMode)
+        assertEquals((total - 7227).toLong(), rep.bytes)
+    }
+
+    @Test
+    @DisplayName("a plain GET after the cache holds the bytes is still a live chunked stream")
+    fun aPlainGetAfterTheCacheHoldsTheBytesIsStillALiveChunkedStream() {
+        val ms = serve(TestResolver(okUrls()))
+        val (path, _) = warmUp(ms)
+        val again = get(ms, path)
+        assertEquals(200, again.status)
+        assertEquals("chunked", again.header("Transfer-Encoding")?.lowercase())
+        assertNull(again.header("Content-Length"), again.headerLines.toString())
+        assertNull(again.header("Accept-Ranges"))
+        assertEquals(2, launcher.starts.get())
+    }
+
+    @Test
+    @DisplayName("a bounded range and a suffix range are answered from the cache")
+    fun aBoundedRangeAndASuffixRangeAreAnsweredFromTheCache() {
+        val ms = serve(TestResolver(okUrls()))
+        val (path, body) = warmUp(ms)
+        val total = body.size
+        val mid = get(ms, path, mapOf("Range" to "bytes=1000-1999"))
+        assertEquals(206, mid.status)
+        assertEquals("bytes 1000-1999/$total", mid.header("Content-Range"))
+        assertEquals("1000", mid.header("Content-Length"))
+        assertTrue(body.copyOfRange(1000, 2000).contentEquals(mid.body))
+        val tail = get(ms, path, mapOf("Range" to "bytes=-500"))
+        assertEquals(206, tail.status)
+        assertEquals("bytes ${total - 500}-${total - 1}/$total", tail.header("Content-Range"))
+        assertTrue(body.copyOfRange(total - 500, total).contentEquals(tail.body))
+        assertEquals(1, launcher.starts.get())
+    }
+
+    @Test
+    @DisplayName("two live runs of the same video token produce byte-identical ADTS")
+    fun twoLiveRunsOfTheSameVideoTokenProduceByteIdenticalAdts() {
+        // Characterization: the cold fill of the range cache relies on the run being deterministic. This measures the
+        // ffmpeg on this machine only; the phone's ffmpeg 7.1.1 is not measured (retest 02-16 compares the totals).
+        val ms = serve(TestResolver(okUrls()))
+        val path = ms.registerVideo(VideoEntry("sssssssssss", "adts", startAt = 30))
+        val a = get(ms, path)
+        val b = get(ms, path)
+        assertEquals(200, a.status)
+        assertTrue(a.body.size > 100_000)
+        assertTrue(a.body.contentEquals(b.body), "run 1 ${a.body.size} bytes, run 2 ${b.body.size} bytes")
     }
 
     private fun awaitReport(predicate: (MediaRequest) -> Boolean): MediaRequest {

@@ -129,6 +129,7 @@ class MediaServer(
     private val onRequest: (MediaRequest) -> Unit,
     private val bufferDir: File? = null,
     private val resolver: VideoResolver? = null,
+    private val pipeRanges: PipeRangeConfig = PipeRangeConfig(),
 ) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 

@@ -12,6 +12,8 @@ package dev.t2u.renderer
 //  * Receivers, resolver and media registrar are stubs, as in Node (deps.createReceiver, resolver, mediaServer).
 //  * A restart-seek while paused loads without Play and Play is sent at resume (Node's #load always sends Play).
 //  * A Pause waits, bounded, for a starting speaker to report PLAYING (Node sends it at once).
+//  * The start clock restarts at a Play that follows a Pause when the speaker was never seen PLAYING (Node
+//    measures from the load only).
 
 import dev.t2u.lounge.CastReceiver
 import dev.t2u.lounge.PlayerStatus
@@ -465,6 +467,27 @@ class RendererTest {
             delay(700) // longer than the start timeout: the deferred load must not count as a failed start
 
             assertEquals(PlayerStatus.PAUSED, r.status)
+            assertTrue(r.resume())
+            delay(100)
+            assertEquals(PlayerStatus.PLAYING, r.status)
+            assertNull(r.lastError)
+
+            delay(600)
+            assertEquals(PlayerStatus.STOPPED, r.status)
+            assertTrue(r.lastError?.contains("stream") == true, r.lastError)
+        }
+    }
+
+    @Test
+    @DisplayName("a Play after a Pause restarts the start clock when the speaker was never seen playing")
+    fun aPlayAfterAPauseRestartsTheStartClockWhenTheSpeakerWasNeverSeenPlaying() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.doPlay(Video(A), 0.0))
+            r.notifyExternalStateChange(PlayerStatus.PAUSED)
+            delay(700) // longer than the start timeout: a long Pause must not make the next Play look like a failed start
+
             assertTrue(r.resume())
             delay(100)
             assertEquals(PlayerStatus.PLAYING, r.status)
