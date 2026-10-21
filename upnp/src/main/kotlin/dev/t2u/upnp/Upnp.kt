@@ -176,6 +176,44 @@ fun buildDidl(item: DidlItem): String {
     ).joinToString("")
 }
 
+/** What a DIDL-Lite string says about its first item; every field is "" when the element is absent. */
+data class DidlSummary(
+    val title: String,
+    val creator: String,
+    val artist: String,
+    val album: String,
+    val albumArtUri: String,
+    val upnpClass: String,
+    val streamContent: String,
+)
+
+private const val DIDL_MAX_CHARS = 65_536
+
+/**
+ * Reads the first `item` of a DIDL-Lite string, ours or a speaker's (plan 02-15 evidence: what we sent and
+ * what the speaker keeps). The text is untrusted LAN input: it is cut at 65,536 characters, parsed with
+ * jsoup's XML parser (no DTD or entity resolution) and never throws. Null for null, blank, NOT_IMPLEMENTED,
+ * a parse failure or a document without an item. Callers log lengths and flags only, never the text.
+ */
+fun summarizeDidl(xml: String?): DidlSummary? {
+    if (xml.isNullOrBlank() || xml.contains("NOT_IMPLEMENTED", ignoreCase = true)) return null
+    return try {
+        val doc = Jsoup.parse(xml.take(DIDL_MAX_CHARS), "", Parser.xmlParser())
+        val item = doc.allElements.firstOrNull { local(it) == "item" } ?: return null
+        DidlSummary(
+            title = item.childText("title"),
+            creator = item.childText("creator"),
+            artist = item.childText("artist"),
+            album = item.childText("album"),
+            albumArtUri = item.childText("albumArtURI"),
+            upnpClass = item.childText("class"),
+            streamContent = item.childText("streamContent"),
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /** Alternative content-format spellings per MIME type, from formats.js. */
 val MIME_ALIASES: Map<String, List<String>> = mapOf(
     "audio/mp4" to listOf("audio/m4a", "audio/x-m4a", "audio/mp4a-latm"),

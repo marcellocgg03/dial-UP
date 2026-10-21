@@ -30,6 +30,7 @@ import dev.t2u.upnp.UpnpError
 import dev.t2u.upnp.buildDidl
 import dev.t2u.upnp.fetchDescription
 import dev.t2u.upnp.parseSink
+import dev.t2u.upnp.summarizeDidl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -173,6 +174,9 @@ class Renderer(
 
     @Volatile private var destroyed = false
 
+    /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
+    @Volatile private var metaReported = false
+
     init {
         events = deps.events
     }
@@ -301,7 +305,17 @@ class Renderer(
             }
 
             adopt(item)
-            note("info", "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})", "playDeferred" to !startPlaying)
+            // Evidence for the missing-artist question (G3): what we sent, as lengths and flags only.
+            val sent = summarizeDidl(item.metadata)
+            note(
+                "info",
+                "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})",
+                "playDeferred" to !startPlaying,
+                "artistChars" to (sent?.creator?.length ?: 0),
+                "albumChars" to (sent?.album?.length ?: 0),
+                "hasArt" to (sent?.albumArtUri?.isNotEmpty() == true),
+                "didlChars" to item.metadata.length,
+            )
             return true
         } catch (e: CancellationException) {
             throw e
@@ -354,6 +368,7 @@ class Renderer(
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
         lastError = null
         sawPlaying = false
+        metaReported = false
         expectStop = false
         startPolling()
     }
@@ -581,6 +596,10 @@ class Renderer(
                     uri = uri,
                     at = deps.clock(),
                 )
+                if (!stale && !metaReported) {
+                    metaReported = true
+                    reportSpeakerMetadata(r["TrackMetaData"])
+                }
             }
         }
         if (destroyed) return
@@ -613,6 +632,23 @@ class Renderer(
                 scope.launch { next() }
             }
         }
+    }
+
+    /** What the speaker keeps of the DIDL we sent (G3): lengths and flags only, never the artist, album or title text. */
+    private fun reportSpeakerMetadata(trackMetaData: String?) {
+        val s = summarizeDidl(trackMetaData)
+        note(
+            "info",
+            "Speaker reports track metadata",
+            "reported" to (s != null),
+            "titleChars" to (s?.title?.length ?: 0),
+            "creatorChars" to (s?.creator?.length ?: 0),
+            "artistChars" to (s?.artist?.length ?: 0),
+            "albumChars" to (s?.album?.length ?: 0),
+            "hasArt" to (s?.albumArtUri?.isNotEmpty() == true),
+            "upnpClass" to (s?.upnpClass?.take(80) ?: ""),
+            "streamContentChars" to (s?.streamContent?.length ?: 0),
+        )
     }
 
     /**
