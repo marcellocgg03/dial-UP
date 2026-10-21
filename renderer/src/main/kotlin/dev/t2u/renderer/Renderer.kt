@@ -156,6 +156,9 @@ class Renderer(
 
     @Volatile private var protocols: List<SinkProtocol>? = null
 
+    /** The format that last reached PLAYING on this speaker (loaded from its store, see [confirmFormat]). */
+    @Volatile private var learnedFormat: String? = null
+
     @Volatile private var ip: String? = null
 
     @Volatile private var receiver: CastReceiver? = null
@@ -330,16 +333,17 @@ class Renderer(
     /** Resolve and register a track; returns everything needed to play it. */
     private suspend fun prepareItem(video: Video, position: Double, format: String?): PreparedItem {
         val info = deps.resolver.resolve(video.id)
-        val fmt = format ?: config.outputFormat
+        val fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
         val mime = mimeOf(fmt, info.mime)
         // Seekable formats start at 0 and use AVTransport Seek; streams start ffmpeg at the offset.
         val seekable = FORMATS[fmt]?.seekable ?: false
         val startAt = if (!seekable && position > 1) Math.floor(position).toInt() else 0
         val cur = Current(video, fmt, startAt, info.mime)
-        val entry = VideoEntry(video.id, fmt, startAt) {
+        val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
             if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
             cur.fetched = true
         }
+        deps.media.prepare(entry)
         val streamPath = deps.media.registerVideo(entry)
         cur.streamPath = streamPath
         val address = checkNotNull(ip) { "renderer was not initialised" }
