@@ -42,7 +42,8 @@ fun interface PlayerStateListener {
  *
  * Semantics are those of yt-cast-receiver's Player (PLAY-05): pause acts only while PLAYING, resume
  * only while PAUSED (or replays the current video when stopped), stop is a no-op returning true
- * when already STOPPED or IDLE, play on a PLAYING player stops it first.
+ * when already STOPPED or IDLE, play on a PLAYING player stops it first. One deliberate difference:
+ * a seek on a PAUSED player leaves it paused (yt-cast-receiver resumes it).
  */
 abstract class Player {
     val queue: Playlist = Playlist()
@@ -147,7 +148,11 @@ abstract class Player {
         return result
     }
 
-    /** Seeks while playing or paused: reports LOADING at the target first, then PLAYING (a paused player resumes). */
+    /**
+     * Seeks while playing or paused: reports LOADING at the target first, then PLAYING. A paused player
+     * stays paused (LOADING, then PAUSED at the new position, no resume): a deliberate deviation from
+     * yt-cast-receiver 2.1.0, which resumes; the sender presses Play when it wants sound (plan 02-15, G1).
+     */
     suspend fun seek(position: Double, aid: Int? = null): Boolean {
         if (status != PlayerStatus.PLAYING && status != PlayerStatus.PAUSED) return false
         log("seek", "position" to position)
@@ -158,8 +163,8 @@ abstract class Player {
         if (result) {
             previousState = fakeState
             if (before.status == PlayerStatus.PAUSED) {
-                statusState.value = PlayerStatus.PAUSED
-                return resume(aid)
+                setStatusAndEmit(PlayerStatus.PAUSED, aid)
+                return true
             }
             setStatusAndEmit(PlayerStatus.PLAYING, aid)
         }

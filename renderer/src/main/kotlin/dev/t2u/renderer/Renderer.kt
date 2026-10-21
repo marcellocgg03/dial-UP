@@ -53,6 +53,13 @@ private const val SERVICE_ID_PREFIX = "urn:upnp-org:serviceId:"
 private const val SEEK_AFTER_PLAY_WAIT_MS = 8000L
 private const val TRANSPORT_WAIT_STEP_MS = 300L
 
+/**
+ * Upper bound on how long a Pause waits for a speaker that is still starting. A Pause that lands while the
+ * speaker is fetching its first bytes makes it drop that connection and refetch the stream at the next Play
+ * (Lamp session B, 19:47:43), so the Pause is held back until the speaker reports PLAYING.
+ */
+private const val PAUSE_START_WAIT_MS = 3000L
+
 private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
 
 /**
@@ -87,6 +94,9 @@ private class Current(val video: Video, val format: String, val startAt: Int, va
     @Volatile var fetched: Boolean = false
 
     @Volatile var streamPath: String? = null
+
+    /** False for a stream loaded while paused (SetAVTransportURI only) until the first Play is sent for it. */
+    @Volatile var playSent: Boolean = false
 }
 
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */
@@ -253,7 +263,13 @@ class Renderer(
     /** True when a newer play, a stop or destroy() has overtaken the load that took [seq]. */
     private fun superseded(seq: Int): Boolean = destroyed || seq != loadSeq.get()
 
-    private suspend fun load(video: Video, position: Double, format: String? = null): Boolean {
+    /**
+     * Stop, SetAVTransportURI and (when [startPlaying]) Play. Deferral is only used by restart-seeks while
+     * paused, where `startAt` already equals the target: the seek-after-play block below is for seekable
+     * streams, which never come through a restart-seek. Without Play the speaker stays loaded and silent
+     * and [doResume] sends the first Play of this stream.
+     */
+    private suspend fun load(video: Video, position: Double, format: String? = null, startPlaying: Boolean = true): Boolean {
         val seq = loadSeq.incrementAndGet()
         stopPolling()
         try {
@@ -271,18 +287,21 @@ class Renderer(
                 "CurrentURIMetaData" to item.metadata,
             )
             if (superseded(seq)) return false
-            call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
-            if (superseded(seq)) return false
+            if (startPlaying) {
+                call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+                item.current.playSent = true
+                if (superseded(seq)) return false
 
-            if (position > 1 && item.current.startAt == 0) {
-                waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
-                if (superseded(seq)) return false
-                safeCall(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
-                if (superseded(seq)) return false
+                if (position > 1 && item.current.startAt == 0) {
+                    waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
+                    if (superseded(seq)) return false
+                    safeCall(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
+                    if (superseded(seq)) return false
+                }
             }
 
             adopt(item)
-            note("info", "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})")
+            note("info", "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})", "playDeferred" to !startPlaying)
             return true
         } catch (e: CancellationException) {
             throw e
@@ -339,9 +358,42 @@ class Renderer(
         startPolling()
     }
 
-    override suspend fun doPause(): Boolean = ok(AV_TRANSPORT, "Pause", "InstanceID" to 0)
+    /**
+     * Pauses the speaker. A Pause during start-up makes the speaker drop its first connection and refetch
+     * the stream at the next Play (two ffmpeg launches), so while it is not PLAYING yet the Pause waits,
+     * bounded by min(startTimeoutMs, [PAUSE_START_WAIT_MS]) counted from the load, then is sent anyway.
+     * A stop, a newer load or removal that overtakes the wait cancels the Pause.
+     */
+    override suspend fun doPause(): Boolean {
+        val seq = loadSeq.get()
+        val c = current
+        if (c != null && c.playSent) {
+            val budget = minOf(config.startTimeoutMs, PAUSE_START_WAIT_MS)
+            val remaining = budget - (deps.clock() - c.loadedAt)
+            if (remaining > 0 && transportState() != "PLAYING") {
+                waitForState("PLAYING", remaining)
+            }
+            if (superseded(seq)) return false
+        }
+        return ok(AV_TRANSPORT, "Pause", "InstanceID" to 0)
+    }
 
-    override suspend fun doResume(): Boolean = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+    /**
+     * Plays. For a stream loaded while paused this is the first Play it gets: the start-failure clock
+     * restarts here, so a long wait for the sender does not count as a failed start.
+     */
+    override suspend fun doResume(): Boolean {
+        val c = current
+        if (c != null && !c.playSent) {
+            c.loadedAt = deps.clock()
+            sawPlaying = false
+            note("info", "Play sent for the stream loaded while paused", "startAt" to c.startAt)
+            val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+            if (played) c.playSent = true
+            return played
+        }
+        return ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+    }
 
     /**
      * Stops the speaker and forgets the track. CAST-06 seam (Phase 3): on cast disconnect the speaker's
@@ -365,8 +417,13 @@ class Renderer(
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
             // has to reconnect), but works on every speaker.
-            note("info", "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream")
-            return load(c.video, position, c.format)
+            val paused = status == PlayerStatus.PAUSED
+            note(
+                "info",
+                "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream" +
+                    if (paused) ", Play deferred until resume" else "",
+            )
+            return load(c.video, position, c.format, startPlaying = !paused)
         }
         return ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
     }
@@ -399,6 +456,8 @@ class Renderer(
 
     override suspend fun doGetPosition(): Double {
         val offset = current?.startAt ?: 0
+        // A stream loaded while paused has not been played: the speaker's RelTime belongs to the previous one.
+        if (current?.playSent == false) return offset.toDouble()
         val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
         // Right after a track change some speakers still report the previous track for a moment. If the
         // speaker names a different stream than ours, its numbers are not ours.
@@ -538,6 +597,8 @@ class Renderer(
         when {
             state == "PLAYING" -> {
                 sawPlaying = true
+                // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
+                if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
             }
             state == "PAUSED_PLAYBACK" -> {
