@@ -25,12 +25,14 @@ data class PipeRangeConfig(
     val maxBytesPerToken: Long = 32L * 1024 * 1024,
     val maxBytesTotal: Long = 64L * 1024 * 1024,
     val coldFillTimeoutMs: Long = 8000,
+    val maxConcurrentParts: Int = 2,
 ) {
     init {
         require(maxBytesPerToken > 0) { "maxBytesPerToken must be positive" }
         require(maxBytesTotal > 0) { "maxBytesTotal must be positive" }
         require(maxBytesPerToken <= maxBytesTotal) { "maxBytesPerToken must not exceed maxBytesTotal" }
         require(coldFillTimeoutMs > 0) { "coldFillTimeoutMs must be positive" }
+        require(maxConcurrentParts > 0) { "maxConcurrentParts must be positive" }
     }
 }
 
@@ -101,6 +103,15 @@ class PipeRangeCache(private val dir: File, private val config: PipeRangeConfig)
             null
         }
     }
+
+    // STUBS (plan 02-16 Task 2, RED step): names only, behaviour arrives with the next commit.
+    fun drop(token: String) {}
+
+    fun isOversize(token: String): Boolean = false
+
+    fun markOversize(token: String) {}
+
+    fun discard(part: File) {}
 
     /** Deletes every cached file and forgets them. */
     fun clear() {

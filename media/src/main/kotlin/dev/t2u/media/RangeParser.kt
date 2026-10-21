@@ -38,3 +38,6 @@ fun parseRange(header: String?, size: Long): ByteRange? {
     }
     return if (start <= end && start < size) ByteRange.Span(start, end) else ByteRange.Unsatisfiable
 }
+
+/** STUB (plan 02-16 Task 2, RED step). */
+fun isResumeRange(header: String?): Boolean = false

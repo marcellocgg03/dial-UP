@@ -175,6 +175,9 @@ class MediaServer(
 
     fun tokenCount(): Int = synchronized(tokens) { tokens.size }
 
+    /** STUB (plan 02-16 Task 2, RED step). */
+    fun rangeCacheStats(): PipeRangeStats = PipeRangeStats(0, 0)
+
     /**
      * Registers [entry] and returns the path to hand to a renderer: `/stream/<token>.<ext>`. The token is 16
      * bytes from SecureRandom as 32 lowercase hex characters; at most [MAX_TOKENS] stay registered, the
