@@ -455,4 +455,82 @@ class YouTubeAppTest {
         barrier("cl")
         assertEquals(before, navMessages().size, "the inactive branch did not touch the remembered availability")
     }
+
+    // ---- clear on disconnect, second phone, session switch (plan 03-04, CAST-06)
+
+    private fun clearCount() = player.calls.count { it == "clear" }
+
+    @Test
+    fun withTwoSendersOneLeavingChangesNothingAndTheLastOneClearsTheSpeaker() = run {
+        startedApp()
+        connect(id = "dev-1")
+        castAndPlay("VID00000001")
+        connect(id = "dev-2")
+
+        rpc("cl", "loungeStatus", loungeStatus(listOf(device("dev-2")), "dev-1", ui = "true"))
+        awaitUntil(what = "first sender gone") { disconnects.any { it.first == "dev-1" } }
+        barrier("cl")
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(0, clearCount())
+
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-2", ui = "true"))
+        awaitUntil(what = "player reset") { player.status == PlayerStatus.IDLE && disconnects.any { it.first == "dev-2" } }
+        assertEquals(1, clearCount())
+        assertEquals(listOf("play:VID00000001", "stop", "clear"), player.calls.toList())
+    }
+
+    @Test
+    fun theLastSenderLeavingClearsTheSpeakerEvenWhenItWasAlreadyStopped() = run {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "stopVideo")
+        awaitUntil(what = "stop") { player.status == PlayerStatus.STOPPED }
+
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "player reset") { player.status == PlayerStatus.IDLE }
+        assertEquals(1, clearCount(), "stop() was a no-op, the clear hook still ran")
+    }
+
+    @Test
+    fun switchingBetweenYouTubeAndYouTubeMusicResetsWithoutClearing() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+
+        a.launch("pairingCode=PAIR12&theme=m")
+
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertEquals(0, clearCount(), "the new session starts playing at once, so the speaker is not cleared")
+    }
+
+    @Test
+    fun theAppsOwnStopResetsWithClear() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+
+        a.stop()
+
+        assertEquals(1, clearCount())
+        assertEquals(PlayerStatus.IDLE, player.status)
+    }
+
+    @Test
+    fun aSecondPhoneJoiningDoesNotDisturbPlaybackAndGetsTheCurrentState() = run {
+        startedApp()
+        connect(id = "dev-1")
+        castAndPlay("VID00000001")
+        val playsBefore = player.calls.toList()
+
+        connect(id = "dev-2")
+        barrier("cl")
+
+        assertEquals(playsBefore, player.calls.toList(), "no stop, restart or clear")
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        val joined = messages("cl").last { it.first == "nowPlaying" }.second
+        assertEquals("VID00000001", joined["videoId"])
+        assertEquals("1", joined["state"])
+        assertTrue(messages("cl").any { it.first == "onStateChange" && it.second["state"] == "1" })
+    }
 }

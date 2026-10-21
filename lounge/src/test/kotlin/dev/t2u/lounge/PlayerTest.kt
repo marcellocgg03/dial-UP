@@ -10,6 +10,7 @@ import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -68,6 +69,14 @@ class FakePlayer : Player() {
     override suspend fun doGetPosition(): Double = position
 
     override suspend fun doGetDuration(): Double = duration
+
+    /** When set, doClear throws this after recording the call. */
+    var clearFailure: Throwable? = null
+
+    override suspend fun doClear() {
+        calls += "clear"
+        clearFailure?.let { throw it }
+    }
 }
 
 /**
@@ -569,5 +578,64 @@ class PlayerTest {
         assertEquals(PlayerStatus.PLAYING, player.status)
         assertEquals("B", player.queue.current?.id)
         assertTrue(reported.any { it["type"] == "hopRefreshFailed" })
+    }
+
+    // ---- unconditional clear hook (plan 03-04, CAST-06)
+
+    @Test
+    fun resetOnAPlayingPlayerStopsThenClears() = runBlocking {
+        val (player, _) = playing()
+        player.reset()
+        assertEquals(listOf("stop", "clear"), player.calls.toList())
+        assertEquals(PlayerStatus.IDLE, player.status)
+    }
+
+    @Test
+    fun resetOnAStoppedPlayerStillClears() = runBlocking {
+        val (player, _) = playing()
+        player.stop()
+        player.calls.clear()
+        player.reset()
+        assertEquals(listOf("clear"), player.calls.toList(), "stop is a no-op when STOPPED, clear is not")
+    }
+
+    @Test
+    fun resetOnAnIdlePlayerStillClears() = runBlocking {
+        val player = FakePlayer()
+        player.reset()
+        assertEquals(listOf("clear"), player.calls.toList())
+        assertEquals(PlayerStatus.IDLE, player.status)
+    }
+
+    @Test
+    fun resetWithoutClearNeverCallsDoClear() = runBlocking {
+        val (playing, _) = playing()
+        playing.reset(clear = false)
+        assertEquals(listOf("stop"), playing.calls.toList())
+
+        val idle = FakePlayer()
+        idle.reset(clear = false)
+        assertTrue(idle.calls.isEmpty())
+    }
+
+    @Test
+    fun aFailingDoClearStillLeavesThePlayerIdleWithAnEmptyQueue() = runBlocking {
+        val (player, _) = playing()
+        val reported = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") reported += fields }
+        player.clearFailure = IllegalStateException("speaker unreachable")
+
+        player.reset()
+
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertNull(player.queue.current)
+        assertTrue(reported.any { it["type"] == "clearFailed" })
+    }
+
+    @Test
+    fun aCancelledDoClearPropagates() = runBlocking {
+        val (player, _) = playing()
+        player.clearFailure = kotlinx.coroutines.CancellationException("cancelled")
+        assertFailsWith<kotlinx.coroutines.CancellationException> { player.reset() }
     }
 }
