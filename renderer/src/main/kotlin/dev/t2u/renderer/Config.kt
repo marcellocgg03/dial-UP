@@ -1,6 +1,6 @@
 package dev.t2u.renderer
 
-// Port of tube2upnp src/config.js (Phase 2 defaults; config.json is Phase 3 SVC-07), GPL-3.0-only.
+// Port of tube2upnp src/config.js (Node defaults; config.json is SVC-07), GPL-3.0-only.
 
 import java.io.File
 
@@ -79,6 +79,8 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property flacBits bit depth for the flac format.
  * @property ytdlpVerbose debug switch, consumed by the bridge (plan 03-10).
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
+ * @property outputFormat "auto" (the Node default) walks the format chain direct, mp4, adts, flac, mp3 with the
+ *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
  *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
  */
@@ -92,7 +94,7 @@ data class Config(
     val defaultMaxAge: Int = 1800,
     val nameTemplate: String = DEFAULT_NAME_TEMPLATE,
     val nameSuffix: String = DOCKER_COEXISTENCE_SUFFIX,
-    val outputFormat: String = "adts",
+    val outputFormat: String = "auto",
     val pollIntervalMs: Long = 2000,
     val startTimeoutMs: Long = 12000,
     val autoplayOnConnect: Boolean = true,

@@ -140,6 +140,7 @@ class BridgeTest {
     private fun newBridge(mode: () -> DialAccessMode = { accessMode }, mediaPort: Int = 0): Bridge {
         val config = Config(
             dataDir = dataDir,
+            outputFormat = "adts", // pinned to the pipe format these assertions were written for (plan 03-06)
             receiverBasePort = freePort(),
             mediaPort = mediaPort,
             pollIntervalMs = 100,

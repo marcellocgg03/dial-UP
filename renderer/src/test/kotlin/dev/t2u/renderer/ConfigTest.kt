@@ -69,7 +69,7 @@ class ConfigTest {
         assertEquals(1800, cfg.defaultMaxAge)
         assertEquals(2000L, cfg.pollIntervalMs)
         assertEquals(12000L, cfg.startTimeoutMs)
-        assertEquals("adts", cfg.outputFormat)
+        assertEquals("auto", cfg.outputFormat)
         assertTrue(cfg.autoplayOnConnect)
         assertEquals(listOf("QuickShareUPnP"), cfg.excludeServers)
         assertEquals(null, cfg.advertiseIp)

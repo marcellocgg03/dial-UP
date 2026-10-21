@@ -4,7 +4,7 @@ package dev.t2u.renderer
 // removal during a load, duration from the video), driven against the upnp FakeRenderer. GPL-3.0-only.
 //
 // Adaptations from the Node tests (plan 02-14 copies these into PARITY.md "Adaptations"):
-//  * The stream format is fixed: Config.outputFormat is "adts", so the token URL ends in .aac and the
+//  * The stream format is pinned: these tests set outputFormat "adts" (the app default is auto since plan 03-06), so the token URL ends in .aac and the
 //    registered format is "adts" (Node's setup used outputFormat "auto", which resolved to "direct"/.m4a).
 //  * The Node-titled init test uses nameSuffix "" to match the Node assertion; another test checks the
 //    default D-04 suffix.
@@ -77,7 +77,8 @@ class RendererTest {
     /** One renderer wired to stubs; [close] destroys it and the fake. */
     private class Harness(
         val fake: FakeRenderer,
-        config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
+        // pinned to the pipe format these assertions were written for (plan 03-06)
+        config: (File) -> Config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
         resolveDelayMs: Long = 0,
         locationOverride: String? = null,
         private val artist: String = "Band",
@@ -288,7 +289,8 @@ class RendererTest {
     @Test
     @DisplayName("the default config keeps the coexistence suffix in the receiver name")
     fun defaultSuffixIsKept() = withFake { fake ->
-        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200) }).use { h ->
+        // pinned to the pipe format these assertions were written for (plan 03-06)
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200) }).use { h ->
             h.renderer.init()
             assertEquals("🔊 Living Room Speaker (app)", h.receiverOptions?.name)
         }
@@ -458,7 +460,8 @@ class RendererTest {
     @Test
     @DisplayName("the start clock restarts at Play after a deferred load")
     fun startClockRestartsAtPlayAfterADeferredLoad() = withFake(FakeRenderer(neverPlay = true)) { fake ->
-        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+        // pinned to the pipe format these assertions were written for (plan 03-06)
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -481,7 +484,8 @@ class RendererTest {
     @Test
     @DisplayName("a Play after a Pause restarts the start clock when the speaker was never seen playing")
     fun aPlayAfterAPauseRestartsTheStartClockWhenTheSpeakerWasNeverSeenPlaying() = withFake(FakeRenderer(neverPlay = true)) { fake ->
-        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+        // pinned to the pipe format these assertions were written for (plan 03-06)
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -517,7 +521,8 @@ class RendererTest {
     @Test
     @DisplayName("a Pause during start-up waits for PLAYING before it is sent")
     fun aPauseDuringStartupWaitsForPlayingBeforeItIsSent() = withFake { fake ->
-        Harness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }).use { h ->
+        // pinned to the pipe format these assertions were written for (plan 03-06)
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))

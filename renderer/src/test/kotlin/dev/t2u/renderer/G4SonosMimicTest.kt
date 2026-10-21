@@ -180,6 +180,7 @@ class G4SonosMimicTest {
             deps = RendererDeps(
                 config = Config(
                     dataDir = File(dir, "data"),
+                    outputFormat = "adts", // pinned to the pipe format these assertions were written for (plan 03-06)
                     mediaPort = server.resolvedPort(),
                     pollIntervalMs = POLL_MS,
                     startTimeoutMs = START_TIMEOUT_MS,
