@@ -53,17 +53,25 @@ sealed interface StreamSource {
      * runs the attempt ladder (YouTube URL, then a fresh extraction) before answering 502.
      */
     data class VideoPipe(val entry: VideoEntry) : StreamSource
+
+    /**
+     * A cast video relayed from YouTube's own audio URL (format `direct`): the server resolves [entry]'s ID when
+     * the speaker asks and proxies the bytes through its [UpstreamFetcher], Range included.
+     */
+    data class DirectProxy(val entry: VideoEntry) : StreamSource
 }
 
 /**
- * A video to stream to a speaker as an ffmpeg pipe. [format] is `adts` or `mp3` (file formats are Phase 3),
- * [startAt] is the offset in seconds for streams the speaker cannot seek, [onRequest] runs once per GET
- * (mediaServer.js `entry.onRequest`).
+ * A video to stream to a speaker. [format] is `adts` or `mp3` (ffmpeg pipes) or `direct` (a relay of YouTube's own
+ * URL; then [ext] and [sourceMime] name the source container, e.g. `m4a` and `audio/mp4`). [startAt] is the offset in
+ * seconds for streams the speaker cannot seek, [onRequest] runs once per GET (mediaServer.js `entry.onRequest`).
  */
 data class VideoEntry(
     val videoId: String,
     val format: String,
     val startAt: Int = 0,
+    val ext: String? = null,
+    val sourceMime: String? = null,
     val onRequest: (() -> Unit)? = null,
 )
 
@@ -140,6 +148,7 @@ class MediaServer(
     private val bufferDir: File? = null,
     private val resolver: VideoResolver? = null,
     private val pipeRanges: PipeRangeConfig = PipeRangeConfig(),
+    private val upstream: UpstreamFetcher? = null,
 ) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -189,8 +198,7 @@ class MediaServer(
      * bytes from SecureRandom as 32 lowercase hex characters; at most [MAX_TOKENS] stay registered, the
      * oldest is evicted first (Node MAX_TOKENS).
      */
-    fun register(entry: StreamEntry): String {
-        val ext = extensionOf(entry.format)
+    fun register(entry: StreamEntry, ext: String = extensionOf(entry.format)): String {
         val raw = ByteArray(16).also(random::nextBytes)
         val token = raw.joinToString("") { "%02x".format(it) }
         val evicted = ArrayList<String>()
@@ -208,10 +216,20 @@ class MediaServer(
 
     override fun registerVideo(entry: VideoEntry): String {
         requireVideoId(entry.videoId)
+        if (entry.format == "direct") return registerDirect(entry)
         require(outputArgs(entry.format) != null) { "format ${entry.format} is not a pipe format (adts or mp3)" }
         require(entry.startAt >= 0) { "startAt must not be negative" }
         val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
         return register(StreamEntry(StreamSource.VideoPipe(entry), entry.format, mime, entry.videoId))
+    }
+
+    private fun registerDirect(entry: VideoEntry): String {
+        require(entry.startAt >= 0) { "startAt must not be negative" }
+        val ext = entry.ext
+        require(ext != null && DIRECT_EXT.matches(ext)) { "direct needs the source extension" }
+        val mime = entry.sourceMime?.trim()?.lowercase()
+        require(mime != null && DIRECT_MIME.matches(mime)) { "direct needs the source MIME type" }
+        return register(StreamEntry(StreamSource.DirectProxy(entry), "direct", mime, entry.videoId), ext)
     }
 
     /** Installs the handler into [app]; used by [start] and available to testApplication tests. */
@@ -249,6 +267,10 @@ class MediaServer(
                 is StreamSource.VideoPipe -> {
                     if (!head) runCatching { src.entry.onRequest?.invoke() }
                     servePipe(call, entry, src, head, out, token)
+                }
+                is StreamSource.DirectProxy -> {
+                    if (!head) runCatching { src.entry.onRequest?.invoke() }
+                    serveDirect(call, entry, src, head, out)
                 }
             }
         } finally {
@@ -354,6 +376,85 @@ class MediaServer(
         )
     }
 
+    // ------------------------------------------------------------------------------------ direct
+
+    /**
+     * mediaServer.js `#proxy`: the speaker's request is answered from YouTube's own audio URL. The URL comes only
+     * from the resolver, never from the request (no open proxy, T-03-06), and the fetcher decides which hosts it
+     * will talk to (T-03-05). The upstream URL is never logged or returned.
+     */
+    private suspend fun serveDirect(call: ApplicationCall, entry: StreamEntry, src: StreamSource.DirectProxy, head: Boolean, out: Outcome) {
+        out.pipeMode = "proxy"
+        val r = resolver
+        val up = upstream
+        if (r == null || up == null) {
+            out.status = 501
+            out.note = if (r == null) "no resolver for video tokens" else "no upstream fetcher"
+            call.respond(HttpStatusCode.NotImplemented)
+            return
+        }
+        val id = src.entry.videoId
+        var resp: UpstreamResponse? = null
+        try {
+            val info = r.resolve(id)
+            val headers = LinkedHashMap<String, String>(info.headers)
+            headers["Accept-Encoding"] = "identity"
+            resp = up.fetch(UpstreamRequest(info.url, if (head) "HEAD" else "GET", headers))
+            relayDirect(call, entry, resp, head, out)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (out.status != 0) throw e // the answer is already on its way: nothing left to report to the speaker
+            out.status = 502
+            out.note = failureLine("direct", e.message ?: e.javaClass.simpleName, false)
+            call.respond(HttpStatusCode.BadGateway)
+        } finally {
+            resp?.close()
+        }
+    }
+
+    /** Copies the upstream status, selected headers and body to the speaker. */
+    private suspend fun relayDirect(call: ApplicationCall, entry: StreamEntry, resp: UpstreamResponse, head: Boolean, out: Outcome) {
+        val status = HttpStatusCode.fromValue(resp.status)
+        val upstreamLength = resp.headers["content-length"]?.toLongOrNull()?.takeIf { it >= 0 }
+        dlnaHeaders(call, entry)
+        call.response.header(HttpHeaders.AcceptRanges, resp.headers["accept-ranges"] ?: "bytes")
+        for (name in PASSTHROUGH_HEADERS) resp.headers[name.lowercase()]?.let { call.response.header(name, it) }
+        out.status = status.value
+        val type = ContentType.parse(entry.mime)
+        val body = resp.body
+        if (head || body == null) {
+            call.respond(
+                object : OutgoingContent.NoContent() {
+                    override val status: HttpStatusCode = status
+                    override val contentType: ContentType = type
+                    override val contentLength: Long? = upstreamLength
+                },
+            )
+            return
+        }
+        call.respond(
+            object : OutgoingContent.WriteChannelContent() {
+                override val status: HttpStatusCode = status
+                override val contentType: ContentType = type
+                override val contentLength: Long? = upstreamLength
+
+                override suspend fun writeTo(channel: ByteWriteChannel) {
+                    withContext(Dispatchers.IO) {
+                        val buf = ByteArray(FILE_CHUNK)
+                        while (true) {
+                            val n = body.read(buf)
+                            if (n < 0) break
+                            channel.writeFully(buf, 0, n)
+                            channel.flush()
+                            out.bytes += n
+                        }
+                    }
+                }
+            },
+        )
+    }
+
     // ------------------------------------------------------------------------------------ pipe
 
     /** Output side of the ffmpeg command per format (mediaServer.js lines 123-124); null for non-pipe formats. */
@@ -392,7 +493,7 @@ class MediaServer(
                 },
             )
         }
-        is StreamSource.FileSource -> null
+        is StreamSource.FileSource, is StreamSource.DirectProxy -> null
     }
 
     /** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host (threat T-02-15). */
@@ -703,6 +804,11 @@ class MediaServer(
         private val COLD_FILL_FORMATS = setOf("adts")
         private const val BUFFER_TIMEOUT_SEC = 180L
         private const val MAX_NOTE = 400
+        private val DIRECT_EXT = Regex("[a-z0-9]{1,5}")
+        private val DIRECT_MIME = Regex("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
+
+        /** Upstream headers that go to the speaker as they are (mediaServer.js PASSTHROUGH_HEADERS). */
+        private val PASSTHROUGH_HEADERS = listOf(HttpHeaders.ContentRange, HttpHeaders.LastModified, HttpHeaders.ETag)
         private val TOKEN_PATH = Regex("^/stream/([0-9a-f]{32})\\.\\w+$")
     }
 }
