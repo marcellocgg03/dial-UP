@@ -144,6 +144,12 @@ class FileBuilder(
         return File(dir, "${keyOf(videoId, format, startAt)}.${extensionOf(format)}")
     }
 
+    /** True when the source of [videoId] is already downloaded (a non-empty file) or its download is running. */
+    fun hasSource(videoId: String): Boolean {
+        val path = sourcePath(videoId)
+        return isFinished(path) || synchronized(lock) { sourceJobs.containsKey(videoId) }
+    }
+
     private fun sourcePath(videoId: String): File = File(dir, "${requireVideoId(videoId)}.source")
 
     private fun isFinished(file: File): Boolean = file.isFile && file.length() > 0
@@ -220,8 +226,12 @@ class FileBuilder(
 
     // ------------------------------------------------------------------------------------ source
 
-    /** The downloaded source of [videoId]: reused when present, otherwise one shared download. */
-    private suspend fun sourceFile(videoId: String): File {
+    /**
+     * The downloaded source of [videoId]: reused when present, otherwise one shared download with the retries of
+     * [downloadSource]. The pipe formats use it as the last rung when YouTube keeps refusing ffmpeg (Node
+     * `#existingSourceFile`). Throws [FileBuildException] when every attempt failed.
+     */
+    suspend fun sourceFile(videoId: String): File {
         val dest = sourcePath(videoId)
         if (isFinished(dest)) return dest
         val job = synchronized(lock) {

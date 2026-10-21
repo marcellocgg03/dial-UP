@@ -32,6 +32,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.RandomAccessFile
 import java.security.SecureRandom
@@ -102,6 +103,17 @@ fun urlInputArgs(info: ResolvedInfo, startAt: Int): List<String> {
     return args
 }
 
+/**
+ * The input side of mediaServer.js `#fileInputArgs`: ffmpeg reads the downloaded file at [path], seeking on the
+ * input side to [startAt] seconds when that is positive.
+ */
+fun fileInputArgs(path: String, startAt: Int): List<String> {
+    val args = mutableListOf("-hide_banner", "-loglevel", "error")
+    if (startAt > 0) args += listOf("-ss", startAt.toString())
+    args += listOf("-i", path, "-vn")
+    return args
+}
+
 /** A registered stream. [format] is a key of [FORMATS]; [label] only appears in the request log. */
 data class StreamEntry(val source: StreamSource, val format: String, val mime: String, val label: String)
 
@@ -157,6 +169,7 @@ class MediaServer(
     private val pipeRanges: PipeRangeConfig = PipeRangeConfig(),
     private val upstream: UpstreamFetcher? = null,
     private val files: FileBuilder? = null,
+    private val prepareTimeoutMs: Long = 120_000,
 ) : MediaRegistrar {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -227,7 +240,12 @@ class MediaServer(
     override suspend fun prepare(entry: VideoEntry) {
         if (entry.format !in FILE_FORMATS) return
         val builder = files ?: throw IllegalStateException("no file builder: format ${entry.format} cannot be prepared")
-        builder.ensure(entry.videoId, entry.format, entry.startAt)
+        // RESEARCH Pitfall 6: the total build time is bounded apart from the speaker's start clock. Giving up only
+        // stops waiting: the builder's shared job lives in its own scope, so a later prepare joins it.
+        val done = withTimeoutOrNull(prepareTimeoutMs) { builder.ensure(entry.videoId, entry.format, entry.startAt) }
+        if (done == null) {
+            throw IllegalStateException("preparing ${entry.format} took longer than ${prepareTimeoutMs / 1000} s")
+        }
     }
 
     override fun registerVideo(entry: VideoEntry): String {
@@ -542,20 +560,27 @@ class MediaServer(
     /**
      * The ladder of mediaServer.js `#pipe`: a [StreamSource.PipeSource] has one attempt, a
      * [StreamSource.VideoPipe] reads YouTube's URL and, when that fails, drops the cached resolve and reads a
-     * fresh extraction. The yt-dlp download rung of the Node ladder belongs to the file formats (Phase 3).
+     * fresh extraction, and, when a [FileBuilder] is configured, finally lets yt-dlp download the track and feeds
+     * ffmpeg the local file. A source that is already downloaded (or downloading) goes first, so YouTube is not asked.
      */
     private fun attemptsFor(src: StreamSource): List<PipeAttempt>? = when (src) {
         is StreamSource.PipeSource -> listOf(PipeAttempt("stream") { src.inputArgs })
         is StreamSource.VideoPipe -> resolver?.let { r ->
             val id = src.entry.videoId
             val startAt = src.entry.startAt
-            listOf(
+            val attempts = mutableListOf(
                 PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt) },
                 PipeAttempt("a fresh extraction") {
                     r.invalidate(id)
                     urlInputArgs(r.resolve(id), startAt)
                 },
             )
+            files?.let { f ->
+                attempts += PipeAttempt("the yt-dlp download") { fileInputArgs(f.sourceFile(id).path, startAt) }
+                // Node moves the last attempt to the front when the source is there already.
+                if (f.hasSource(id)) attempts.add(0, attempts.removeAt(attempts.lastIndex))
+            }
+            attempts
         }
         is StreamSource.FileSource, is StreamSource.DirectProxy -> null
     }

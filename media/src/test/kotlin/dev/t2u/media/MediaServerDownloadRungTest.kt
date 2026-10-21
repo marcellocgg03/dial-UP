@@ -196,7 +196,7 @@ class MediaServerDownloadRungTest {
     }
 
     @Test
-    fun anExistingSourceIsTriedFirstAndYouTubeIsNotContacted() = runBlocking {
+    fun anExistingSourceIsTriedFirstAndYouTubeIsNotContacted() = runBlocking<Unit> {
         val resolver = RefusedResolver(base)
         val downloader = FakeSourceDownloader(source)
         val files = builder(resolver, downloader)
@@ -216,7 +216,7 @@ class MediaServerDownloadRungTest {
     }
 
     @Test
-    fun hasSourceIsTrueWhileTheDownloadRunsAndAfterItEnded() = runBlocking {
+    fun hasSourceIsTrueWhileTheDownloadRunsAndAfterItEnded() = runBlocking<Unit> {
         val resolver = RefusedResolver(base)
         val files = builder(resolver, FakeSourceDownloader(source, delayMs = 300))
         assertFalse(files.hasSource("mmmmmmmmmmm"))
@@ -242,7 +242,7 @@ class MediaServerDownloadRungTest {
     // ----- the time bound on prepare ------------------------------------------------------------------------
 
     @Test
-    fun prepareGivesUpAfterTheTimeBoundButTheBuildKeepsRunning() = runBlocking {
+    fun prepareGivesUpAfterTheTimeBoundButTheBuildKeepsRunning() = runBlocking<Unit> {
         val resolver = RefusedResolver(base)
         val downloader = FakeSourceDownloader(source, delayMs = 800)
         val files = builder(resolver, downloader)
