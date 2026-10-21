@@ -88,13 +88,17 @@ class CastFeature : SpikeFeature, CastCountSource {
         host.scope.launch { lifecycle.withLock { startBridge(host) } }
     }
 
-    /** Stop in the notification ends here: every receiver says byebye and goodbye before the service goes. */
+    /**
+     * Stop in the notification ends here: every speaker this app loaded is emptied first (CAST-06), then every
+     * receiver says byebye and goodbye before the service goes. The clear is bounded to about 4 s and runs in
+     * parallel across speakers, so the worst case stays inside the 10 s join below.
+     */
     override fun stop() {
         runCatching { monitor?.stop() }
         monitor = null
         rebindJob?.cancel()
         // sockets are never touched on the main thread
-        val t = Thread({ runBlocking { lifecycle.withLock { stopBridge() } } }, "t2u-cast-stop").apply { isDaemon = true }
+        val t = Thread({ runBlocking { lifecycle.withLock { stopBridge(clearSpeakers = true) } } }, "t2u-cast-stop").apply { isDaemon = true }
         t.start()
         t.join(10_000)
     }
@@ -163,14 +167,14 @@ class CastFeature : SpikeFeature, CastCountSource {
         scheduleWarmUp(h, b)
     }
 
-    /** Call with [lifecycle] held. */
-    private suspend fun stopBridge() {
+    /** Call with [lifecycle] held. [clearSpeakers]: empty every speaker's transport URI first (CAST-06). */
+    private suspend fun stopBridge(clearSpeakers: Boolean) {
         val b = bridge
         bridge = null
         countJob?.cancel()
         countJob = null
         try {
-            b?.stop()
+            b?.stop(clearSpeakers)
         } finally {
             count.value = CastCount(0, 0)
         }
@@ -205,7 +209,8 @@ class CastFeature : SpikeFeature, CastCountSource {
             delay(REBIND_DEBOUNCE_MS)
             lifecycle.withLock {
                 val oldIp = lastIp
-                stopBridge()
+                // the bridge comes straight back on the new address and playback is not being ended
+                stopBridge(clearSpeakers = false)
                 startBridge(h)
                 h.evidence.event("net", mapOf("rebind" to true, "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
             }
