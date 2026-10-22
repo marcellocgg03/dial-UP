@@ -257,6 +257,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 "pipeMode" to req.pipeMode,
                 "label" to req.label,
                 "note" to req.note,
+                "upstream" to req.upstream,
             ),
         )
     }

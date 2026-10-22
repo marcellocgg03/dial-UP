@@ -387,6 +387,7 @@ class Renderer(
         // A load or poll still in flight must not bring the speaker back to life afterwards.
         destroyed = true
         loadSeq.incrementAndGet()
+        releaseStream(current)
         current = null
         pending = null
         stopPolling()
@@ -561,10 +562,21 @@ class Renderer(
         return if (duration > 1) offset.coerceIn(0, maxOf(0, Math.floor(duration).toInt() - 1)) else maxOf(0, offset)
     }
 
+    /** Tells the media server the stream of [c] is no longer needed, so it drops what it holds in memory for it (plan 03-20). */
+    private fun releaseStream(c: Current?) {
+        val path = c?.streamPath ?: return
+        try {
+            deps.media.release(path)
+        } catch (_: Exception) {
+            // freeing memory must never break a stop, a load or a removal
+        }
+    }
+
     /** Make [item] the current track after the speaker was told to play it. */
     private fun adopt(item: PreparedItem) {
         item.current.loadedAt = deps.clock()
         item.current.startedAt = item.current.loadedAt
+        if (current !== item.current) releaseStream(current) // the stream this one replaces
         current = item.current
         nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail)
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
@@ -664,6 +676,7 @@ class Renderer(
         position = null
         pending = null
         transport = "STOPPED"
+        releaseStream(current)
         current = null
         stopPolling()
         expectStop = true
@@ -719,6 +732,7 @@ class Renderer(
     }
 
     private fun forgetTrack() {
+        releaseStream(current)
         current = null
         nowPlaying = null
         position = null

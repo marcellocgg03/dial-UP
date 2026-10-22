@@ -17,8 +17,10 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -42,6 +44,7 @@ class DirectReadAheadTest {
     private class CountingUpstream(
         private val content: (videoId: String, gen: Int) -> ByteArray,
         private val respond: (call: Call, number: Int) -> UpstreamResponse? = { _, _ -> null },
+        private val delayMs: Long = 0,
     ) : UpstreamFetcher {
         val calls = CopyOnWriteArrayList<Call>()
         private val count = AtomicInteger()
@@ -51,6 +54,7 @@ class DirectReadAheadTest {
             val gen = Regex("gen=(\\d+)").find(request.url)!!.groupValues[1].toInt()
             val call = Call(id, gen, request.headers["Range"])
             calls.add(call)
+            if (delayMs > 0) Thread.sleep(delayMs)
             respond(call, count.getAndIncrement())?.let { return it }
             val data = content(id, gen)
             val m = Regex("bytes=(\\d+)-(\\d*)").find(call.range.orEmpty()) ?: return reply(200, data, emptyMap())
@@ -215,6 +219,164 @@ class DirectReadAheadTest {
             scan(ms, path, v2, 24576) // inside where the old window was: the old bytes must be gone
             scan(ms, path, v2, 30720)
             assertEquals(1, resolver.invalidations.get(), "no second re-resolve")
+        }
+    }
+
+    private fun windowSized(call: Call): Boolean {
+        val m = Regex("bytes=(\\d+)-(\\d+)").find(call.range.orEmpty()) ?: return false
+        return m.groupValues[2].toLong() - m.groupValues[1].toLong() + 1 > 100_000
+    }
+
+    @Test
+    @DisplayName("the bytes held for read-ahead never pass the total budget, even with many tokens warming at once")
+    fun theMemoryBudgetIsNeverExceeded() {
+        runBlocking {
+            val data = payload(1_500_000, salt = 11)
+            val up = CountingUpstream({ _, _ -> data }, delayMs = 15)
+            val ms = serve(CachingTestResolver(), up)
+            val paths = (0 until 8).map { register(ms, "VIDEO%06d".format(it).padEnd(11, 'x')) }
+            var max = 0L
+            val workers = paths.map { path ->
+                thread {
+                    for (s in listOf(0, 6144, 12288, 700_000, 706_144)) scan(ms, path, data, s)
+                }
+            }
+            while (workers.any { it.isAlive }) {
+                max = maxOf(max, ms.readAheadHeldBytes())
+                Thread.sleep(2)
+            }
+            workers.forEach { it.join() }
+            max = maxOf(max, ms.readAheadHeldBytes())
+            assertTrue(max <= READ_AHEAD_TOTAL_BYTES, "held up to $max bytes, budget $READ_AHEAD_TOTAL_BYTES")
+            assertTrue(READ_AHEAD_TOTAL_BYTES >= READ_AHEAD_WINDOW_BYTES, "the budget holds at least one window")
+        }
+    }
+
+    @Test
+    @DisplayName("release drops the token's window and the next range goes upstream again")
+    fun theWindowIsDroppedWhenTheTokenIsReleased() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 13)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
+            assertEquals(READ_AHEAD_WINDOW_BYTES.toLong(), ms.readAheadHeldBytes(), "one window is held")
+            val calls = up.calls.size
+
+            ms.release("/stream/${"0".repeat(32)}.m4a") // an unknown token: nothing happens
+            ms.release("/nothing")
+            assertEquals(READ_AHEAD_WINDOW_BYTES.toLong(), ms.readAheadHeldBytes())
+
+            ms.release(path)
+            assertEquals(0L, ms.readAheadHeldBytes(), "released")
+            scan(ms, path, data, 18432) // the token still works
+            assertEquals(calls + 1, up.calls.size, "and its next range fetches a new window")
+        }
+    }
+
+    @Test
+    @DisplayName("the request log names each upstream call with its timing and never the URL or the signature")
+    fun theUpstreamTimingIsLoggedWithoutTheUrl() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 17)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
+
+            val lines = seen.map { it.upstream.orEmpty() }
+            assertTrue(lines[0].startsWith("proxy 206 first byte ") && " ms total " in lines[0], "the probe is a plain upstream call: ${lines[0]}")
+            assertTrue(lines[1].startsWith("window 206 first byte ") && " ms total " in lines[1] && lines[1].endsWith(" $READ_AHEAD_WINDOW_BYTES B"), "the window fetch: ${lines[1]}")
+            assertEquals("window hit", lines[2])
+            for (l in lines) {
+                assertTrue("googlevideo" !in l && "SECRET" !in l && "gen=" !in l && "http" !in l && "?" !in l, "no URL in: $l")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an upstream that ignores the window Range turns read-ahead off for the token; every range is still exact")
+    fun anUpstreamThatIgnoresTheWindowRangeFallsBack() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 19)
+            val up = CountingUpstream(
+                content = { _, _ -> data },
+                respond = { call, _ ->
+                    if (windowSized(call)) UpstreamResponse(200, mapOf("content-length" to data.size.toString()), ByteArrayInputStream(data)) else null
+                },
+            )
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            val starts = listOf(0, 6144, 12288, 18432, 24576, 30720)
+            for (s in starts) scan(ms, path, data, s)
+
+            assertEquals(starts.size + 1, up.calls.size, "one refused window, then one call per range as before: ${up.calls.map { it.range }}")
+            assertTrue(seen.any { it.note.orEmpty().startsWith("read-ahead off") }, "the log says so: ${seen.map { it.note }}")
+            assertEquals(0L, ms.readAheadHeldBytes())
+        }
+    }
+
+    @Test
+    @DisplayName("a failing window fetch is not an error for the speaker: the plain path answers it")
+    fun aFailingWindowFetchFallsBackToThePlainPath() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 23)
+            val up = CountingUpstream(
+                content = { _, _ -> data },
+                respond = { call, _ -> if (windowSized(call)) throw IOException("window fetch failed") else null },
+            )
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            for (s in listOf(0, 6144, 12288, 18432)) scan(ms, path, data, s)
+            assertTrue(seen.all { it.status == 206 }, "every speaker request was answered: ${seen.map { it.status }}")
+        }
+    }
+
+    @Test
+    @DisplayName("concurrent requests for the same range cost one window fetch")
+    fun concurrentRequestsForOneRangeFetchOneWindow() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 29)
+            val up = CountingUpstream({ _, _ -> data }, delayMs = 30)
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            scan(ms, path, data, 0)
+            val workers = (0 until 8).map { thread { scan(ms, path, data, 6144) } }
+            workers.forEach { it.join() }
+            assertEquals(2, up.calls.size, "the probe and one window: ${up.calls.map { it.range }}")
+        }
+    }
+
+    @Test
+    @DisplayName("a range past the end of the file is passed on as upstream's 416, not answered from a window")
+    fun aRangePastTheEndIsPassedOn() {
+        runBlocking {
+            val data = payload(100_000, salt = 31)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
+            val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to "bytes=200000-206143"))
+            assertEquals(416, r.status)
+            assertEquals("bytes */100000", r.header("Content-Range"))
+            assertEquals(0, r.body.size)
+        }
+    }
+
+    @Test
+    @DisplayName("a range that runs past the end of the file is cut to the file, as upstream does")
+    fun aRangeRunningPastTheEndIsCutToTheFile() {
+        runBlocking {
+            val data = payload(100_000, salt = 37)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
+            val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to "bytes=96000-102143"))
+            assertEquals(206, r.status)
+            assertEquals("bytes 96000-99999/100000", r.header("Content-Range"))
+            assertTrue(data.copyOfRange(96000, 100000).contentEquals(r.body))
         }
     }
 }

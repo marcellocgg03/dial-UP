@@ -70,6 +70,9 @@ internal class RendererHarness(
     val prepared = CopyOnWriteArrayList<VideoEntry>()
     val resolves = CopyOnWriteArrayList<String>()
 
+    /** The stream paths the renderer told the media seam it no longer needs (plan 03-20). */
+    val released = CopyOnWriteArrayList<String>()
+
     /** "prepare:<format>" and "register:<format>" in the order the media seam saw them. */
     val order = CopyOnWriteArrayList<String>()
     val receiver = HarnessReceiver()
@@ -106,6 +109,10 @@ internal class RendererHarness(
             if (prepareDelayMs > 0) delay(prepareDelayMs)
             prepareFailure(entry)?.let { throw it }
             directDelegate?.takeIf { entry.format == "direct" }?.prepare(entry)
+        }
+
+        override fun release(path: String) {
+            released.add(path)
         }
 
         override fun registerVideo(entry: VideoEntry): String {
