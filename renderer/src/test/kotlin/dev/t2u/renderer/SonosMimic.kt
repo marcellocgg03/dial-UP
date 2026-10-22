@@ -18,6 +18,11 @@ package dev.t2u.renderer
 //    starts at the offset is accepted and consumed (PLAYING). A 200 answer to that Range request is the logged
 //    failure: the mimic hangs up after [rejectAfterMs] and never reports PLAYING for it.
 //
+// Plan 03-15 adds a slow native Seek ([SonosMimic.slowSeek], device session C, Lamp, 2026-10-21): after an accepted
+// Seek the speaker reports TRANSITIONING with a RelTime of about 1 s for several seconds, then PLAYING (or PAUSED when
+// it was paused) at the target. It runs on a caller-supplied clock so a test moves time by hand, and works without
+// the HTTP side (`fetchStream = false`) for tests that use the plain RendererHarness, whose URLs nobody serves.
+//
 // Everything runs on 127.0.0.1. Time is the only non-deterministic input, so [earlyWindowMs] is a test parameter
 // with a wide margin on both sides of the Pauses the tests make.
 
@@ -60,6 +65,7 @@ class SonosMimic(
     private val earlyWindowMs: Long = 2000,
     private val rejectAfterMs: Long = 300,
     private val bytesPerSecond: Long = 16_000,
+    private val fetchStream: Boolean = true,
 ) : AutoCloseable {
     val requests = CopyOnWriteArrayList<MimicRequest>()
 
@@ -106,6 +112,8 @@ class SonosMimic(
     // ------------------------------------------------------------------------------------------ SOAP side
 
     private fun onAction(action: String) {
+        slowSeekAction(action)
+        if (!fetchStream) return
         when (action) {
             "SetAVTransportURI" -> synchronized(lock) {
                 reset()
@@ -160,6 +168,87 @@ class SonosMimic(
         if (early) {
             dropConnection()
             pendingOffset = offset
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------ slow seek
+
+    /** One accepted Seek: the speaker is mid-seek until [at] + [transitionMs], then in [after] at [target] seconds. */
+    private class SeekState(val target: Long, val at: Long, val transitionMs: Long, val after: String)
+
+    private var slowTransitionMs: Long? = null
+    private var slowMidRelTime = "0:00:01"
+    private var slowEndAtS: Long? = null
+    private var slowClock: () -> Long = System::currentTimeMillis
+    private var seek: SeekState? = null
+
+    /**
+     * From now on a native Seek keeps the speaker TRANSITIONING with RelTime [midSeekRelTime] for [transitionMs] of
+     * [clock] time, then PLAYING at the target and advancing one second per second (or PAUSED_PLAYBACK at the target
+     * when it was paused). A track of [endAtSeconds] seconds goes STOPPED at its end. [transitionMs] very large means
+     * the speaker never settles. Call [refresh] after moving the clock: the fake answers from its state.
+     */
+    fun slowSeek(transitionMs: Long, midSeekRelTime: String = "0:00:01", endAtSeconds: Long? = null, clock: () -> Long) {
+        synchronized(lock) {
+            slowTransitionMs = transitionMs
+            slowMidRelTime = midSeekRelTime
+            slowEndAtS = endAtSeconds
+            slowClock = clock
+        }
+    }
+
+    /** Brings the fake's transport state and RelTime up to the slow-seek clock. */
+    fun refresh() = synchronized(lock) { applySlowSeek() }
+
+    private fun slowSeekAction(action: String) = synchronized(lock) {
+        val transition = slowTransitionMs ?: return@synchronized
+        when (action) {
+            "SetAVTransportURI" -> {
+                seek = null
+                fake.state.relTime = hms(0)
+            }
+            "Stop" -> seek = null
+            "Seek" -> {
+                val body = fake.calls.last { it.action == "Seek" }.body
+                val t = Regex("<Target>(\\d+):(\\d+):(\\d+)</Target>").find(body)?.groupValues?.drop(1)?.map { it.toLong() } ?: return@synchronized
+                val after = if (fake.state.transport == "PAUSED_PLAYBACK") "PAUSED_PLAYBACK" else "PLAYING"
+                seek = SeekState(t[0] * 3600 + t[1] * 60 + t[2], slowClock(), transition, after)
+                applySlowSeek()
+            }
+            "Play" -> rebase("PLAYING")
+            "Pause" -> rebase("PAUSED_PLAYBACK")
+        }
+    }
+
+    /** A Play or Pause once the seek settled: carry on from where the speaker is, in the new state. */
+    private fun rebase(after: String) {
+        val s = seek ?: return
+        val elapsed = slowClock() - s.at
+        if (elapsed < s.transitionMs) {
+            seek = SeekState(s.target, s.at, s.transitionMs, after)
+        } else {
+            val now = if (s.after == "PLAYING") s.target + (elapsed - s.transitionMs) / 1000 else s.target
+            seek = SeekState(now, slowClock(), 0, after)
+        }
+        applySlowSeek()
+    }
+
+    private fun applySlowSeek() {
+        val s = seek ?: return
+        val elapsed = slowClock() - s.at
+        if (elapsed < s.transitionMs) {
+            fake.state.transport = "TRANSITIONING"
+            fake.state.relTime = slowMidRelTime
+            return
+        }
+        val position = if (s.after == "PLAYING") s.target + (elapsed - s.transitionMs) / 1000 else s.target
+        val end = slowEndAtS
+        if (end != null && position >= end) {
+            fake.state.transport = "STOPPED"
+            fake.state.relTime = hms(end)
+        } else {
+            fake.state.transport = s.after
+            fake.state.relTime = hms(position)
         }
     }
 

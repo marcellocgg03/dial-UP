@@ -51,7 +51,8 @@ internal class HarnessReceiver : CastReceiver {
  * One [Renderer] wired to a [FakeRenderer], a [HarnessReceiver], a stub resolver and a recording media
  * registrar. [prepareFailure] may return a throwable for an entry about to be prepared; [prepareDelayMs]
  * makes every prepare slow; [directDelegate] serves `direct` entries from a real media server; [duration] is the
- * length the stub resolver reports (0 means unknown).
+ * length the stub resolver reports (0 means unknown); [clock] is the renderer's epoch-millisecond clock (a test can
+ * move it by hand, see SeekPositionTest).
  * [close] destroys the renderer.
  */
 internal class RendererHarness(
@@ -63,6 +64,7 @@ internal class RendererHarness(
     private val directDelegate: MediaRegistrar? = null,
     playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
     private val duration: Double = 210.0,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
     val registered = CopyOnWriteArrayList<VideoEntry>()
     val prepared = CopyOnWriteArrayList<VideoEntry>()
@@ -133,6 +135,7 @@ internal class RendererHarness(
             scope = scope,
             events = EventSink { kind, fields -> events.add(kind to fields) },
             playlistRequestHandlerFactory = playlistRequestHandlerFactory,
+            clock = clock,
         ),
     )
 
