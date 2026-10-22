@@ -945,4 +945,200 @@ class RendererTest {
             }
         }
     }
+
+    // ---- plan 03-24: stop, pause, resume and a native seek never act on a speaker that holds another source (T-03-58, T-03-59)
+
+    private val otherSource = "http://192.168.1.50/other.mp3"
+    private val transportCommands = setOf("Stop", "Pause", "Play", "Seek", "SetAVTransportURI")
+
+    private fun FakeRenderer.sentSince(mark: Int): List<String> = calls.drop(mark).map { it.action }.filter { it in transportCommands }
+
+    private fun mp4Config(): (File) -> Config =
+        { Config(dataDir = it, outputFormat = "mp4", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }
+
+    @Test
+    @DisplayName("a stop while the speaker is on another source sends no Stop, forgets our track and stops polling")
+    fun aStopWhileTheSpeakerIsOnAnotherSourceSendsNoStop() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = otherSource
+                val mark = fake.calls.size
+
+                // The service-stop path: the clear leaves the speaker alone, then the player stop runs.
+                h.renderer.clearSpeaker()
+                assertTrue(h.renderer.doStop())
+
+                assertEquals(emptyList(), fake.sentSince(mark), "a command reached the other source")
+                assertEquals(otherSource, fake.state.currentUri)
+                assertNull(h.renderer.nowPlaying)
+                assertEquals(1, h.notes("stop skipped").size)
+                val polled = fake.calls.size
+                delay(300)
+                val after = fake.calls.drop(polled).filter { it.action == "GetTransportInfo" || it.action == "GetPositionInfo" }
+                assertTrue(after.isEmpty(), "polling went on after the stop: ${after.map { it.action }}")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a pause while the speaker is on another source sends no Pause")
+    fun aPauseWhileTheSpeakerIsOnAnotherSourceSendsNoPause() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = otherSource
+                val mark = fake.calls.size
+
+                assertFalse(h.renderer.doPause())
+
+                assertEquals(emptyList(), fake.sentSince(mark))
+                assertEquals(1, h.notes("pause skipped").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a resume while the speaker is on another source sends no Play")
+    fun aResumeWhileTheSpeakerIsOnAnotherSourceSendsNoPlay() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(h.renderer.doPause())
+                fake.state.currentUri = otherSource
+                val mark = fake.calls.size
+
+                assertFalse(h.renderer.doResume())
+
+                assertEquals(emptyList(), fake.sentSince(mark))
+                assertEquals(1, h.notes("resume skipped").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a native seek while the speaker is on another source sends no Seek")
+    fun aNativeSeekWhileTheSpeakerIsOnAnotherSourceSendsNoSeek() {
+        withFake { fake ->
+            Harness(fake, config = mp4Config()).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = otherSource
+                val mark = fake.calls.size
+
+                assertFalse(h.renderer.doSeek(50.0))
+
+                assertEquals(emptyList(), fake.sentSince(mark))
+                assertEquals(1, h.notes("seek skipped").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a pause, resume or native seek on a speaker that holds nothing sends nothing")
+    fun anEmptySpeakerCountsAsNotOursForPauseResumeAndSeek() {
+        withFake { fake ->
+            Harness(fake, config = mp4Config()).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = ""
+                val mark = fake.calls.size
+
+                assertFalse(h.renderer.doPause())
+                assertFalse(h.renderer.doResume())
+                assertFalse(h.renderer.doSeek(50.0))
+
+                assertEquals(emptyList(), fake.sentSince(mark))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("stop, pause, resume and native seek on a speaker that holds our stream send the same commands as before")
+    fun commandsOnOurOwnStreamAreUnchanged() {
+        withFake { fake ->
+            Harness(fake, config = mp4Config()).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+
+                var mark = fake.calls.size
+                assertTrue(h.renderer.doPause())
+                assertEquals(listOf("Pause"), fake.sentSince(mark))
+
+                mark = fake.calls.size
+                assertTrue(h.renderer.doResume())
+                assertEquals(listOf("Play"), fake.sentSince(mark))
+
+                mark = fake.calls.size
+                assertTrue(h.renderer.doSeek(50.0))
+                assertEquals(listOf("Seek"), fake.sentSince(mark))
+
+                mark = fake.calls.size
+                assertTrue(h.renderer.doStop())
+                assertEquals(listOf("Stop"), fake.sentSince(mark))
+                assertTrue(h.notes("stop skipped").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a stop on a speaker that holds nothing still sends Stop")
+    fun aStopOnAnEmptySpeakerStillSendsStop() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = ""
+                val mark = fake.calls.size
+
+                assertTrue(h.renderer.doStop())
+
+                assertEquals(listOf("Stop"), fake.sentSince(mark))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker whose URI cannot be read still receives pause, resume, seek and stop")
+    fun anUnreadableUriFailsOpen() {
+        withFake { fake ->
+            Harness(fake, config = mp4Config()).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = otherSource
+                fake.bareFaultOn = setOf("GetMediaInfo")
+                val mark = fake.calls.size
+
+                assertTrue(h.renderer.doPause())
+                assertTrue(h.renderer.doResume())
+                assertTrue(h.renderer.doSeek(50.0))
+                assertTrue(h.renderer.doStop())
+
+                assertEquals(listOf("Pause", "Play", "Seek", "Stop"), fake.sentSince(mark))
+                assertTrue(h.notes("pause skipped").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a new load still takes the speaker over from another source")
+    fun aNewLoadStillTakesTheSpeakerOver() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = otherSource
+                val mark = fake.calls.size
+
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+
+                val sent = fake.sentSince(mark)
+                assertTrue("SetAVTransportURI" in sent && "Play" in sent, "sent $sent")
+                assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+            }
+        }
+    }
 }
