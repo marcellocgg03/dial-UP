@@ -1,6 +1,7 @@
 package dev.t2u.lounge
 
-// Kotlin original, protocol reference: youtubei.js and yt-cast-receiver DefaultPlaylistRequestHandler (MIT).
+// Derived from yt-cast-receiver 2.1.0 lib/app/DefaultPlaylistRequestHandler.js (MIT, Copyright (c) Patrick Kan);
+// protocol reference: youtubei.js.
 //
 // CAST-04 / CAST-05: answers "what comes before and after this video, and what is the autoplay video" with one
 // TVHTML5 /youtubei/v1/next call. The InnerTube protocol is undocumented, so everything it needs lives in
