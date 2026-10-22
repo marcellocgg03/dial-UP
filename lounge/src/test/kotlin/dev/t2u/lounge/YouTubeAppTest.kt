@@ -533,4 +533,100 @@ class YouTubeAppTest {
         assertEquals("1", joined["state"])
         assertTrue(messages("cl").any { it.first == "onStateChange" && it.second["state"] == "1" })
     }
+
+    // ---- a sender that left without an event (plan 03-19, device session C 2026-10-22)
+
+    /** A YouTube Music like sender: no `atp` capability, so autoplay is unsupported while it is connected. */
+    private fun musicDevice(id: String, theme: String = "cl") = buildJsonObject {
+        put("app", "android.m-phone-9.20.53")
+        put("capabilities", "que,pas,dsdtr,rpe,mlm,scn")
+        put("clientName", "android")
+        put("type", "REMOTE_CONTROL")
+        put("name", "TEST PHONE")
+        put("theme", theme)
+        put("id", id)
+    }
+
+    private suspend fun connectMusic(id: String = "music-1") {
+        val before = count("cl", "onStateChange")
+        rpc("cl", "loungeStatus", loungeStatus(listOf(musicDevice(id)), id))
+        awaitUntil(what = "music sender $id connected") { count("cl", "onStateChange") > before && id in connects }
+    }
+
+    /** The log of 2026-10-22: Music connected, then the YouTube app connected and the status lists only the app. */
+    private suspend fun musicThenYouTubeAppWhoseStatusListsOnlyTheApp() {
+        connectMusic()
+        assertEquals(AutoplayMode.UNSUPPORTED, player.autoplayMode, "Music has no atp")
+        connect(id = "app-1")
+        barrier("cl")
+    }
+
+    @Test
+    fun aSenderThatLeftWithoutAnEventStopsBlockingAutoplay() = run {
+        val a = startedApp()
+        musicThenYouTubeAppWhoseStatusListsOnlyTheApp()
+
+        assertEquals(listOf("music-1" to true), disconnects.toList(), "the ghost is reported as an implicit disconnect")
+        assertEquals(listOf("app-1"), a.connectedSenders.map { it.id })
+        assertEquals(AutoplayMode.ENABLED, player.autoplayMode)
+        assertEquals("ENABLED", messages("cl").last { it.first == "onAutoplayModeChanged" }.second["autoplayMode"])
+    }
+
+    @Test
+    fun theEndOfTheQueueAsksForTheAutoplayVideoAfterTheGhostIsGone() = run {
+        player.queue.requestHandler = ScriptedHandler(mapOf("VID00000001" to PreviousNextVideos(null, vid("VID00000002"))))
+        startedApp()
+        musicThenYouTubeAppWhoseStatusListsOnlyTheApp()
+        castAndPlay("VID00000001")
+
+        rpc("cl", "next")
+        barrier("cl")
+
+        assertTrue("play:VID00000002" in player.calls, "the autoplay video is played, not 'autoplay is not enabled': ${player.calls}")
+    }
+
+    @Test
+    fun aStatusThatListsEverySenderChangesNothing() = run {
+        val a = startedApp()
+        connectMusic()
+        rpc("cl", "loungeStatus", loungeStatus(listOf(musicDevice("music-1"), device("app-1")), "app-1"))
+        awaitUntil(what = "app sender connected") { "app-1" in connects }
+        rpc("cl", "loungeStatus", loungeStatus(listOf(musicDevice("music-1"), device("app-1")), "app-1", ui = null))
+        barrier("cl")
+
+        assertEquals(listOf("music-1", "app-1"), a.connectedSenders.map { it.id })
+        assertTrue(disconnects.isEmpty(), "${disconnects.toList()}")
+        assertEquals(AutoplayMode.UNSUPPORTED, player.autoplayMode, "Music is still connected")
+    }
+
+    @Test
+    fun aStatusWithoutADevicesListDropsNobody() = run {
+        val a = startedApp()
+        connectMusic()
+        connect(id = "app-2")
+
+        rpc("cl", "loungeStatus", buildJsonObject { })
+        rpc("cl", "loungeStatus", buildJsonObject { put("devices", "this is not json") })
+        rpc("cl", "loungeStatus", buildJsonObject { put("devices", "{\"not\":\"an array\"}") })
+        barrier("cl")
+
+        assertEquals(listOf("music-1", "app-2"), a.connectedSenders.map { it.id })
+        assertTrue(disconnects.isEmpty(), "${disconnects.toList()}")
+    }
+
+    @Test
+    fun anInactiveSessionsStatusDoesNotDropTheActiveSessionsSenders() = run {
+        val a = startedApp()
+        connectMusic()
+        connect(id = "app-3")
+
+        // the other theme's session is not the active one; its status lists nobody
+        rpc("m", "loungeStatus", loungeStatus(emptyList(), "nobody"))
+        barrier("m")
+        barrier("cl")
+
+        assertEquals(listOf("music-1", "app-3"), a.connectedSenders.map { it.id })
+        assertTrue(disconnects.isEmpty(), "${disconnects.toList()}")
+        assertEquals(Client.YT, a.activeClient)
+    }
 }
