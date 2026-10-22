@@ -648,6 +648,7 @@ class Renderer(
     }
 
     private suspend fun pauseNow(): Boolean {
+        if (onAnotherSource(emptyCounts = true)) return skipped("pause")
         val seq = loadSeq.get()
         val c = current
         if (c != null && c.playSent) {
@@ -677,6 +678,7 @@ class Renderer(
     }
 
     private suspend fun resumeNow(): Boolean {
+        if (onAnotherSource(emptyCounts = true)) return skipped("resume")
         val c = current
         if (c != null && !c.playSent) {
             c.loadedAt = deps.clock()
@@ -723,7 +725,14 @@ class Renderer(
         current = null
         stopPolling()
         expectStop = true
-        val stopped = ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+        // T-03-58: the track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
+        // A speaker that holds nothing still gets it (harmless, as before).
+        val stopped = if (onAnotherSource(emptyCounts = false)) {
+            note("info", "stop skipped: the speaker is on another source")
+            true
+        } else {
+            ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+        }
         nowPlaying = null
         return stopped
     }
@@ -815,6 +824,23 @@ class Renderer(
             return
         }
         readBack()
+    }
+
+    /**
+     * T-03-58: true only when one GetMediaInfo positively reads a URI that is not one of this app's own streams (an empty URI
+     * counts as not ours when [emptyCounts]). A speaker whose URI cannot be read is not "on another source": the command goes
+     * out as before (fail-open, T-03-59). Adds at most one read per command.
+     */
+    private suspend fun onAnotherSource(emptyCounts: Boolean): Boolean {
+        val uri = readCurrentUri() ?: return false
+        if (uri.isEmpty()) return emptyCounts
+        return !isOurStream(uri)
+    }
+
+    /** Logs the one line for a phone command that was not sent because the speaker is on another source; the command reports failure. */
+    private fun skipped(command: String): Boolean {
+        note("info", "$command skipped: the speaker is on another source")
+        return false
     }
 
     /** True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches (T-03-26). */
@@ -929,6 +955,7 @@ class Renderer(
         val base = c.startAt
         val before = position < base
         if (!before) {
+            if (onAnotherSource(emptyCounts = true)) return skipped("seek")
             val target = position - base
             if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
                 // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
