@@ -30,6 +30,7 @@ import dev.t2u.media.extensionOf
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.FakeRenderer
 import dev.t2u.upnp.lanHttpClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,11 +38,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import kotlin.test.assertEquals
@@ -660,6 +663,157 @@ class RendererTest {
             val r = h.notes("Speaker reports track metadata").single()
             assertEquals(false, r["reported"])
             assertEquals(0, r["creatorChars"])
+        }
+    }
+
+    // ---- plan 03-21: a clear that lands while a load is under way (CAST-06) ----
+
+    /** Holds the first request for [action] at the fake (recorded, not yet applied or answered) until [release] is completed. */
+    private class Hold(private val action: String) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        private val used = AtomicBoolean(false)
+
+        suspend fun onCall(called: String) {
+            if (called == action && used.compareAndSet(false, true)) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+    }
+
+    private fun emptyUriSentAt(fake: FakeRenderer): Int =
+        fake.calls.indexOfLast { it.action == "SetAVTransportURI" && it.body.contains("<CurrentURI></CurrentURI>") }
+
+    @Test
+    @DisplayName("a clear after the URI was sent but before the load finished empties the speaker")
+    fun aClearAfterTheUriWasSentButBeforeTheLoadFinishedEmptiesTheSpeaker() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val hold = Hold("Play")
+                fake.beforeAction = hold::onCall
+                val load = h.scope.async { h.renderer.doPlay(Video(A), 0.0) }
+                withTimeout(5000) { hold.entered.await() }
+                assertTrue(fake.state.currentUri.contains("/stream/"), "the load is held at its Play: " + fake.state.currentUri)
+
+                h.renderer.clearSpeaker()
+                hold.release.complete(Unit)
+                val loaded = load.await()
+
+                assertEquals("", fake.state.currentUri, "the song stayed on the speaker")
+                val emptiedAt = emptyUriSentAt(fake)
+                assertTrue(emptiedAt >= 0, fake.calls.map { it.action }.toString())
+                assertTrue(fake.calls.drop(emptiedAt + 1).none { it.action == "Play" }, "a Play followed the clear")
+                assertFalse(loaded, "the load that was cleared reports failure")
+                assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear while the URI is being sent leaves the speaker empty")
+    fun aClearWhileTheUriIsBeingSentLeavesTheSpeakerEmpty() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val hold = Hold("SetAVTransportURI")
+                fake.beforeAction = hold::onCall
+                val load = h.scope.async { h.renderer.doPlay(Video(A), 0.0) }
+                withTimeout(5000) { hold.entered.await() }
+                assertEquals("", fake.state.currentUri, "the URI has not landed yet")
+
+                val clear = h.scope.async { h.renderer.clearSpeaker() }
+                delay(300)
+                hold.release.complete(Unit)
+                clear.await()
+                val loaded = load.await()
+
+                assertEquals("", fake.state.currentUri, "the URI landed after the clear and the song stayed on the speaker")
+                val emptiedAt = emptyUriSentAt(fake)
+                assertTrue(emptiedAt >= 0, fake.calls.map { it.action }.toString())
+                assertTrue(fake.calls.drop(emptiedAt + 1).none { it.action == "Play" }, "a Play followed the clear")
+                assertFalse(loaded, "the load that was cleared reports failure")
+                assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear does not wait for a load whose URI call never returns past the clear budget")
+    fun aClearIsBoundedWhenTheUriCallNeverReturns() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val hold = Hold("SetAVTransportURI")
+                fake.beforeAction = hold::onCall
+                val load = h.scope.async { h.renderer.doPlay(Video(A), 0.0) }
+                try {
+                    withTimeout(5000) { hold.entered.await() }
+
+                    val t0 = System.nanoTime()
+                    h.renderer.clearSpeaker()
+                    val ms = (System.nanoTime() - t0) / 1_000_000
+
+                    assertTrue(ms < CLEAR_BUDGET_MS + 1000, "the clear took $ms ms")
+                    assertEquals(0, fake.count("Play"), "the cleared load must not reach Play")
+                } finally {
+                    hold.release.complete(Unit)
+                    load.await()
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear before any load was started sends nothing")
+    fun aClearBeforeAnyLoadDoesNothing() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val before = fake.calls.size
+
+                h.renderer.clearSpeaker()
+
+                assertEquals(before, fake.calls.size, fake.calls.drop(before).map { it.action }.toString())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear while the speaker is on another source leaves it alone")
+    fun aClearWhileTheSpeakerIsOnAnotherSourceLeavesItAlone() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = "http://192.168.1.50/other.mp3"
+                val before = fake.calls.size
+
+                h.renderer.clearSpeaker()
+
+                val sent = fake.calls.drop(before).map { it.action }
+                assertTrue(sent.none { it == "Stop" || it == "SetAVTransportURI" }, "sent $sent")
+                assertEquals("http://192.168.1.50/other.mp3", fake.state.currentUri)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear after a finished load still empties the speaker")
+    fun aClearAfterAFinishedLoadStillEmptiesTheSpeaker() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+
+                h.renderer.clearSpeaker()
+
+                assertEquals("", fake.state.currentUri)
+                assertTrue(emptyUriSentAt(fake) >= 0)
+                assertNull(h.renderer.nowPlaying)
+            }
         }
     }
 }

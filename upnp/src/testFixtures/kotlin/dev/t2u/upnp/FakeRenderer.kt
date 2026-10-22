@@ -79,6 +79,13 @@ class FakeRenderer(
      */
     @Volatile var onAction: ((action: String) -> Unit)? = null
 
+    /**
+     * Runs for every SOAP action as soon as the fake has recorded the call in [calls] and before it changes [state] or answers,
+     * so a test can hold one request in flight without blocking a server thread (plan 03-21: a clear that lands while a
+     * SetAVTransportURI or a Play is on its way). Null by default.
+     */
+    @Volatile var beforeAction: (suspend (action: String) -> Unit)? = null
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var port: Int = 0
@@ -132,6 +139,7 @@ class FakeRenderer(
         val action = header.replace("\"", "").substringAfter('#', "")
         val declared = call.request.headers["Content-Length"]?.toLongOrNull() ?: -1L
         calls.add(FakeCall(svc, action, body, declared, raw.size))
+        beforeAction?.invoke(action)
 
         // Some real renderers answer errors with a bare 500 and no UPnPError body.
         if (action in bareFaultOn) {
