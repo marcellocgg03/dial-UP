@@ -154,14 +154,18 @@ private class PreparedItem(
 )
 
 /**
- * A native Seek the speaker accepted but may not have finished: until it reports a settled transport state the
+ * A native Seek the speaker accepted but may not have finished: until the speaker has visibly moved on from it the
  * position handed to the sender is [target]. [shown] and [shownAt] are the last position handed out and when, which
- * is what the sender's seekbar counts on from.
+ * is what the sender's seekbar counts on from. [sawTransitioning] is set once the speaker has been seen in a state
+ * other than a settled one (TRANSITIONING) after the Seek: a Sonos keeps reporting its OLD state, PLAYING with the old
+ * RelTime, for about 0.7 s after it accepted the Seek (plan 03-16), so a bare PLAYING right after a Seek proves nothing.
  */
 private class PendingSeek(val id: Int, val target: Double, val startedMs: Long) {
     @Volatile var shown: Double = target
 
     @Volatile var shownAt: Long = startedMs
+
+    @Volatile var sawTransitioning: Boolean = false
 }
 
 /** Result of the last poll: [rel] is already shifted by the stream offset. */
@@ -714,19 +718,22 @@ class Renderer(
 
     /**
      * The position told to the sender. Normally the speaker's own RelTime plus the offset our ffmpeg started at. While
-     * a native Seek is pending (the speaker accepted it but is still TRANSITIONING, reporting 0-1 s) it is the seek
-     * target instead; the speaker's value is used again as soon as it reports a settled transport state, or when
-     * [SEEK_SETTLE_DEADLINE_MS] has passed. The poll keeps its own raw copy in [position], which the track-end rule
-     * reads, so the target never reaches that rule.
+     * a native Seek is pending it is the seek target instead: the speaker accepted the Seek but may still report the
+     * old position (a bare PLAYING for about 0.7 s on the Lamp) or a transient one (TRANSITIONING). The speaker's value
+     * is used again once it has been seen leaving TRANSITIONING, or reports a position near the target, or when
+     * [SEEK_SETTLE_DEADLINE_MS] has passed (see [seekSettled]). The transport state and the position are read once per
+     * call and that pair decides both whether to hold and what to tell. The poll keeps its own raw copy in
+     * [position], which the track-end rule reads, so the target never reaches that rule.
      */
     override suspend fun doGetPosition(): Double {
         val offset = current?.startAt ?: 0
         // A stream loaded while paused has not been played: the speaker's RelTime belongs to the previous one.
         if (current?.playSent == false) return offset.toDouble()
+        val p = pending ?: return speakerPosition() ?: offset.toDouble()
+        val state = transportState()
         val raw = speakerPosition()
-        val p = pending ?: return raw ?: offset.toDouble()
         val now = deps.clock()
-        val holding = !seekSettled(p, transportState(), now)
+        val holding = !seekSettled(p, state, raw, now)
         val told = if (holding || raw == null) p.target else raw
         p.shown = told
         p.shownAt = now
@@ -744,26 +751,51 @@ class Renderer(
         return parseHms(r["RelTime"]) + offset
     }
 
-    /** Has the speaker finished a pending Seek, or have we waited long enough for it? */
-    private fun seekSettled(p: PendingSeek, state: String?, now: Long): Boolean =
-        state in SEEK_SETTLED_STATES || now - p.startedMs > SEEK_SETTLE_DEADLINE_MS
+    /**
+     * Has the speaker finished a pending Seek, or have we waited long enough for it? [state] and [raw] are one reading
+     * of the speaker (the transport state and the position with our offset; null when unreadable). Settled when the
+     * deadline has passed, or the state is STOPPED or NO_MEDIA_PRESENT, or the state is PLAYING or PAUSED_PLAYBACK and
+     * either the speaker has been seen TRANSITIONING since the Seek or its position is near the target (a fast speaker
+     * that never shows TRANSITIONING). A PLAYING speaker with its old position is not settled: it has not yet noticed
+     * the Seek. Records that TRANSITIONING was seen.
+     */
+    private fun seekSettled(p: PendingSeek, state: String?, raw: Double?, now: Long): Boolean {
+        if (state != null && state !in SEEK_SETTLED_STATES) p.sawTransitioning = true
+        if (now - p.startedMs > SEEK_SETTLE_DEADLINE_MS) return true
+        if (state == null || state !in SEEK_SETTLED_STATES) return false
+        if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
+        if (p.sawTransitioning) return true
+        return raw != null && nearSeekTarget(p, state, raw, now)
+    }
 
     /**
-     * Called by the poll with the transport [state] it just read: drops a pending Seek the speaker has finished (or
-     * that outlived the deadline) and, when the sender's seekbar has drifted from the speaker's position, sends the
-     * speaker's position once. The sender counts on from the last position it was sent, so after a 5 s TRANSITIONING
-     * it is about 5 s ahead of a speaker that has only just started playing.
+     * Is [raw] where a speaker that has taken the Seek would be? Playing, it has moved on from the target for at most
+     * the time since the Seek; paused, it sits at the target. Both within [SEEK_CORRECTION_TOLERANCE_S]. The old
+     * position of a lagging speaker is far from the target, which is what tells the two apart.
      */
-    private suspend fun settlePendingSeek(state: String, seekSeqAtStart: Int) {
+    private fun nearSeekTarget(p: PendingSeek, state: String, raw: Double, now: Long): Boolean {
+        val tol = SEEK_CORRECTION_TOLERANCE_S
+        val sinceSeek = if (state == "PLAYING") (now - p.startedMs) / 1000.0 else 0.0
+        return raw >= p.target - tol && raw <= p.target + sinceSeek + tol
+    }
+
+    /**
+     * Called by the poll with the transport [state] and position [polledRaw] (offset added; null when it did not read
+     * one) it just read: drops a pending Seek the speaker has finished (or that outlived the deadline) and, when the
+     * sender's seekbar has drifted from the speaker's position, sends the speaker's position once. The sender counts on
+     * from the last position it was sent, so after a 5 s TRANSITIONING it is about 5 s ahead of a speaker that has only
+     * just started playing.
+     */
+    private suspend fun settlePendingSeek(state: String, polledRaw: Double?, seekSeqAtStart: Int) {
         val p = pending ?: return
         // The Seek was sent after this poll began reading: the state it holds is from before the Seek.
         if (p.id > seekSeqAtStart) return
         val now = deps.clock()
-        if (!seekSettled(p, state, now)) return
+        if (!seekSettled(p, state, polledRaw, now)) return
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
         if (state !in SEEK_SETTLED_STATES) note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
-        val raw = speakerPosition() ?: return
+        val raw = polledRaw ?: speakerPosition() ?: return
         val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING) (now - p.shownAt) / 1000.0 else 0.0
         if (Math.abs(raw - senderIsAt) > SEEK_CORRECTION_TOLERANCE_S && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
             notifyPositionCorrection()
@@ -874,6 +906,8 @@ class Renderer(
         val state = transportState()
         if (state == null || destroyed) return
         transport = state
+        // The speaker's position as this poll read it, for the pending-Seek rule; null when not read or not our stream.
+        var polledRaw: Double? = null
         if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
             val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
             if (r != null) {
@@ -881,6 +915,7 @@ class Renderer(
                 val startAt = current?.startAt ?: 0
                 // Do not take position or duration from a speaker still on the previous track.
                 val stale = isOnOtherStream(uri)
+                if (!stale) polledRaw = parseHms(r["RelTime"]) + startAt
                 position = PollPosition(
                     rel = if (stale) position?.rel ?: startAt.toDouble() else parseHms(r["RelTime"]) + startAt,
                     dur = nowPlaying?.duration?.takeIf { it != 0.0 } ?: if (stale) 0.0 else parseHms(r["TrackDuration"]),
@@ -897,7 +932,7 @@ class Renderer(
         // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
         if (epoch != commandEpoch.get()) return
 
-        settlePendingSeek(state, seekSeqAtStart)
+        settlePendingSeek(state, polledRaw, seekSeqAtStart)
 
         // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
         val c = current

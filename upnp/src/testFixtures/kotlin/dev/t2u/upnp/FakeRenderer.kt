@@ -158,6 +158,11 @@ class FakeRenderer(
             "SetNextAVTransportURI" -> state.nextUri = unescape(tag(body, "NextURI"))
             "Play" -> state.transport = if (neverPlay) "STOPPED" else "PLAYING"
             "Stop" -> state.transport = "STOPPED"
+            // A real speaker that takes a REL_TIME Seek reports a RelTime at the target afterwards (plan 03-16).
+            "Seek" -> Regex("^(\\d+):(\\d+):(\\d+)").find(tag(body, "Target"))?.let { m ->
+                val (h, min, sec) = m.destructured
+                state.relTime = "%d:%02d:%02d".format(h.toInt(), min.toInt(), sec.toInt())
+            }
             "Pause" -> state.transport = "PAUSED_PLAYBACK"
             "SetVolume" -> tag(body, "DesiredVolume").toIntOrNull()?.let { state.volume = it }
             "SetMute" -> state.mute = tag(body, "DesiredMute").let { it == "1" || it.equals("true", ignoreCase = true) }

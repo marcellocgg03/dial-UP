@@ -179,7 +179,7 @@ internal class SeekFallbackTest {
                 assertTrue(h.renderer.doSeek(120.0))
                 assertEquals(listOf("00:01:20", "00:00:40"), fake.seekTargets(), "the second target is 120 - 80")
                 assertEquals(2, h.registered.size, "no new file")
-                assertEquals(80.0 + 65.0, h.renderer.doGetPosition(), "the sender-facing position stays absolute")
+                assertEquals(80.0 + 40.0, h.renderer.doGetPosition(), "the sender-facing position stays absolute: the offset plus the speaker's RelTime after the Seek")
 
                 assertTrue(h.renderer.doSeek(30.0)) // before the start of the offset file
                 assertEquals(1, fake.seekTargets().count { it == "00:00:40" }, "no native Seek for a target before the file")
