@@ -415,6 +415,7 @@ class Renderer(
         current = null
         pending = null
         stopPolling()
+        slowClearWatch?.cancel()
         try {
             val rec = receiver
             if (rec != null && rec.status == "running") rec.stop()
@@ -750,6 +751,7 @@ class Renderer(
             pending = null
         }
         if (!loadedThisSession) return
+        val run = ClearRun()
         try {
             // A load that is sending its URI must not go on to Play once the URI has landed: cancel it now, then wait for the call.
             val sending = uriInFlight.toList()
@@ -758,8 +760,8 @@ class Renderer(
                 pending = null
             }
             val finished = withTimeoutOrNull(CLEAR_BUDGET_MS) {
-                awaitUriCalls(sending)
-                clearNow()
+                awaitUriCalls(sending, run)
+                clearNow(run)
             }
             if (finished == null) {
                 note("warn", "clear gave up: the speaker did not answer within ${CLEAR_BUDGET_MS / 1000} s")
@@ -771,33 +773,120 @@ class Renderer(
         } catch (e: Exception) {
             note("warn", "clear failed: ${e.message}")
         }
+        // The clear has returned (it never waits for this); a URI that was still on its way at the speaker is looked for afterwards.
+        if (run.slow && !destroyed) startSlowClearWatch()
+    }
+
+    /** What one clear saw: whether a SetAVTransportURI of a cancelled load was still unanswered when it stopped waiting for it. */
+    private class ClearRun {
+        @Volatile var slow = false
     }
 
     /**
      * Waits (at most [CLEAR_INFLIGHT_WAIT_MS]) for the SetAVTransportURI calls of loads that were cancelled by a clear, so the
      * speaker has taken or refused the URI before the clear looks at it: the empty URI is then the last word at the speaker.
+     * A call still unanswered after that is noted in [run], so the clear can start the watch for its late landing.
      */
-    private suspend fun awaitUriCalls(sending: List<CompletableDeferred<Unit>>) {
+    private suspend fun awaitUriCalls(sending: List<CompletableDeferred<Unit>>, run: ClearRun) {
         if (sending.isEmpty()) return
         val answered = withTimeoutOrNull(CLEAR_INFLIGHT_WAIT_MS) { sending.forEach { it.await() } }
-        if (answered == null) note("warn", "clear: the speaker did not answer SetAVTransportURI within ${CLEAR_INFLIGHT_WAIT_MS / 1000} s - clearing anyway")
+        if (answered == null) {
+            run.slow = true
+            note("warn", "clear: the speaker did not answer SetAVTransportURI within ${CLEAR_INFLIGHT_WAIT_MS / 1000} s - clearing anyway")
+        }
     }
 
-    private suspend fun clearNow() {
+    private suspend fun clearNow(run: ClearRun) {
         val uri = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.get("CurrentURI").orEmpty()
-        if (uri.isEmpty() || !uri.contains("$ip:${config.mediaPort}/stream/")) {
+        if (uri.isEmpty() || !isOurStream(uri)) {
             note("info", "clear skipped: the speaker is on another source")
             return
         }
         loadSeq.incrementAndGet() // cancels a pending load
         pending = null
-        awaitUriCalls(uriInFlight.toList()) // a load that began its URI call after clearSpeaker took its snapshot
+        awaitUriCalls(uriInFlight.toList(), run) // a load that began its URI call after clearSpeaker took its snapshot
         expectStop = true
         stopPolling()
         safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
         val emptied = ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
         forgetTrack()
-        if (emptied) note("info", "Cleared the speaker") else note("warn", "the speaker refused an empty transport URI")
+        if (!emptied) {
+            note("warn", "the speaker refused an empty transport URI")
+            return
+        }
+        readBack()
+    }
+
+    /** True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches (T-03-26). */
+    private fun isOurStream(uri: String): Boolean = uri.contains("$ip:${config.mediaPort}/stream/")
+
+    /**
+     * After an accepted empty URI: reads what the speaker holds (one GetMediaInfo) and writes the outcome as one evidence line.
+     * A speaker that still holds one of our streams gets the empty URI once more and is read once more; a second failure is
+     * logged, not retried. A failed read never fails the clear. Stream URIs carry a token and are never logged, only whether they were ours.
+     */
+    private suspend fun readBack() {
+        val first = readCurrentUri()
+        when {
+            first == null -> note("info", "Cleared the speaker: read-back unavailable (the empty URI was accepted)")
+            first.isEmpty() -> note("info", "Cleared the speaker: confirmed empty")
+            !isOurStream(first) -> note("info", "Cleared the speaker: confirmed empty of our stream (the speaker is on another source now, left alone)")
+            else -> {
+                if (!ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")) {
+                    note("warn", "clear: still ours after retry - the speaker still holds one of our streams and refused the second empty URI")
+                    return
+                }
+                val second = readCurrentUri()
+                when {
+                    second == null -> note("info", "Cleared the speaker: read-back unavailable (the empty URI was sent twice)")
+                    second.isEmpty() || !isOurStream(second) -> note("info", "Cleared the speaker: confirmed empty after a second empty URI")
+                    else -> note("warn", "clear: still ours after retry - the speaker still holds one of our streams after two empty URIs")
+                }
+            }
+        }
+    }
+
+    /** The URI the speaker holds ("" when empty), or null when it could not be read. */
+    private suspend fun readCurrentUri(): String? = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
+
+    /** The running slow-clear watch (plan 03-23), if any; a new clear replaces it and [destroy] cancels it. */
+    @Volatile private var slowClearWatch: Job? = null
+
+    /**
+     * A clear gave up waiting for a SetAVTransportURI the speaker had not answered, so the stream may still land after the
+     * clear. For at most [SLOW_CLEAR_WATCH_MS] the speaker's URI is read every [SLOW_CLEAR_WATCH_INTERVAL_MS]; if it becomes one
+     * of our own streams, Stop and the empty URI are sent and the watch ends. It ends at once when a new load or clear moved
+     * [loadSeq], when the renderer is destroyed, and when the speaker is on another source (nothing is sent then, T-03-55).
+     * Runs in the renderer's own scope after the clear returned; the clear never waits for it (T-03-56).
+     */
+    private fun startSlowClearWatch() {
+        val seq = loadSeq.get()
+        slowClearWatch?.cancel()
+        note("info", "clear watch started: reading the speaker every ${SLOW_CLEAR_WATCH_INTERVAL_MS} ms for up to ${SLOW_CLEAR_WATCH_MS / 1000} s")
+        slowClearWatch = scope.launch {
+            val reason = withTimeoutOrNull(SLOW_CLEAR_WATCH_MS + CLEAR_BUDGET_MS) { watchForLateStream(seq) } ?: "time used up"
+            note("info", "clear watch ended: $reason")
+        }
+    }
+
+    /** The loop of [startSlowClearWatch]; returns why it ended. */
+    private suspend fun watchForLateStream(seq: Int): String {
+        val startedAt = deps.clock()
+        while (true) {
+            deps.pause(SLOW_CLEAR_WATCH_INTERVAL_MS)
+            if (destroyed) return "the renderer was destroyed"
+            if (seq != loadSeq.get()) return "a new load or clear started"
+            if (deps.clock() - startedAt >= SLOW_CLEAR_WATCH_MS) return "time used up"
+            val uri = readCurrentUri()
+            if (destroyed) return "the renderer was destroyed"
+            if (seq != loadSeq.get()) return "a new load or clear started"
+            if (uri.isNullOrEmpty()) continue
+            if (!isOurStream(uri)) return "the speaker is on another source, left alone"
+            expectStop = true
+            safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+            val emptied = ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
+            return if (emptied) "emptied a stream that landed after the clear" else "found a stream that landed after the clear, the speaker refused the empty URI"
+        }
     }
 
     private fun forgetTrack() {
