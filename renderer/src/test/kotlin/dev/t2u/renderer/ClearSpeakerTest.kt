@@ -10,16 +10,23 @@ import dev.t2u.lounge.Video
 import dev.t2u.upnp.FakeCall
 import dev.t2u.upnp.FakeRenderer
 import dev.t2u.upnp.RENDERER_ST
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -243,6 +250,303 @@ class ClearSpeakerTest {
                 h.renderer.reset()
 
                 assertTrue(h.notes("the speaker refused an empty transport URI").isNotEmpty(), h.events.toString())
+            }
+        }
+    }
+
+    // ---- plan 03-23: the clear is read back, and a slow speaker's late URI is watched for ----
+
+    /** Holds the first request for [action] at the fake (recorded, not yet applied or answered) until [release] is completed. */
+    private class Hold(private val action: String) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        private val used = AtomicBoolean(false)
+
+        suspend fun onCall(called: String) {
+            if (called == action && used.compareAndSet(false, true)) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+    }
+
+    /** The renderer's clock and the wait between two reads of the watch, moved by hand: one [tick] lets the watch go on one step. */
+    private class WatchClock {
+        val now = AtomicLong(1_000_000)
+        val entered = AtomicInteger()
+        private val ticks = Channel<Unit>(Channel.UNLIMITED)
+
+        suspend fun pause(ms: Long) {
+            entered.incrementAndGet()
+            ticks.receive()
+            now.addAndGet(ms)
+        }
+
+        fun tick() {
+            ticks.trySend(Unit)
+        }
+    }
+
+    private fun RendererHarness.messages(): List<String> =
+        events.filter { it.first == "renderer" }.mapNotNull { it.second["message"] as? String }
+
+    private fun RendererHarness.watchEnded(): Boolean = notes("clear watch ended").isNotEmpty()
+
+    /** Lets the watch take one step and waits until it is waiting for the next one, or has ended. */
+    private suspend fun step(h: RendererHarness, w: WatchClock) {
+        val n = w.entered.get()
+        w.tick()
+        waitUntil(3000) { w.entered.get() > n || h.watchEnded() }
+    }
+
+    private fun List<FakeCall>.control(): List<String> = map { it.action }.filter { it == "GetMediaInfo" || it == "Stop" || it == "SetAVTransportURI" }
+
+    private suspend fun castAndHold(h: RendererHarness, fake: FakeRenderer): Hold {
+        h.renderer.init()
+        val hold = Hold("SetAVTransportURI")
+        fake.beforeAction = hold::onCall
+        h.scope.async { h.renderer.doPlay(Video(DQW), 0.0) }
+        withTimeout(5000) { hold.entered.await() }
+        return hold
+    }
+
+    @Test
+    @DisplayName("a clear reads the URI back once and logs that the speaker is confirmed empty")
+    fun aClearReadsTheUriBackAndLogsConfirmedEmpty() {
+        withFake { fake ->
+            RendererHarness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+                val mark = fake.calls.size
+
+                h.renderer.clearSpeaker()
+
+                assertEquals(
+                    listOf("GetMediaInfo", "Stop", "SetAVTransportURI", "GetMediaInfo"),
+                    fake.calls.drop(mark).control(),
+                    "the guard read, the Stop, the empty URI and one read-back",
+                )
+                assertTrue(h.messages().any { it.startsWith("Cleared the speaker") && it.contains("confirmed empty") }, h.messages().toString())
+                assertEquals("", fake.state.currentUri)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear that finds our stream still on the speaker sends the empty URI once more")
+    fun aClearThatFindsOurUriStillThereSendsTheEmptyUriOnce() {
+        withFake { fake ->
+            RendererHarness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+                val ours = fake.state.currentUri
+                val ignored = AtomicInteger()
+                // A speaker that drops the first empty URI and keeps playing its stream.
+                fake.onAction = { action ->
+                    if (action == "SetAVTransportURI" && fake.state.currentUri.isEmpty() && ignored.getAndIncrement() == 0) fake.state.currentUri = ours
+                }
+
+                h.renderer.clearSpeaker()
+
+                assertEquals(2, clearsSent(fake).size, "one empty URI and exactly one more")
+                assertEquals("", fake.state.currentUri)
+                assertTrue(h.messages().any { it.startsWith("Cleared the speaker") && it.contains("confirmed empty") }, h.messages().toString())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that keeps our stream after the second empty URI is logged and not retried again")
+    fun aSecondFailureIsLoggedAndDoesNotLoop() {
+        withFake { fake ->
+            RendererHarness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+                val ours = fake.state.currentUri
+                fake.onAction = { action -> if (action == "SetAVTransportURI" && fake.state.currentUri.isEmpty()) fake.state.currentUri = ours }
+
+                h.renderer.clearSpeaker()
+
+                assertEquals(2, clearsSent(fake).size, "the empty URI is sent twice and no more")
+                assertTrue(h.messages().any { it.contains("still ours after retry") }, h.messages().toString())
+                assertFalse(h.messages().any { it.startsWith("Cleared the speaker") }, "a speaker that still holds our stream was not cleared")
+                assertTrue(h.messages().none { it.contains(ours) }, "the stream URI carries a token and is not logged")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a read-back that fails does not fail the clear")
+    fun aReadBackFailureDoesNotFailTheClear() {
+        withFake { fake ->
+            RendererHarness(fake).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+                // From the empty URI on, the speaker answers GetMediaInfo with a bare fault: the guard read before it was fine.
+                fake.onAction = { action ->
+                    if (action == "SetAVTransportURI" && fake.state.currentUri.isEmpty()) fake.bareFaultOn = setOf("GetMediaInfo")
+                }
+
+                h.renderer.clearSpeaker()
+
+                assertEquals("", fake.state.currentUri)
+                assertEquals(1, clearsSent(fake).size, "the empty URI is not sent again on a read that failed")
+                assertTrue(h.messages().any { it.contains("read-back unavailable") }, h.messages().toString())
+                assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear on a speaker that answers at once does not wait for the in-flight ceiling and starts no watch")
+    fun aClearOnAnImmediateSpeakerDoesNotWaitForTheInFlightCeiling() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+
+                val t0 = System.nanoTime()
+                h.renderer.clearSpeaker()
+                val ms = (System.nanoTime() - t0) / 1_000_000
+
+                assertTrue(ms < CLEAR_INFLIGHT_WAIT_MS, "the clear took $ms ms")
+                assertEquals("", fake.state.currentUri)
+                assertEquals(0, w.entered.get(), "a watch was waiting")
+                assertTrue(h.messages().none { it.startsWith("clear watch") }, h.messages().toString())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a stream that lands after a clear gave up on a slow speaker is emptied by the watch")
+    fun aLateLandingUriAfterATimedOutClearIsEmptiedByTheWatch() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                val hold = castAndHold(h, fake)
+                assertEquals("", fake.state.currentUri, "the URI has not landed yet")
+
+                h.renderer.clearSpeaker()
+                waitUntil(2000) { w.entered.get() >= 1 }
+                hold.release.complete(Unit)
+                waitUntil(3000) { fake.state.currentUri.contains("/stream/") }
+                assertTrue(fake.state.currentUri.contains("/stream/"), "the late URI has landed")
+                val mark = fake.calls.size
+
+                step(h, w)
+
+                assertEquals("", fake.state.currentUri, "the late-landing song stayed loaded on the speaker")
+                assertEquals(listOf("GetMediaInfo", "Stop", "SetAVTransportURI"), fake.calls.drop(mark).control())
+                assertEquals(1, clearsSent(fake).size, "the clear found nothing to empty; the watch sent the one empty URI")
+                assertTrue(h.messages().any { it.startsWith("clear watch ended") && it.contains("emptied") }, h.messages().toString())
+                assertTrue(fake.calls.none { it.action == "Play" }, "the cancelled load never reaches Play")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the watch ends when a new load starts and sends nothing after")
+    fun theWatchStopsWhenANewLoadStarts() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                val hold = castAndHold(h, fake)
+                h.renderer.clearSpeaker()
+                waitUntil(2000) { w.entered.get() >= 1 }
+                assertTrue(w.entered.get() >= 1, "the watch is waiting for its first read")
+                hold.release.complete(Unit)
+                waitUntil(3000) { fake.state.currentUri.contains("/stream/") }
+                assertTrue(h.renderer.doPlay(Video(DQW), 0.0), "a new cast starts")
+                val mark = fake.calls.size
+
+                step(h, w)
+
+                assertTrue(h.messages().any { it.startsWith("clear watch ended") && it.contains("new load") }, h.messages().toString())
+                assertEquals(emptyList(), fake.calls.drop(mark).control(), "the watch touched the speaker of the new cast")
+                assertTrue(fake.state.currentUri.contains("/stream/"), "the new cast was emptied")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the watch stops at its time limit")
+    fun theWatchStopsAtItsTimeLimit() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                val hold = castAndHold(h, fake)
+                h.renderer.clearSpeaker()
+                waitUntil(2000) { w.entered.get() >= 1 }
+                val mark = fake.calls.size
+                try {
+                    var steps = 0
+                    while (!h.watchEnded() && steps < 30 && w.entered.get() >= 1) {
+                        step(h, w)
+                        steps++
+                    }
+
+                    assertTrue(h.messages().any { it.startsWith("clear watch ended") && it.contains("time") }, h.messages().toString())
+                    val reads = fake.calls.drop(mark).count { it.action == "GetMediaInfo" }
+                    assertTrue(reads in 1..(SLOW_CLEAR_WATCH_MS / SLOW_CLEAR_WATCH_INTERVAL_MS).toInt(), "$reads reads in $steps steps")
+                    assertTrue(w.now.get() - 1_000_000 >= SLOW_CLEAR_WATCH_MS, "ended before the limit")
+                    val end = fake.calls.size
+                    w.tick()
+                    delay(100)
+                    assertEquals(end, fake.calls.size, "the watch went on after its limit")
+                } finally {
+                    hold.release.complete(Unit)
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the watch leaves a speaker that is on another source alone")
+    fun theWatchLeavesAnotherSourceAlone() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                val hold = castAndHold(h, fake)
+                h.renderer.clearSpeaker()
+                waitUntil(2000) { w.entered.get() >= 1 }
+                hold.release.complete(Unit)
+                waitUntil(3000) { fake.state.currentUri.contains("/stream/") }
+                fake.state.currentUri = OTHER
+                val mark = fake.calls.size
+
+                step(h, w)
+
+                val sent = fake.calls.drop(mark).control()
+                assertTrue(sent.none { it == "Stop" || it == "SetAVTransportURI" }, "sent $sent")
+                assertEquals(OTHER, fake.state.currentUri)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("destroy cancels the watch and returns at once")
+    fun destroyCancelsTheWatch() {
+        withFake { fake ->
+            val w = WatchClock()
+            RendererHarness(fake, clock = { w.now.get() }, pause = w::pause).use { h ->
+                val hold = castAndHold(h, fake)
+                h.renderer.clearSpeaker()
+                waitUntil(2000) { w.entered.get() >= 1 }
+                assertTrue(w.entered.get() >= 1, "the watch is waiting for its first read")
+
+                val t0 = System.nanoTime()
+                h.renderer.destroy()
+                val ms = (System.nanoTime() - t0) / 1_000_000
+                hold.release.complete(Unit)
+                waitUntil(3000) { fake.state.currentUri.contains("/stream/") }
+                val mark = fake.calls.size
+                w.tick()
+                delay(100)
+
+                assertTrue(ms < 1000, "destroy took $ms ms")
+                assertEquals(mark, fake.calls.size, "the watch went on after destroy")
+                assertTrue(fake.state.currentUri.contains("/stream/"), "nothing may touch the speaker after destroy")
             }
         }
     }

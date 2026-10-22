@@ -81,6 +81,12 @@ const val CLEAR_BUDGET_MS = 4000L
 /** How long a clear waits for a SetAVTransportURI that a load has in flight, so the URI cannot land after the empty one (plan 03-21). */
 const val CLEAR_INFLIGHT_WAIT_MS = CLEAR_BUDGET_MS / 2
 
+/** How long, after a clear gave up on a slow speaker, the renderer keeps reading the speaker for a late-landing stream (plan 03-23). */
+const val SLOW_CLEAR_WATCH_MS = 15_000L
+
+/** The wait between two reads of that watch. */
+const val SLOW_CLEAR_WATCH_INTERVAL_MS = 1_500L
+
 /**
  * How close to the end of the track (seconds) the last polled position must be for a stop seen on the speaker
  * to count as the track ending. The poll interval is 2 s by default, so this covers one or two missed polls.
@@ -140,6 +146,8 @@ data class RendererDeps(
     val events: EventSink = NoEvents,
     val clock: () -> Long = System::currentTimeMillis,
     val playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
+    /** The wait between two reads of the slow-clear watch (plan 03-23); a test replaces it to step the watch by hand. */
+    val pause: suspend (Long) -> Unit = { delay(it) },
 )
 
 /** What the speaker is playing, for the status UI and the notification. */

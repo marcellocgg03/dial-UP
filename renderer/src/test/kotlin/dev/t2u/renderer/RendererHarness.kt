@@ -65,6 +65,7 @@ internal class RendererHarness(
     playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
     private val duration: Double = 210.0,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val pause: suspend (Long) -> Unit = { delay(it) },
 ) : AutoCloseable {
     val registered = CopyOnWriteArrayList<VideoEntry>()
     val prepared = CopyOnWriteArrayList<VideoEntry>()
@@ -143,6 +144,7 @@ internal class RendererHarness(
             events = EventSink { kind, fields -> events.add(kind to fields) },
             playlistRequestHandlerFactory = playlistRequestHandlerFactory,
             clock = clock,
+            pause = pause,
         ),
     )
 
