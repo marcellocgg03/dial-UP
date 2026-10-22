@@ -681,7 +681,7 @@ class PlayerTest {
     }
 
     @Test
-    fun aPositionCorrectionIsRecordedAndAResetForgetsIt() {
+    fun aPositionCorrectionIsRecordedAndAnIdlePlayerDoesNotCountOn() {
         runBlocking {
             val (player, _) = playing()
             player.position = 40.0
@@ -692,7 +692,9 @@ class PlayerTest {
             assertEquals(43.0, player.senderPosition())
 
             player.reset()
-            assertNull(player.senderPosition(), "nothing is known of the phone's bar after a reset")
+            val atReset = assertNotNull(player.senderPosition(), "the IDLE state of the reset is the last one told")
+            player.nowMs += 30_000
+            assertEquals(atReset, player.senderPosition(), "an IDLE player does not count on")
         }
     }
 }

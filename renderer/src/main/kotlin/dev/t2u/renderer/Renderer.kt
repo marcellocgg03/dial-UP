@@ -98,10 +98,16 @@ internal const val SEEK_SETTLE_DEADLINE_MS = 15_000L
 internal const val SEEK_CORRECTION_TOLERANCE_S = 3.0
 
 /**
- * The shortest time between two drift corrections of the sender's seekbar (plan 03-18): a speaker with a jittery RelTime
- * cannot flood the phone with positions. Measured on the injected clock.
+ * The shortest time between two corrections of the sender's seekbar (plan 03-18, drift or settled Seek): a speaker with a
+ * jittery RelTime cannot flood the phone with positions. Measured on the injected clock.
  */
 internal const val DRIFT_MIN_GAP_MS = 10_000L
+
+/**
+ * How many consecutive polls must show the speaker more than [SEEK_CORRECTION_TOLERANCE_S] away from the sender's seekbar
+ * before it is corrected: one odd reading (a stale answer, a buffering stall) is not acted on.
+ */
+internal const val DRIFT_CONFIRM_POLLS = 2
 
 /**
  * Upper bound on the wait for a speaker's first PLAYING, as a multiple of the start timeout, counted from the load (or
@@ -263,6 +269,12 @@ class Renderer(
     /** Numbers the pending Seeks, so a poll can tell that the state it read is from before the Seek it sees. */
     private val seekSeq = AtomicInteger()
 
+    /** Consecutive polls that found the speaker away from the sender's seekbar (plan 03-18); only the poll touches it. */
+    private var driftPolls = 0
+
+    /** When the sender's seekbar was last corrected, for the minimum gap; only moved by [correctSender]. */
+    @Volatile private var lastCorrectionAt: Long = Long.MIN_VALUE / 2
+
     private val loadSeq = AtomicInteger()
 
     /**
@@ -291,6 +303,8 @@ class Renderer(
         events = deps.events
         deps.playlistRequestHandlerFactory?.let { queue.requestHandler = it() }
     }
+
+    override fun clockMs(): Long = deps.clock()
 
     override fun refresh(maxAge: Int) {
         maxAgeS = maxAge
@@ -846,8 +860,46 @@ class Renderer(
         val raw = polledRaw ?: speakerPosition() ?: return
         val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING) (now - p.shownAt) / 1000.0 else 0.0
         if (Math.abs(raw - senderIsAt) > SEEK_CORRECTION_TOLERANCE_S && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
-            notifyPositionCorrection()
+            correctSender()
         }
+    }
+
+    /** Tells the sender the speaker's position again; every such correction counts for the minimum gap and ends a drift streak. */
+    private suspend fun correctSender() {
+        lastCorrectionAt = deps.clock()
+        driftPolls = 0
+        notifyPositionCorrection()
+    }
+
+    /**
+     * Drift check (plan 03-18). The sender's seekbar counts on from the last position it was sent ([senderPosition]) and
+     * the app sends a position only when something changes, so anything that moves the speaker without a command from the
+     * sender (a seek or scrub in the Sonos app, a stale reading, a stream restart) leaves the bar wrong. When the speaker's
+     * polled position [polledRaw] differs from that count by more than [SEEK_CORRECTION_TOLERANCE_S] on [DRIFT_CONFIRM_POLLS]
+     * consecutive polls, and [DRIFT_MIN_GAP_MS] has passed since the last correction, the sender is sent the speaker's
+     * position once. Nothing is sent while the two agree: an uneventful track costs no messages. Off (and the streak
+     * forgotten) unless the player is PLAYING and the speaker is PLAYING our stream with no Seek hold pending.
+     */
+    private suspend fun checkDrift(state: String, polledRaw: Double?) {
+        val c = current
+        val expected = senderPosition()
+        if (state != "PLAYING" || polledRaw == null || expected == null || status != PlayerStatus.PLAYING ||
+            pending != null || c == null || !c.playSent
+        ) {
+            driftPolls = 0
+            return
+        }
+        if (Math.abs(polledRaw - expected) <= SEEK_CORRECTION_TOLERANCE_S) {
+            driftPolls = 0
+            return
+        }
+        if (++driftPolls < DRIFT_CONFIRM_POLLS) return
+        if (deps.clock() - lastCorrectionAt < DRIFT_MIN_GAP_MS) return
+        note(
+            "info",
+            "Speaker is at ${polledRaw.toInt()} s, the sender's bar at ${expected.toInt()} s - sending the speaker's position",
+        )
+        correctSender()
     }
 
     override suspend fun doGetDuration(): Double {
@@ -981,6 +1033,8 @@ class Renderer(
         if (epoch != commandEpoch.get()) return
 
         settlePendingSeek(state, polledRaw, seekSeqAtStart)
+        // A poll that began before a Seek was sent read the speaker from before it: its position proves nothing.
+        checkDrift(state, if (seekSeqAtStart == seekSeq.get()) polledRaw else null)
 
         // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
         val c = current
@@ -1055,7 +1109,7 @@ class Renderer(
         } else {
             c.wantedAt = 0.0
             note("warn", "Seek to ${Math.floor(owed).toInt()}s refused again - the speaker plays from the start")
-            notifyPositionCorrection()
+            correctSender()
         }
     }
 

@@ -80,7 +80,17 @@ abstract class Player {
      * Where the sender's seekbar should be now: the position of the last state emitted plus the time elapsed since, while
      * that state was PLAYING. Null before the first state. Plan 03-18.
      */
-    fun senderPosition(): Double? = null
+    fun senderPosition(): Double? {
+        val t = told ?: return null
+        if (t.status != PlayerStatus.PLAYING) return t.position
+        return t.position + (clockMs() - t.atMs) / 1000.0
+    }
+
+    /** The last state emitted to the senders: the position the sender's bar was given, when, and the status it showed. */
+    private class Told(val position: Double, val atMs: Long, val status: PlayerStatus)
+
+    @Volatile
+    private var told: Told? = null
 
     fun addStateListener(listener: PlayerStateListener) {
         listeners.add(listener)
@@ -348,6 +358,7 @@ abstract class Player {
     }
 
     private suspend fun emitState(event: PlayerStateEvent) {
+        told = Told(event.current.position, clockMs(), event.current.status)
         for (listener in listeners) {
             try {
                 listener.onState(event)
