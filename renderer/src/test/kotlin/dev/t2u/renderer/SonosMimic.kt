@@ -27,6 +27,10 @@ package dev.t2u.renderer
 // laptop): for about 0.7 s after an accepted Seek the speaker keeps reporting its OLD state (PLAYING with the old
 // RelTime), and only then goes TRANSITIONING at the target (RelTime already the target) before it plays on.
 //
+// Plan 03-17 adds a speaker that is slow to start ([SonosMimic.holdStartWhile], Lamp, 2026-10-21 22:01): after Play it
+// stays TRANSITIONING and does not reach PLAYING by itself; only an accepted Seek (see slowSeek / laggingSeek) ends it, by
+// way of that Seek's own TRANSITIONING time and then PLAYING at the target.
+//
 // Everything runs on 127.0.0.1. Time is the only non-deterministic input, so [earlyWindowMs] is a test parameter
 // with a wide margin on both sides of the Pauses the tests make.
 
@@ -198,6 +202,17 @@ class SonosMimic(
     private var slowEndAtS: Long? = null
     private var slowClock: () -> Long = System::currentTimeMillis
     private var seek: SeekState? = null
+    private var holdStart: (() -> Boolean)? = null
+
+    /**
+     * A speaker that is slow to start (plan 03-17): while [cond] holds, a Play that no Seek has followed leaves the speaker
+     * TRANSITIONING at RelTime 0:00:00 and it never reaches PLAYING by itself. Where [cond] does not hold the fake's own
+     * Play applies (PLAYING at once). Needs [slowSeek] or [laggingSeek] to have been called; a Seek then takes the
+     * speaker through that Seek's TRANSITIONING time to PLAYING at the target.
+     */
+    fun holdStartWhile(cond: () -> Boolean = { true }) {
+        synchronized(lock) { holdStart = cond }
+    }
 
     /**
      * From now on a native Seek keeps the speaker TRANSITIONING with RelTime [midSeekRelTime] for [transitionMs] of
@@ -244,6 +259,12 @@ class SonosMimic(
                 fake.state.relTime = hms(0)
             }
             "Stop" -> seek = null
+            "Play" -> if (seek == null && holdStart?.invoke() == true) {
+                fake.state.transport = "TRANSITIONING"
+                fake.state.relTime = hms(0)
+            } else {
+                rebase("PLAYING")
+            }
             "Seek" -> {
                 val body = fake.calls.last { it.action == "Seek" }.body
                 val t = Regex("<Target>(\\d+):(\\d+):(\\d+)</Target>").find(body)?.groupValues?.drop(1)?.map { it.toLong() } ?: return@synchronized
@@ -252,7 +273,6 @@ class SonosMimic(
                 seek = SeekState(t[0] * 3600 + t[1] * 60 + t[2], slowClock(), slowLagMs, transition, after, before, slowStaleRelTime)
                 applySlowSeek()
             }
-            "Play" -> rebase("PLAYING")
             "Pause" -> rebase("PAUSED_PLAYBACK")
         }
     }
