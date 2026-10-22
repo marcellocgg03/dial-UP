@@ -31,6 +31,11 @@ class FakePlayer : Player() {
     var lastPlayedPosition: Double? = null
     var lastVolumeSet: Volume? = null
 
+    /** The player's clock (epoch ms); a test moves it by hand. */
+    var nowMs: Long = 1_700_000_000_000
+
+    override fun clockMs(): Long = nowMs
+
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
@@ -637,5 +642,57 @@ class PlayerTest {
         val (player, _) = playing()
         player.clearFailure = kotlinx.coroutines.CancellationException("cancelled")
         assertFailsWith<kotlinx.coroutines.CancellationException> { player.reset() }
+    }
+
+    @Test
+    fun noPositionIsToldBeforeTheFirstState() {
+        val player = FakePlayer()
+        assertNull(player.senderPosition())
+    }
+
+    @Test
+    fun theLastStateEmittedIsRecordedAndCountsOnWhilePlaying() {
+        runBlocking {
+            val (player, _) = queued()
+            player.position = 12.0
+            assertTrue(player.play(player.queue.current!!, 0.0))
+            assertEquals(12.0, player.senderPosition(), "the position of the PLAYING state just emitted")
+
+            player.nowMs += 5_000
+            assertEquals(17.0, player.senderPosition(), "the phone's bar has counted on for 5 s")
+
+            player.position = 90.0
+            assertTrue(player.seek(90.0))
+            assertEquals(90.0, player.senderPosition(), "the state after the seek replaces it")
+            player.nowMs += 2_500
+            assertEquals(92.5, player.senderPosition())
+        }
+    }
+
+    @Test
+    fun aPausedStateDoesNotCountOn() {
+        runBlocking {
+            val (player, _) = playing()
+            player.position = 30.0
+            assertTrue(player.pause())
+            player.nowMs += 60_000
+            assertEquals(30.0, player.senderPosition(), "the phone's bar stands still while paused")
+        }
+    }
+
+    @Test
+    fun aPositionCorrectionIsRecordedAndAResetForgetsIt() {
+        runBlocking {
+            val (player, _) = playing()
+            player.position = 40.0
+            player.nowMs += 10_000
+            player.notifyPositionCorrection()
+            assertEquals(40.0, player.senderPosition(), "the corrected position, from now on")
+            player.nowMs += 3_000
+            assertEquals(43.0, player.senderPosition())
+
+            player.reset()
+            assertNull(player.senderPosition(), "nothing is known of the phone's bar after a reset")
+        }
     }
 }

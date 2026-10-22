@@ -73,6 +73,15 @@ abstract class Player {
     @Volatile
     private var previousState: PlayerState? = null
 
+    /** Epoch milliseconds. The renderer overrides it with its injected clock so tests can move time by hand. */
+    protected open fun clockMs(): Long = System.currentTimeMillis()
+
+    /**
+     * Where the sender's seekbar should be now: the position of the last state emitted plus the time elapsed since, while
+     * that state was PLAYING. Null before the first state. Plan 03-18.
+     */
+    fun senderPosition(): Double? = null
+
     fun addStateListener(listener: PlayerStateListener) {
         listeners.add(listener)
     }

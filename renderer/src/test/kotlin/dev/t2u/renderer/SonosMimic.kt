@@ -120,6 +120,7 @@ class SonosMimic(
     // ------------------------------------------------------------------------------------------ SOAP side
 
     private fun onAction(action: String) {
+        steadyAction(action)
         slowSeekAction(action)
         if (!fetchStream) return
         when (action) {
@@ -249,7 +250,100 @@ class SonosMimic(
     }
 
     /** Brings the fake's transport state and RelTime up to the slow-seek clock. */
-    fun refresh() = synchronized(lock) { applySlowSeek() }
+    fun refresh() = synchronized(lock) {
+        applySteady()
+        applySlowSeek()
+    }
+
+    // ------------------------------------------------------------------------------------------ steady play (plan 03-18)
+
+    private var steadyClock: (() -> Long)? = null
+    private var steadyPos = 0.0
+    private var steadyAt = 0L
+    private var skewS = 0L
+    private var skewOnce = ArrayDeque<Long>()
+    private var skewOnceActive = false
+    private var jitterS: List<Long> = emptyList()
+    private var jitterIdx = 0
+
+    /** How many polls read a RelTime that [misreadNextPoll] or [jitter] moved. */
+    @Volatile var skewedReads: Int = 0
+        private set
+
+    /**
+     * A speaker that plays on by itself (plan 03-18): while it is PLAYING its RelTime advances one second per second of
+     * [clock] from [startAtSeconds] (a new track starts at 0), and it holds while paused or stopped. [refresh] brings the
+     * fake up to the clock. A native Seek hands the RelTime over to [slowSeek] or [laggingSeek]; [jumpTo] takes it back.
+     */
+    fun followClock(clock: () -> Long, startAtSeconds: Long = 0) {
+        synchronized(lock) {
+            steadyClock = clock
+            steadyPos = startAtSeconds.toDouble()
+            steadyAt = clock()
+            writeSteady()
+        }
+    }
+
+    /** A seek or scrub done in the Sonos app: the speaker's position jumps to [seconds] and nothing is sent by us. */
+    fun jumpTo(seconds: Double) {
+        synchronized(lock) {
+            val clock = steadyClock ?: error("followClock first")
+            seek = null
+            steadyPos = seconds
+            steadyAt = clock()
+            writeSteady()
+        }
+    }
+
+    /** The next poll reads a RelTime [offsetSeconds] ahead of where the speaker is; the polls after it read it right. */
+    fun misreadNextPoll(offsetSeconds: Long) {
+        synchronized(lock) { skewOnce.addLast(offsetSeconds) }
+    }
+
+    /** A speaker with a jittery RelTime: every poll reads the next of [offsetsSeconds] (cycling) ahead of where it is. */
+    fun jitter(offsetsSeconds: List<Long>) {
+        synchronized(lock) { jitterS = offsetsSeconds }
+    }
+
+    private fun applySteady() {
+        val clock = steadyClock ?: return
+        val now = clock()
+        if (seek == null && fake.state.transport == "PLAYING") steadyPos += (now - steadyAt) / 1000.0
+        steadyAt = now
+        writeSteady()
+    }
+
+    private fun writeSteady() {
+        if (steadyClock == null || seek != null) return
+        fake.state.relTime = hms(Math.floor(steadyPos).toLong() + skewS)
+    }
+
+    private fun steadyAction(action: String) = synchronized(lock) {
+        if (steadyClock == null) return@synchronized
+        when (action) {
+            "SetAVTransportURI" -> {
+                seek = null
+                steadyPos = 0.0
+                steadyAt = steadyClock!!()
+                writeSteady()
+            }
+            // The poll asks for the transport state first and then the position: skew what it reads next.
+            "GetTransportInfo" -> {
+                val once = skewOnce.removeFirstOrNull()
+                skewOnceActive = once != null
+                skewS = once ?: if (jitterS.isNotEmpty()) jitterS[jitterIdx++ % jitterS.size] else 0L
+                writeSteady()
+            }
+            "GetPositionInfo" -> if (skewOnceActive) {
+                skewOnceActive = false
+                skewedReads++
+                skewS = 0
+                writeSteady()
+            } else if (skewS != 0L) {
+                skewedReads++
+            }
+        }
+    }
 
     private fun slowSeekAction(action: String) = synchronized(lock) {
         val transition = slowTransitionMs ?: return@synchronized

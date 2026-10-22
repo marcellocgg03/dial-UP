@@ -98,6 +98,12 @@ internal const val SEEK_SETTLE_DEADLINE_MS = 15_000L
 internal const val SEEK_CORRECTION_TOLERANCE_S = 3.0
 
 /**
+ * The shortest time between two drift corrections of the sender's seekbar (plan 03-18): a speaker with a jittery RelTime
+ * cannot flood the phone with positions. Measured on the injected clock.
+ */
+internal const val DRIFT_MIN_GAP_MS = 10_000L
+
+/**
  * Upper bound on the wait for a speaker's first PLAYING, as a multiple of the start timeout, counted from the load (or
  * the first Play of a stream loaded while paused). A Seek sent before the speaker has played restarts the start timeout
  * clock (a Sonos can spend 13 s seeking near the end of a file, Lamp 2026-10-21 22:01), so this cap is what keeps a speaker
