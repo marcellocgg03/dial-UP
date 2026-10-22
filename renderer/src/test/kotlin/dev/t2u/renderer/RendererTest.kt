@@ -39,6 +39,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -1138,6 +1140,203 @@ class RendererTest {
                 val sent = fake.sentSince(mark)
                 assertTrue("SetAVTransportURI" in sent && "Play" in sent, "sent $sent")
                 assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+            }
+        }
+    }
+
+    // ---- plan 03-25: a speaker that another source took over is released, quietly (T-03-60, T-03-61, T-03-62)
+
+    private val radio = "x-sonosapi-stream:s12345?sid=254&flags=8224&sn=0"
+
+    /** A renderer playing A through the sender path (status PLAYING); the speaker has been seen PLAYING. */
+    private suspend fun playingThroughThePlayer(h: Harness): Renderer {
+        h.renderer.init()
+        assertTrue(h.renderer.play(Video(A), 0.0))
+        until { h.renderer.status == PlayerStatus.PLAYING && h.fake.count("GetPositionInfo") > 0 }
+        return h.renderer
+    }
+
+    @Test
+    @DisplayName("a speaker taken over by another source is released after two polls: stopped, forgotten, one line, nothing sent")
+    fun aSpeakerTakenOverByAnotherSourceIsReleasedAfterTwoPolls() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                val told = CopyOnWriteArrayList<dev.t2u.lounge.PlayerStateEvent>()
+                r.addStateListener { told.add(it) }
+                val mark = fake.calls.size
+
+                fake.state.currentUri = radio // PLAYING stays: the speaker plays the radio now
+                until(3000) { r.status == PlayerStatus.STOPPED }
+
+                assertEquals(PlayerStatus.STOPPED, r.status, "the count source still counts the speaker")
+                assertTrue(told.any { it.current.status == PlayerStatus.STOPPED }, "the sender was not told the player stopped")
+                assertNull(r.nowPlaying, "our track is still remembered")
+                val lines = h.notes("the speaker was taken over by another source - released")
+                assertEquals(1, lines.size, "log lines: $lines")
+                assertTrue(h.events.none { it.second.toString().contains("s12345") || it.second.toString().contains("sid=254") }, "the other source's URI was logged")
+                assertEquals(emptyList(), fake.sentSince(mark), "a command reached the other source")
+                val polled = fake.calls.size
+                delay(300)
+                val after = fake.calls.drop(polled).filter { it.action == "GetTransportInfo" || it.action == "GetPositionInfo" }
+                assertTrue(after.isEmpty(), "polling went on after the release: ${after.map { it.action }}")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a taken-over speaker does not move the queue on")
+    fun aTakenOverSpeakerDoesNotAdvanceTheQueue() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = h.renderer
+                r.init()
+                r.queue.updateByMessage("setPlaylist", queuePayload(), dev.t2u.lounge.Client.YT)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                until { r.status == PlayerStatus.PLAYING && fake.count("GetPositionInfo") > 0 }
+
+                fake.state.currentUri = radio
+                until(3000) { r.status == PlayerStatus.STOPPED }
+                delay(300)
+
+                assertEquals(PlayerStatus.STOPPED, r.status)
+                assertEquals(1, fake.count("SetAVTransportURI"), "a second track was sent")
+                assertEquals(A, r.queue.current?.id)
+            }
+        }
+    }
+
+    private fun queuePayload() = buildJsonObject {
+        put("listId", "PL")
+        put("videoIds", "$A,$DQW")
+        put("videoId", A)
+        put("currentIndex", "0")
+        put("currentTime", "0")
+    }
+
+    @Test
+    @DisplayName("after a takeover a clear and a stop send nothing to the speaker")
+    fun afterATakeoverAClearAndAStopSendNothing() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                fake.state.currentUri = radio
+                until(3000) { r.status == PlayerStatus.STOPPED }
+                assertEquals(PlayerStatus.STOPPED, r.status, "the speaker was not released")
+                val mark = fake.calls.size
+
+                r.clearSpeaker()
+                r.doStop()
+
+                assertEquals(emptyList(), fake.sentSince(mark))
+                assertEquals(radio, fake.state.currentUri)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a new cast takes a speaker back after a takeover")
+    fun aNewCastTakesASpeakerBackAfterATakeover() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                fake.state.currentUri = radio
+                until(3000) { r.status == PlayerStatus.STOPPED }
+                assertEquals(PlayerStatus.STOPPED, r.status, "the speaker was not released")
+                val mark = fake.calls.size
+
+                assertTrue(r.play(Video(DQW), 0.0))
+                delay(300)
+
+                val sent = fake.sentSince(mark)
+                assertTrue("SetAVTransportURI" in sent && "Play" in sent, "sent $sent")
+                assertEquals(PlayerStatus.PLAYING, r.status)
+                assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+                assertEquals(1, h.notes("the speaker was taken over by another source - released").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("one odd poll between two reads of our own stream is not a takeover")
+    fun oneOddPollIsNotATakeover() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                val reads = java.util.concurrent.atomic.AtomicInteger()
+                // The next read after the first one reports the radio, every other read reports our own stream.
+                fake.onAction = { action ->
+                    if (action == "GetPositionInfo") fake.state.reportedUri = if (reads.incrementAndGet() == 1) radio else null
+                }
+
+                delay(500)
+
+                assertTrue(reads.get() > 3, "reads ${reads.get()}")
+                assertEquals(PlayerStatus.PLAYING, r.status)
+                assertTrue(h.notes("the speaker was taken over").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an empty URI, an unreadable URI and a paused speaker on our stream are not a takeover")
+    fun anEmptyOrUnreadableUriOrAPausedSpeakerIsNotATakeover() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                val ours = fake.state.currentUri
+
+                fake.state.currentUri = ""
+                delay(400)
+                assertEquals(PlayerStatus.PLAYING, r.status, "an empty URI released the speaker")
+
+                fake.state.currentUri = radio
+                fake.bareFaultOn = setOf("GetPositionInfo")
+                delay(400)
+                assertEquals(PlayerStatus.PLAYING, r.status, "an unreadable URI released the speaker")
+
+                fake.bareFaultOn = emptySet()
+                fake.state.currentUri = ours
+                assertTrue(r.pause())
+                delay(400)
+                assertEquals(PlayerStatus.PAUSED, r.status, "a paused speaker on our stream released")
+                assertTrue(h.notes("the speaker was taken over").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker briefly reporting the previous track of ours is not a takeover")
+    fun aTrackChangeShowingThePreviousTrackOfOursIsNotATakeover() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+
+                fake.state.reportedUri = "http://127.0.0.1:8000/stream/" + "f".repeat(32) + ".aac"
+                delay(500)
+
+                assertEquals(PlayerStatus.PLAYING, r.status)
+                assertTrue(h.notes("the speaker was taken over").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a load in flight does not count a foreign URI, and the new track is not released")
+    fun aLoadInFlightDoesNotCountTowardsATakeover() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                fake.state.currentUri = radio
+                h.resolveHold = { delay(400) }
+
+                val play = h.scope.async { r.play(Video(DQW), 0.0) }
+                assertTrue(play.await())
+                delay(300)
+
+                assertEquals(PlayerStatus.PLAYING, r.status)
+                assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+                assertTrue(h.notes("the speaker was taken over").isEmpty())
             }
         }
     }
