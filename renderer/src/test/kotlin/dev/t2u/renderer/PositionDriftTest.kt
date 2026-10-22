@@ -306,7 +306,7 @@ internal class PositionDriftTest {
             delay(300)
             val mark = events.size
 
-            fake.state.reportedUri = "http://127.0.0.1:9/some/other/stream.mp3"
+            fake.state.reportedUri = "http://127.0.0.1:8000/stream/ffffffffffffffffffffffffffffffff.mp3"
             mimic.jumpTo(100.0)
             val readsAtJump = positionReads()
             waitUntil(timeoutMs = 3000) { positionReads() - readsAtJump >= 8 }
