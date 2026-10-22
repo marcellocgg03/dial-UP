@@ -66,6 +66,14 @@ class FakeRenderer(
     private val neverPlay: Boolean = false,
     bareFaultOn: Set<String> = emptySet(),
     private val noGapless: Boolean = false,
+    // Plan 03-26 (LAN runner): every parameter below defaults to the behaviour the JVM tests have always had.
+    private val bindHost: String = "127.0.0.1",
+    private val bindPort: Int = 0,
+    private val friendlyName: String? = null,
+    private val udn: String? = null,
+    private val playMimes: Set<String>? = null,
+    private val startDelayMs: Long = 0,
+    private val log: ((String) -> Unit)? = null,
 ) : AutoCloseable {
     val calls: MutableList<FakeCall> = CopyOnWriteArrayList()
 
@@ -261,3 +269,9 @@ class FakeRenderer(
         )
     }
 }
+
+/** RED stub (plan 03-26): the DIDL mime reader is not written yet. */
+fun mimeOfDidl(didl: String): String? = null
+
+/** RED stub (plan 03-26): the alias-aware mime match is not written yet. */
+fun mimeIsListed(mime: String, listed: Set<String>): Boolean = false
