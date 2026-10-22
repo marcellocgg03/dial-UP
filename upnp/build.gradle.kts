@@ -44,3 +44,15 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+// Plan 03-26: a fake speaker on the LAN for the phone app to cast to (tools/fake-renderer.sh passes --args).
+// slf4j-jdk14 goes on this task's classpath only, so no existing test classpath changes.
+val fakeRendererRuntime: Configuration by configurations.creating
+dependencies.addProvider("fakeRendererRuntime", libs.slf4j.jdk14)
+
+tasks.register<JavaExec>("runFakeRenderer") {
+    group = "verification"
+    description = "Runs the fake UPnP speaker on the LAN (see tools/fake-renderer.sh --help); pass options with --args."
+    classpath = sourceSets["testFixtures"].runtimeClasspath + fakeRendererRuntime
+    mainClass.set("dev.t2u.upnp.FakeRendererMainKt")
+}

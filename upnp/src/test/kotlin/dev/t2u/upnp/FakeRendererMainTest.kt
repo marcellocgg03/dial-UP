@@ -5,7 +5,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.jupiter.api.Test
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -335,6 +340,166 @@ class FakeRendererMainTest {
         FakeRenderer(sink = sink).use { fake ->
             fake.start()
             assertContains(soap(fake, "ConnectionManager", "GetProtocolInfo"), "<Sink>$sink</Sink>")
+        }
+    }
+
+    // ---- SSDP ---------------------------------------------------------------------------------------------
+
+    private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
+    private val udn = "aaaaaaaa-1111-4222-8333-444444444444"
+    private val placeUrl = "http://192.168.50.45:49200/desc.xml"
+
+    private fun receiveAll(sock: DatagramSocket, waitMs: Int, max: Int = 50): List<SsdpMessage> {
+        val out = mutableListOf<SsdpMessage>()
+        sock.soTimeout = waitMs
+        val buf = ByteArray(4096)
+        while (out.size < max) {
+            val p = DatagramPacket(buf, buf.size)
+            try {
+                sock.receive(p)
+            } catch (_: SocketTimeoutException) {
+                break
+            }
+            out.add(parseMessage(p.data, p.length))
+        }
+        return out
+    }
+
+    /** Sends one M-SEARCH for [st] to the responder's listener from a fresh loopback socket and returns the replies. */
+    private fun search(ssdp: FakeRendererSsdp, st: String, waitMs: Int = 600): List<SsdpMessage> {
+        DatagramSocket(0, loopback).use { client ->
+            val bytes = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $st\r\n\r\n".toByteArray()
+            client.send(DatagramPacket(bytes, bytes.size, loopback, ssdp.boundPort()))
+            return receiveAll(client, waitMs)
+        }
+    }
+
+    private fun ssdpOn(notify: DatagramSocket, location: String = placeUrl, aliveEveryMs: Long = 60_000) = FakeRendererSsdp(
+        udn = udn,
+        location = location,
+        bindAddress = loopback,
+        listenPort = 0,
+        listenAddress = loopback,
+        joinGroup = false,
+        notifyTarget = InetSocketAddress(loopback, notify.localPort),
+        aliveEveryMs = aliveEveryMs,
+    )
+
+    @Test
+    fun theTypesTheFakeAnswersAreTheDocumentedOnes() {
+        assertEquals(
+            listOf("upnp:rootdevice", "uuid:$udn", "urn:schemas-upnp-org:device:MediaRenderer:1", "urn:schemas-upnp-org:service:AVTransport:1"),
+            fakeRendererSsdpTypes(udn),
+        )
+        for (st in listOf("ssdp:all", "upnp:rootdevice", "uuid:$udn", "urn:schemas-upnp-org:device:MediaRenderer:1", "urn:schemas-upnp-org:service:AVTransport:1")) {
+            assertTrue(fakeRendererAnswers(st, udn), st)
+        }
+        for (st in listOf(
+            "urn:dial-multiscreen-org:service:dial:1",
+            "urn:schemas-upnp-org:device:ZonePlayer:1",
+            "urn:schemas-upnp-org:device:MediaRenderer:2",
+            "uuid:someone-else",
+            "",
+        )) {
+            assertFalse(fakeRendererAnswers(st, udn), st)
+        }
+        assertEquals("uuid:$udn", fakeRendererUsn(udn, "uuid:$udn"))
+        assertEquals("uuid:$udn::upnp:rootdevice", fakeRendererUsn(udn, "upnp:rootdevice"))
+    }
+
+    @Test
+    fun theAliveMessagesCarryTheFourTypesAndTheLocation() {
+        DatagramSocket(0, loopback).use { notify ->
+            val ssdp = ssdpOn(notify)
+            try {
+                ssdp.start()
+                val alive = receiveAll(notify, 800, max = 4)
+                assertEquals(4, alive.size, "$alive")
+                assertEquals(fakeRendererSsdpTypes(udn).toSet(), alive.map { it.headers.getValue("NT") }.toSet())
+                for (m in alive) {
+                    assertEquals("NOTIFY * HTTP/1.1", m.startLine)
+                    assertEquals("ssdp:alive", m.headers["NTS"])
+                    assertEquals(placeUrl, m.headers["LOCATION"])
+                    assertEquals("max-age=1800", m.headers["CACHECONTROL"])
+                    assertEquals(fakeRendererUsn(udn, m.headers.getValue("NT")), m.headers["USN"])
+                    assertEquals(udn, udnFromUsn(m.headers["USN"]))
+                }
+            } finally {
+                ssdp.stop()
+            }
+        }
+    }
+
+    @Test
+    fun aliveIsRepeatedOnTheIntervalAndByebyeIsSentOnStop() {
+        DatagramSocket(0, loopback).use { notify ->
+            val ssdp = ssdpOn(notify, aliveEveryMs = 250)
+            ssdp.start()
+            val seen = receiveAll(notify, 700, max = 8)
+            assertTrue(seen.count { it.headers["NTS"] == "ssdp:alive" } >= 8, "alive was not repeated: ${seen.size} messages")
+            ssdp.stop()
+            val tail = receiveAll(notify, 500)
+            val byebye = tail.filter { it.headers["NTS"] == "ssdp:byebye" }
+            assertEquals(fakeRendererSsdpTypes(udn).toSet(), byebye.map { it.headers.getValue("NT") }.toSet(), "$tail")
+            for (m in byebye) assertEquals(fakeRendererUsn(udn, m.headers.getValue("NT")), m.headers["USN"])
+            // a second stop sends nothing more
+            ssdp.stop()
+            assertTrue(receiveAll(notify, 300).none { it.headers["NTS"] == "ssdp:byebye" })
+        }
+    }
+
+    @Test
+    fun anMSearchForAnAnsweredTypeGetsAReplyAndOtherTypesGetNone() {
+        DatagramSocket(0, loopback).use { notify ->
+            val ssdp = ssdpOn(notify)
+            try {
+                assertNull(ssdp.start())
+                receiveAll(notify, 300, max = 4)
+                for (st in listOf("upnp:rootdevice", "uuid:$udn", "urn:schemas-upnp-org:device:MediaRenderer:1", "urn:schemas-upnp-org:service:AVTransport:1")) {
+                    val replies = search(ssdp, st)
+                    assertEquals(1, replies.size, "$st: $replies")
+                    assertEquals("HTTP/1.1 200 OK", replies[0].startLine)
+                    assertEquals(st, replies[0].headers["ST"])
+                    assertEquals(placeUrl, replies[0].headers["LOCATION"])
+                    assertEquals(fakeRendererUsn(udn, st), replies[0].headers["USN"])
+                }
+                val all = search(ssdp, "ssdp:all")
+                assertEquals(fakeRendererSsdpTypes(udn).toSet(), all.map { it.headers.getValue("ST") }.toSet(), "$all")
+                for (st in listOf("urn:dial-multiscreen-org:service:dial:1", "urn:schemas-upnp-org:device:ZonePlayer:1", "uuid:someone-else")) {
+                    assertEquals(emptyList(), search(ssdp, st, waitMs = 250), st)
+                }
+            } finally {
+                ssdp.stop()
+            }
+        }
+    }
+
+    @Test
+    fun theLocationInTheRepliesIsTheDescriptionTheFakeServesWithTheSameUdn() {
+        val id = fakeRendererUdn("Kitchen Fake")
+        FakeRenderer(friendlyName = "Kitchen Fake", udn = id).use { fake ->
+            fake.start()
+            DatagramSocket(0, loopback).use { notify ->
+                val ssdp = FakeRendererSsdp(
+                    udn = id,
+                    location = fake.location,
+                    bindAddress = loopback,
+                    listenPort = 0,
+                    listenAddress = loopback,
+                    joinGroup = false,
+                    notifyTarget = InetSocketAddress(loopback, notify.localPort),
+                )
+                try {
+                    ssdp.start()
+                    val reply = search(ssdp, "urn:schemas-upnp-org:device:MediaRenderer:1").single()
+                    val advertised = reply.headers.getValue("LOCATION")
+                    val d = parseDescription(get(advertised).second, advertised)
+                    assertEquals("Kitchen Fake", d.friendlyName)
+                    assertEquals("uuid:${udnFromUsn(reply.headers["USN"])}", d.udn)
+                } finally {
+                    ssdp.stop()
+                }
+            }
         }
     }
 }

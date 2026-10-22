@@ -5,12 +5,21 @@ package dev.t2u.upnp
 // phone app can discover and cast to it. It never fetches the stream and never plays a sound; it only answers SOAP
 // and says (one line per control call, no URL, no DIDL) what it was asked to do.
 
+import java.net.DatagramPacket
 import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
 import java.net.NetworkInterface
+import java.net.SocketAddress
+import java.net.SocketTimeoutException
 import java.time.LocalTime
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
 const val FAKE_DEFAULT_NAME = "Fake Test Speaker"
@@ -160,6 +169,138 @@ fun defaultPrivateAddress(): String? {
     return found.minByOrNull { rank(it) }
 }
 
+private const val AVTRANSPORT_ST = "urn:schemas-upnp-org:service:AVTransport:1"
+
+/** The four notification types the fake advertises: root device, its uuid, MediaRenderer:1 and AVTransport:1. */
+fun fakeRendererSsdpTypes(udn: String): List<String> = listOf("upnp:rootdevice", "uuid:$udn", RENDERER_ST, AVTRANSPORT_ST)
+
+/** Does an M-SEARCH for [st] concern the fake? ssdp:all and each advertised type do; DIAL, ZonePlayer and other versions do not. */
+fun fakeRendererAnswers(st: String, udn: String): Boolean = st == "ssdp:all" || st in fakeRendererSsdpTypes(udn)
+
+/** USN of one notification type: the bare uuid for the uuid type, otherwise uuid:<udn>::<type>. */
+fun fakeRendererUsn(udn: String, type: String): String = if (type.startsWith("uuid:")) type else "uuid:$udn::$type"
+
+/**
+ * SSDP for the fake speaker: ssdp:alive on start and every [aliveEveryMs] (max-age 1800), ssdp:byebye on [stop], and unicast
+ * replies to M-SEARCH. It cannot be a plain [SsdpResponder]: that class answers and announces the DIAL types only, and a DIAL
+ * advertisement would put a second, broken "YouTube receiver" in the cast menu. The datagram texts come from the main code
+ * ([buildNotify], [buildSearchReply], [parseMessage]) so they are the ones the app is tested against.
+ *
+ * [bindAddress] is the source of every datagram this sends (the app only accepts a LOCATION whose host is the sender),
+ * [listenPort] 1900 in production and 0 in tests, [notifyTarget] null for the SSDP group (tests point it at a unicast socket).
+ * A loopback [bindAddress] never sends to a multicast group. Only private sources are answered.
+ */
+class FakeRendererSsdp(
+    private val udn: String,
+    private val location: String,
+    private val bindAddress: InetAddress,
+    private val listenPort: Int = SsdpConstants.PORT,
+    private val listenAddress: InetAddress? = null,
+    private val joinGroup: Boolean = true,
+    private val notifyTarget: InetSocketAddress? = null,
+    private val aliveEveryMs: Long = 30_000,
+    private val serverHeader: String = "Linux/5.15 UPnP/1.0 t2u-fake-renderer/1",
+    private val onEvent: (String) -> Unit = {},
+) {
+    @Volatile private var listenSocket: MulticastSocket? = null
+
+    @Volatile private var sendSocket: MulticastSocket? = null
+
+    @Volatile private var running = false
+    private var listener: Thread? = null
+    private var timer: ScheduledExecutorService? = null
+
+    /** The port the listener is bound to (the real one when [listenPort] is 0), -1 before [start] or when the bind failed. */
+    fun boundPort(): Int = listenSocket?.localPort ?: -1
+
+    /**
+     * Starts the send socket, the listener and the alive timer. A listener that cannot bind (port 1900 busy) is reported
+     * through [onEvent] and returned as the message; alive and byebye still work then, only searches are not answered.
+     */
+    fun start(): String? {
+        check(!running) { "already started" }
+        running = true
+        val nif = runCatching { NetworkInterface.getByInetAddress(bindAddress) }.getOrNull()
+        sendSocket = MulticastSocket(InetSocketAddress(bindAddress, 0)).apply {
+            timeToLive = 4
+            if (!bindAddress.isLoopbackAddress && nif != null) networkInterface = nif
+        }
+        var problem: String? = null
+        try {
+            val sock = MulticastSocket(null as SocketAddress?)
+            sock.reuseAddress = true
+            sock.bind(InetSocketAddress(listenAddress, listenPort))
+            sock.soTimeout = 1000
+            if (joinGroup && nif != null) {
+                sock.joinGroup(InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), SsdpConstants.PORT), nif)
+            }
+            listenSocket = sock
+            listener = Thread({ receiveLoop(sock) }, "fake-renderer-ssdp").apply { isDaemon = true }.also { it.start() }
+        } catch (t: Throwable) {
+            problem = "${t.javaClass.simpleName}: ${t.message}"
+            onEvent("SSDP listener on UDP $listenPort failed ($problem): searches will not be answered, alive messages still go out")
+        }
+        timer = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "fake-renderer-alive").apply { isDaemon = true } }
+            .also { it.scheduleWithFixedDelay({ runCatching { notify("ssdp:alive") } }, 0, aliveEveryMs, TimeUnit.MILLISECONDS) }
+        return problem
+    }
+
+    /** Sends ssdp:byebye for the four types, then closes everything. Safe to call twice. */
+    fun stop() {
+        if (!running) return
+        timer?.shutdownNow()
+        runCatching { notify("ssdp:byebye") }
+        running = false
+        runCatching { listenSocket?.close() }
+        runCatching { listener?.join(2000) }
+        runCatching { sendSocket?.close() }
+    }
+
+    private fun target(): InetSocketAddress = notifyTarget ?: InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), SsdpConstants.PORT)
+
+    private fun notify(nts: String) {
+        val sock = sendSocket ?: return
+        val group = target()
+        if (bindAddress.isLoopbackAddress && group.address.isMulticastAddress) return
+        for (type in fakeRendererSsdpTypes(udn)) {
+            val bytes = buildNotify(nts, type, fakeRendererUsn(udn, type), serverHeader, location, httpDate())
+            sock.send(DatagramPacket(bytes, bytes.size, group))
+        }
+        onEvent("SSDP $nts sent for ${fakeRendererSsdpTypes(udn).size} types")
+    }
+
+    private fun receiveLoop(sock: MulticastSocket) {
+        val buf = ByteArray(8192)
+        while (running && !sock.isClosed) {
+            val packet = DatagramPacket(buf, buf.size)
+            try {
+                sock.receive(packet)
+            } catch (_: SocketTimeoutException) {
+                continue
+            } catch (_: Throwable) {
+                break
+            }
+            runCatching { handle(packet) }
+        }
+    }
+
+    private fun handle(packet: DatagramPacket) {
+        val msg = parseMessage(packet.data, packet.length)
+        if (!msg.startLine.uppercase().startsWith("M-SEARCH")) return
+        if (!msg.headers["MAN"].orEmpty().lowercase().contains("ssdp:discover")) return
+        val st = msg.headers["ST"] ?: return
+        if (!fakeRendererAnswers(st, udn)) return
+        if (!isPrivateLanAddress(packet.address)) return
+        val sock = sendSocket ?: return
+        val types = if (st == "ssdp:all") fakeRendererSsdpTypes(udn) else listOf(st)
+        for (type in types) {
+            val bytes = buildSearchReply(location, type, serverHeader, fakeRendererUsn(udn, type), httpDate())
+            sock.send(DatagramPacket(bytes, bytes.size, packet.address, packet.port))
+        }
+        onEvent("SSDP M-SEARCH from ${packet.address.hostAddress} for $st answered")
+    }
+}
+
 internal fun stamped(line: String) {
     println("${LocalTime.now().truncatedTo(ChronoUnit.MILLIS)} $line")
 }
@@ -194,6 +335,12 @@ fun main(args: Array<String>) {
         System.err.println("fake-renderer: cannot serve on ${options.bind}:${options.port}: ${t.javaClass.simpleName}: ${t.message}")
         exitProcess(1)
     }
+    val ssdp = FakeRendererSsdp(
+        udn = udn,
+        location = fake.location,
+        bindAddress = InetAddress.getByName(options.bind),
+        onEvent = ::stamped,
+    )
     stamped("fake speaker '${options.name}' (uuid:$udn) serving ${fake.location}")
     stamped(
         "plays: ${options.playMimes?.sorted()?.joinToString(", ") ?: "every stream"}; start delay ${options.startDelayMs} ms; " +
@@ -202,10 +349,13 @@ fun main(args: Array<String>) {
     val done = CountDownLatch(1)
     Runtime.getRuntime().addShutdownHook(
         Thread {
-            stamped("stopping")
+            stamped("stopping: sending ssdp:byebye")
+            runCatching { ssdp.stop() }
             runCatching { fake.close() }
+            stamped("stopped")
             done.countDown()
         },
     )
+    ssdp.start()
     done.await()
 }
