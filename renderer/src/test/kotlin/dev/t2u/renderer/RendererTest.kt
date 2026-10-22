@@ -98,12 +98,16 @@ class RendererTest {
         @Volatile var receiverOptions: ReceiverOptions? = null
 
         @Volatile var receiverCreated = 0
+
+        /** Runs inside every resolve; a test sets it to hold the resolver (plan 03-22). */
+        @Volatile var resolveHold: (suspend () -> Unit)? = null
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         private val resolver = object : VideoResolver {
             override suspend fun resolve(videoId: String): ResolvedInfo {
                 resolves.add(videoId)
                 if (resolveDelayMs > 0) delay(resolveDelayMs)
+                resolveHold?.invoke()
                 return ResolvedInfo(
                     url = "https://example/v",
                     ext = "m4a",
@@ -813,6 +817,131 @@ class RendererTest {
                 assertEquals("", fake.state.currentUri)
                 assertTrue(emptyUriSentAt(fake) >= 0)
                 assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    // ---- plan 03-22: a clear while a load is still resolving or preparing (CAST-06) ----
+
+    /** Holds the resolver once [armed]: [entered] says a resolve is waiting, [release] lets it go on. */
+    private class ResolveGate {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+
+        @Volatile var armed = false
+
+        suspend fun onResolve() {
+            if (armed) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+    }
+
+    private val streamActions = setOf("Stop", "SetAVTransportURI", "Play")
+
+    @Test
+    @DisplayName("a clear during the first track's resolve stops that load")
+    fun aClearDuringTheFirstTracksResolveStopsThatLoad() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val gate = ResolveGate().also { it.armed = true }
+                h.resolveHold = gate::onResolve
+                val before = fake.calls.size
+                val load = h.scope.async { h.renderer.doPlay(Video(A), 0.0) }
+                withTimeout(5000) { gate.entered.await() }
+
+                h.renderer.clearSpeaker()
+                gate.release.complete(Unit)
+                val loaded = load.await()
+
+                assertEquals("", fake.state.currentUri, "the song reached the speaker after the clear")
+                val sent = fake.calls.drop(before).map { it.action }.filter { it in streamActions }
+                assertTrue(sent.isEmpty(), "sent after the clear: $sent")
+                assertFalse(loaded, "the load that was cleared reports failure")
+                assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear during a later track's resolve stops that load")
+    fun aClearDuringALaterTracksResolveStopsThatLoad() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val gate = ResolveGate()
+                h.resolveHold = gate::onResolve
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(fake.state.currentUri.contains("/stream/"), fake.state.currentUri)
+                gate.armed = true
+                val load = h.scope.async { h.renderer.doPlay(Video(DQW), 0.0) }
+                withTimeout(5000) { gate.entered.await() }
+                val before = fake.calls.size
+
+                h.renderer.clearSpeaker()
+                gate.release.complete(Unit)
+                val loaded = load.await()
+
+                assertEquals("", fake.state.currentUri, "the speaker still holds a track of ours")
+                val emptiedAt = emptyUriSentAt(fake)
+                assertTrue(emptiedAt >= before, fake.calls.map { it.action }.toString())
+                assertTrue(fake.calls.drop(emptiedAt + 1).none { it.action in streamActions }, "the cancelled load sent something after the clear")
+                assertFalse(loaded, "the load that was cleared reports failure")
+                assertNull(h.renderer.nowPlaying)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear while the resolver never returns stays inside the budget")
+    fun aClearWhileTheResolverNeverReturnsStaysInsideTheBudget() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val gate = ResolveGate().also { it.armed = true }
+                h.resolveHold = gate::onResolve
+                val before = fake.calls.size
+                val load = h.scope.async { h.renderer.doPlay(Video(A), 0.0) }
+                try {
+                    withTimeout(5000) { gate.entered.await() }
+
+                    val t0 = System.nanoTime()
+                    h.renderer.clearSpeaker()
+                    val ms = (System.nanoTime() - t0) / 1_000_000
+
+                    assertTrue(ms < CLEAR_BUDGET_MS, "the clear took $ms ms")
+                    assertEquals(emptyList(), fake.calls.drop(before).map { it.action }.filter { it in streamActions })
+                } finally {
+                    load.cancel()
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a clear during a later track's resolve leaves a speaker on another source alone")
+    fun aClearDuringALoadLeavesAnotherSourceAlone() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                h.renderer.init()
+                val gate = ResolveGate()
+                h.resolveHold = gate::onResolve
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                fake.state.currentUri = "http://192.168.1.50/other.mp3"
+                gate.armed = true
+                val load = h.scope.async { h.renderer.doPlay(Video(DQW), 0.0) }
+                withTimeout(5000) { gate.entered.await() }
+                val before = fake.calls.size
+
+                h.renderer.clearSpeaker()
+                gate.release.complete(Unit)
+                load.await()
+
+                val sent = fake.calls.drop(before).map { it.action }
+                assertTrue(sent.none { it == "Stop" || it == "SetAVTransportURI" }, "sent $sent")
+                assertEquals("http://192.168.1.50/other.mp3", fake.state.currentUri)
             }
         }
     }
