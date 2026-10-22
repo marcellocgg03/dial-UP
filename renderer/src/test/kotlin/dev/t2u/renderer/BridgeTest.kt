@@ -220,6 +220,7 @@ class BridgeTest {
 
         // 1. the speaker answered the search, so one renderer is up and nothing is casting yet
         awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(RENDERER_UDN) == true }
+        awaitUntil("the receiver count to show one speaker") { bridge.castCount.value == BridgeCount(0, 1) }
         assertEquals(BridgeCount(0, 1), bridge.castCount.value)
 
         // 2. the phone finds the receiver by M-SEARCH from its own address
