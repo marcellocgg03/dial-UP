@@ -448,10 +448,12 @@ class YouTubeApp(
 
     private suspend fun handleLoungeStatus(aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> {
         val client = session.client
+        var devicesParsed = true
         val devices: List<JsonElement> = try {
             (Json.parseToJsonElement(payload.text("devices") ?: "") as JsonArray).toList()
         } catch (e: Exception) {
             note("malformed", "name" to "loungeStatus", "reason" to "devices is not a JSON array", "theme" to client.theme)
+            devicesParsed = false
             emptyList()
         }
         val senders = devices.mapNotNull { it as? JsonObject }
@@ -509,7 +511,28 @@ class YouTubeApp(
             out.add(if (nav != null) navMessage(aid, nav) else OutgoingMessage.onHasPreviousNextChanged(aid, null))
             out.add(OutgoingMessage.onAutoplayModeChanged(aid, nav?.autoplayMode))
         }
+        if (devicesParsed && session === activeSession) {
+            val listedIds = devices.mapNotNull { it as? JsonObject }
+                .filter { it.text("type") == "REMOTE_CONTROL" }
+                .mapNotNull { it.text("id") }
+                .toSet()
+            dropSendersNotListed(listedIds, session, aid)
+        }
         return out
+    }
+
+    /**
+     * Adaptation 26: the server's list of remote controls is the truth. A sender that is connected here but no
+     * longer listed left without telling anybody (force-stopping an app sends no disconnect), so it is dropped as
+     * an implicit disconnect and the autoplay support is worked out again from the senders that remain.
+     * yt-cast-receiver changes the connected senders only on connection events.
+     */
+    private suspend fun dropSendersNotListed(listedIds: Set<String>, session: Session, aid: Int) {
+        val ghosts = connected.filter { it.id !in listedIds }
+        for (ghost in ghosts) {
+            note("senderNotListed", "client" to session.client.displayName, "name" to ghost.name)
+            handleSenderDisconnected(ghost, session, true, aid)
+        }
     }
 
     private suspend fun handlePlaylistMessage(name: String, aid: Int, payload: JsonObject, session: Session, client: Client): List<OutgoingMessage> {

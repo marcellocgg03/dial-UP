@@ -553,6 +553,12 @@ class YouTubeAppTest {
         awaitUntil(what = "music sender $id connected") { count("cl", "onStateChange") > before && id in connects }
     }
 
+    /** A second sender joins while Music stays: the server lists both. */
+    private suspend fun connectAppBesideMusic(id: String) {
+        rpc("cl", "loungeStatus", loungeStatus(listOf(musicDevice("music-1"), device(id)), id))
+        awaitUntil(what = "app sender $id connected") { id in connects }
+    }
+
     /** The log of 2026-10-22: Music connected, then the YouTube app connected and the status lists only the app. */
     private suspend fun musicThenYouTubeAppWhoseStatusListsOnlyTheApp() {
         connectMusic()
@@ -603,7 +609,7 @@ class YouTubeAppTest {
     fun aStatusWithoutADevicesListDropsNobody() = run {
         val a = startedApp()
         connectMusic()
-        connect(id = "app-2")
+        connectAppBesideMusic("app-2")
 
         rpc("cl", "loungeStatus", buildJsonObject { })
         rpc("cl", "loungeStatus", buildJsonObject { put("devices", "this is not json") })
@@ -618,7 +624,7 @@ class YouTubeAppTest {
     fun anInactiveSessionsStatusDoesNotDropTheActiveSessionsSenders() = run {
         val a = startedApp()
         connectMusic()
-        connect(id = "app-3")
+        connectAppBesideMusic("app-3")
 
         // the other theme's session is not the active one; its status lists nobody
         rpc("m", "loungeStatus", loungeStatus(emptyList(), "nobody"))
