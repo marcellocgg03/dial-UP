@@ -23,6 +23,10 @@ package dev.t2u.renderer
 // it was paused) at the target. It runs on a caller-supplied clock so a test moves time by hand, and works without
 // the HTTP side (`fetchStream = false`) for tests that use the plain RendererHarness, whose URLs nobody serves.
 //
+// Plan 03-16 adds the lag the first version missed ([SonosMimic.laggingSeek], Lamp, 2026-10-21 20:59 poll from the
+// laptop): for about 0.7 s after an accepted Seek the speaker keeps reporting its OLD state (PLAYING with the old
+// RelTime), and only then goes TRANSITIONING at the target (RelTime already the target) before it plays on.
+//
 // Everything runs on 127.0.0.1. Time is the only non-deterministic input, so [earlyWindowMs] is a test parameter
 // with a wide margin on both sides of the Pauses the tests make.
 
@@ -173,11 +177,24 @@ class SonosMimic(
 
     // ------------------------------------------------------------------------------------------ slow seek
 
-    /** One accepted Seek: the speaker is mid-seek until [at] + [transitionMs], then in [after] at [target] seconds. */
-    private class SeekState(val target: Long, val at: Long, val transitionMs: Long, val after: String)
+    /**
+     * One accepted Seek. For [lagMs] the speaker still reports its old state ([preTransport], [staleRelTime]); then it is
+     * TRANSITIONING for [transitionMs] ([midRelTime], or the target when null); then in [after] at [target] seconds.
+     */
+    private class SeekState(
+        val target: Long,
+        val at: Long,
+        val lagMs: Long,
+        val transitionMs: Long,
+        val after: String,
+        val preTransport: String,
+        val staleRelTime: String?,
+    )
 
     private var slowTransitionMs: Long? = null
-    private var slowMidRelTime = "0:00:01"
+    private var slowLagMs = 0L
+    private var slowStaleRelTime: String? = null
+    private var slowMidRelTime: String? = "0:00:01"
     private var slowEndAtS: Long? = null
     private var slowClock: () -> Long = System::currentTimeMillis
     private var seek: SeekState? = null
@@ -191,7 +208,26 @@ class SonosMimic(
     fun slowSeek(transitionMs: Long, midSeekRelTime: String = "0:00:01", endAtSeconds: Long? = null, clock: () -> Long) {
         synchronized(lock) {
             slowTransitionMs = transitionMs
+            slowLagMs = 0
+            slowStaleRelTime = null
             slowMidRelTime = midSeekRelTime
+            slowEndAtS = endAtSeconds
+            slowClock = clock
+        }
+    }
+
+    /**
+     * The Lamp as polled from the laptop on 2026-10-21 (plan 03-16): for [lagMs] after an accepted Seek the speaker
+     * keeps reporting what it reported before (PLAYING, RelTime [staleRelTime]); then TRANSITIONING with RelTime = the
+     * target for [transitionMs]; then PLAYING advancing from the target. [transitionMs] = 0 is a fast speaker that
+     * never shows TRANSITIONING. Virtual [clock] only.
+     */
+    fun laggingSeek(lagMs: Long = 700, transitionMs: Long = 5000, staleRelTime: String = "0:00:01", endAtSeconds: Long? = null, clock: () -> Long) {
+        synchronized(lock) {
+            slowTransitionMs = transitionMs
+            slowLagMs = lagMs
+            slowStaleRelTime = staleRelTime
+            slowMidRelTime = null
             slowEndAtS = endAtSeconds
             slowClock = clock
         }
@@ -211,8 +247,9 @@ class SonosMimic(
             "Seek" -> {
                 val body = fake.calls.last { it.action == "Seek" }.body
                 val t = Regex("<Target>(\\d+):(\\d+):(\\d+)</Target>").find(body)?.groupValues?.drop(1)?.map { it.toLong() } ?: return@synchronized
-                val after = if (fake.state.transport == "PAUSED_PLAYBACK") "PAUSED_PLAYBACK" else "PLAYING"
-                seek = SeekState(t[0] * 3600 + t[1] * 60 + t[2], slowClock(), transition, after)
+                val before = fake.state.transport
+                val after = if (before == "PAUSED_PLAYBACK") "PAUSED_PLAYBACK" else "PLAYING"
+                seek = SeekState(t[0] * 3600 + t[1] * 60 + t[2], slowClock(), slowLagMs, transition, after, before, slowStaleRelTime)
                 applySlowSeek()
             }
             "Play" -> rebase("PLAYING")
@@ -224,11 +261,11 @@ class SonosMimic(
     private fun rebase(after: String) {
         val s = seek ?: return
         val elapsed = slowClock() - s.at
-        if (elapsed < s.transitionMs) {
-            seek = SeekState(s.target, s.at, s.transitionMs, after)
+        if (elapsed < s.lagMs + s.transitionMs) {
+            seek = SeekState(s.target, s.at, s.lagMs, s.transitionMs, after, s.preTransport, s.staleRelTime)
         } else {
-            val now = if (s.after == "PLAYING") s.target + (elapsed - s.transitionMs) / 1000 else s.target
-            seek = SeekState(now, slowClock(), 0, after)
+            val now = if (s.after == "PLAYING") s.target + (elapsed - s.lagMs - s.transitionMs) / 1000 else s.target
+            seek = SeekState(now, slowClock(), 0, 0, after, s.preTransport, null)
         }
         applySlowSeek()
     }
@@ -236,12 +273,19 @@ class SonosMimic(
     private fun applySlowSeek() {
         val s = seek ?: return
         val elapsed = slowClock() - s.at
-        if (elapsed < s.transitionMs) {
-            fake.state.transport = "TRANSITIONING"
-            fake.state.relTime = slowMidRelTime
+        if (elapsed < s.lagMs) {
+            // The Seek was accepted but the speaker has not noticed yet: still the old state and the old position.
+            fake.state.transport = s.preTransport
+            s.staleRelTime?.let { fake.state.relTime = it }
             return
         }
-        val position = if (s.after == "PLAYING") s.target + (elapsed - s.transitionMs) / 1000 else s.target
+        val sinceLag = elapsed - s.lagMs
+        if (sinceLag < s.transitionMs) {
+            fake.state.transport = "TRANSITIONING"
+            fake.state.relTime = slowMidRelTime ?: hms(s.target)
+            return
+        }
+        val position = if (s.after == "PLAYING") s.target + (sinceLag - s.transitionMs) / 1000 else s.target
         val end = slowEndAtS
         if (end != null && position >= end) {
             fake.state.transport = "STOPPED"

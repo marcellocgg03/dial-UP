@@ -1,11 +1,16 @@
 package dev.t2u.renderer
 
-// The seekbar after a native Seek on a speaker that takes seconds to settle (plan 03-15, PLAY-06), GPL-3.0-only.
+// The seekbar after a native Seek on a speaker that takes seconds to settle (plans 03-15 and 03-16, PLAY-06), GPL-3.0-only.
 //
 // Scenario copied from the device log (Lamp, format direct, session C, 2026-10-21 20:59): the phone sends seekTo 125,
 // the Lamp accepts the Seek and spends about 5 s TRANSITIONING with RelTime 0:00:01 before it plays on at 2:05. The
 // player used to read the speaker right after the Seek and tell the phone "currentTime 1.0". The rig is the plain
 // RendererHarness with a SonosMimic in slow-seek mode (no HTTP side) and a clock the test moves by hand.
+//
+// Plan 03-16 adds the lag the first scenario left out (device log 2026-10-21 21:43): for about 0.7 s after the accepted
+// Seek the Lamp keeps saying PLAYING with its OLD RelTime (0:00:01), and only then goes TRANSITIONING at the target. The
+// 03-15 guard read that PLAYING as "settled" and the phone was told 1.0 at +250 ms. The lagging tests use
+// SonosMimic.laggingSeek.
 //
 // No Node counterpart: renderer.test.js has no test for a speaker that reports a transient position after a Seek
 // (PARITY.md adaptation 23). Every test is a block-bodied function: JUnit silently skips a test whose expression body
@@ -67,6 +72,11 @@ internal class SeekPositionTest {
             mimic.refresh()
         }
 
+        /** The speaker has played one second of the track, as in the device log (RelTime 0:00:01 before the Seek). */
+        fun playedOneSecond() {
+            fake.state.relTime = SonosMimic.hms(1)
+        }
+
         /** What YouTubeApp.handlePlayerStateEvent would turn into an onStateChange: the status or the position moved. */
         fun sentToPhone(from: Int = 0): List<PlayerStateEvent> =
             events.drop(from).filter { it.previous == null || it.previous!!.status != it.current.status || it.previous!!.position != it.current.position }
@@ -96,11 +106,15 @@ internal class SeekPositionTest {
         queueSettleTimeoutMs = 5000,
     )
 
-    /** A renderer playing [A] on a mimic whose Seek takes [transitionMs] to settle; the speaker is already seen PLAYING. */
+    /**
+     * A renderer playing [A] on a mimic whose Seek takes [transitionMs] to settle; the speaker is already seen PLAYING.
+     * With [lagMs] the mimic is the lagging Lamp: it reports its old state for that long before it starts to settle.
+     */
     private fun <T> rig(
         transitionMs: Long = 5000,
         endAtSeconds: Long? = null,
         queue: Boolean = false,
+        lagMs: Long? = null,
         block: suspend Rig.() -> T,
     ): T {
         val fake = FakeRenderer()
@@ -108,7 +122,11 @@ internal class SeekPositionTest {
         fake.state.trackDuration = "0:02:20"
         val mimic = SonosMimic(fake, fetchStream = false)
         val clock = TestClock()
-        mimic.slowSeek(transitionMs, "0:00:01", endAtSeconds, clock::now)
+        if (lagMs == null) {
+            mimic.slowSeek(transitionMs, "0:00:01", endAtSeconds, clock::now)
+        } else {
+            mimic.laggingSeek(lagMs, transitionMs, "0:00:01", endAtSeconds, clock::now)
+        }
         val handler = QueueHandler()
         val h = RendererHarness(
             fake,
@@ -228,6 +246,86 @@ internal class SeekPositionTest {
             advance(12_000) // 2:17, inside the last 10 s of a 2:20 track: a poll records it
             delay(300)
             advance(4000) // the speaker plays out and stops
+            waitUntil { fake.calls.count { it.action == "SetAVTransportURI" } == 2 && r.status == PlayerStatus.PLAYING }
+
+            assertEquals(2, fake.calls.count { it.action == "SetAVTransportURI" }, "the next track was sent")
+            assertEquals(B, r.queue.current?.id)
+            assertEquals(PlayerStatus.PLAYING, r.status)
+        }
+    }
+
+    @Test
+    @DisplayName("a Lamp that still says PLAYING with its old position right after the Seek is not believed: the phone is told the target")
+    fun reportsTheTargetWhileTheLampStillSaysPlayingWithTheOldPosition() {
+        rig(lagMs = 700) {
+            playedOneSecond()
+            events.clear()
+            assertTrue(r.seek(TARGET_S))
+            advance(250) // the device log: the phone was told the position 250 ms after seekTo
+
+            val told = events.filter { it.current.status == PlayerStatus.PLAYING }
+            assertEquals(TARGET_S, told.last().current.position, "the last state told in the first 500 ms carries the target")
+            assertTrue(events.all { it.current.position >= 120.0 }, "no state told right after the Seek is below the target: ${events.map { it.current.position }}")
+            assertEquals(TARGET_S, r.getPosition(), "the Lamp still reports PLAYING at 0:00:01")
+        }
+    }
+
+    @Test
+    @DisplayName("the target is held through the Lamp's lag and its 5 s TRANSITIONING, then the speaker's position is followed")
+    fun holdsThroughTheTransitionAndThenFollowsTheSpeaker() {
+        rig(lagMs = 700, transitionMs = 5000) {
+            playedOneSecond()
+            assertTrue(r.seek(TARGET_S))
+            val mark = events.size
+
+            advance(300) // lagging: PLAYING at 0:00:01
+            assertEquals(TARGET_S, r.getPosition())
+            delay(150) // the poll reads the lagging PLAYING too
+            advance(500) // 0.8 s: TRANSITIONING at the target
+            assertEquals(TARGET_S, r.getPosition())
+            delay(150)
+            advance(3000) // 3.8 s: still TRANSITIONING
+            assertEquals(TARGET_S, r.getPosition())
+            delay(150)
+            assertTrue(sentToPhone(mark).all { it.current.position >= TARGET_S }, "nothing below the target reached the phone: ${sentToPhone(mark).map { it.current.position }}")
+
+            advance(2900) // 6.7 s: PLAYING again, one second after the target
+            delay(300)
+            assertTrue(sentToPhone(mark).size <= 1, "at most one correction after the settle: ${sentToPhone(mark).map { it.current.position }}")
+            assertTrue(sentToPhone(mark).all { it.current.position >= TARGET_S }, "${sentToPhone(mark).map { it.current.position }}")
+            assertEquals(TARGET_S + 1, r.getPosition(), "the speaker's own RelTime once it plays on")
+        }
+    }
+
+    @Test
+    @DisplayName("a fast speaker that never shows TRANSITIONING is released as soon as its position is near the target")
+    fun aFastSpeakerThatNeverShowsTransitioningIsReleasedWhenNearTheTarget() {
+        rig(lagMs = 300, transitionMs = 0) {
+            playedOneSecond()
+            assertTrue(r.seek(TARGET_S))
+            assertEquals(TARGET_S, r.getPosition(), "inside the 300 ms lag the target is told, not the old 0:00:01")
+
+            advance(400) // the position has jumped to the target
+            delay(200)
+            advance(2000) // and plays on
+            assertEquals(TARGET_S + 2, r.getPosition(), "the speaker's value is used from then on")
+            assertTrue(h.notes("Speaker did not settle").isEmpty(), "released by position, not by the deadline")
+        }
+    }
+
+    @Test
+    @DisplayName("a track end after a seek on a lagging Lamp still advances the queue")
+    fun trackEndAfterALaggingSeekStillAdvances() {
+        rig(lagMs = 700, endAtSeconds = TRACK_S, queue = true) {
+            playedOneSecond()
+            assertTrue(r.seek(TARGET_S))
+            assertEquals(TARGET_S, r.getPosition(), "the phone was told the target")
+
+            advance(5000) // still TRANSITIONING
+            delay(300)
+            advance(12_000) // PLAYING again at 2:16, inside the last 10 s of a 2:20 track: a poll records it
+            delay(300)
+            advance(5000) // the speaker plays out and stops
             waitUntil { fake.calls.count { it.action == "SetAVTransportURI" } == 2 && r.status == PlayerStatus.PLAYING }
 
             assertEquals(2, fake.calls.count { it.action == "SetAVTransportURI" }, "the next track was sent")
