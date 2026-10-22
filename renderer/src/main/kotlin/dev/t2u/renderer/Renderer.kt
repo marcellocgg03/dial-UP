@@ -174,6 +174,12 @@ private class Current(val video: Video, val format: String, val startAt: Int, va
 
     /** A position the post-Play Seek could not be sent to (the speaker refused it while starting); sent once it plays. */
     @Volatile var owedSeek: Double? = null
+
+    /**
+     * True after a native Seek the speaker accepted while paused, until the next Play: that Play can leave the speaker
+     * TRANSITIONING for seconds (Lamp, device session D), so the sender is told buffering until it plays (plan 03-20).
+     */
+    @Volatile var seekedWhilePaused: Boolean = false
 }
 
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */
@@ -195,8 +201,10 @@ private class PreparedItem(
  * is what the sender's seekbar counts on from. [sawTransitioning] is set once the speaker has been seen in a state
  * other than a settled one (TRANSITIONING) after the Seek: a Sonos keeps reporting its OLD state, PLAYING with the old
  * RelTime, for about 0.7 s after it accepted the Seek (plan 03-16), so a bare PLAYING right after a Seek proves nothing.
+ * [awaitPlay] marks the hold of a Play that followed a paused Seek (plan 03-20): the speaker is believed only once it is
+ * PLAYING (or stopped), because it still reports PAUSED_PLAYBACK at the target for a moment after the Play.
  */
-private class PendingSeek(val id: Int, val target: Double, val startedMs: Long) {
+private class PendingSeek(val id: Int, val target: Double, val startedMs: Long, val awaitPlay: Boolean = false) {
     @Volatile var shown: Double = target
 
     @Volatile var shownAt: Long = startedMs
@@ -305,6 +313,9 @@ class Renderer(
     }
 
     override fun clockMs(): Long = deps.clock()
+
+    /** The sender is told buffering while a Seek (or the Play after a paused Seek) is pending, until the poll settles it (plan 03-20). */
+    override fun seekHoldActive(): Boolean = pending != null
 
     override fun refresh(maxAge: Int) {
         maxAgeS = maxAge
@@ -574,6 +585,7 @@ class Renderer(
     override suspend fun doPause(): Boolean {
         commandEpoch.incrementAndGet()
         try {
+            if (pending?.awaitPlay == true) pending = null // the Play it waited for is cancelled by this Pause
             return pauseNow()
         } finally {
             commandEpoch.incrementAndGet()
@@ -618,6 +630,7 @@ class Renderer(
             note("info", "Play sent for the stream loaded while paused", "startAt" to c.startAt)
             val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
             if (played) c.playSent = true
+            if (played) holdForPlayAfterPausedSeek(c)
             return played
         }
         if (c != null && !sawPlaying) {
@@ -625,7 +638,20 @@ class Renderer(
             c.startedAt = c.loadedAt
             note("info", "Start clock restarted at Play (speaker not yet seen playing)")
         }
-        return ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+        val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+        if (played && c != null) holdForPlayAfterPausedSeek(c)
+        return played
+    }
+
+    /**
+     * A Play that follows a Seek made while paused can leave the speaker TRANSITIONING for seconds (Lamp, `direct`, 8.6 s,
+     * device session D, 2026-10-22). Until the poll sees it PLAYING the sender is told buffering at the wanted position, on the
+     * same hold a Seek uses (plan 03-20): it replaces the Seek's own hold, which may still be pending or already settled.
+     */
+    private fun holdForPlayAfterPausedSeek(c: Current) {
+        if (!c.seekedWhilePaused) return
+        c.seekedWhilePaused = false
+        pending = PendingSeek(seekSeq.incrementAndGet(), c.wantedAt, deps.clock(), awaitPlay = true)
     }
 
     /**
@@ -736,6 +762,7 @@ class Renderer(
                 // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
                 pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
                 c.wantedAt = position
+                if (paused) c.seekedWhilePaused = true
                 // A speaker that has not played yet may spend long seeking: the start timeout is measured from the last
                 // command that can delay its first PLAYING (plan 03-17). [Current.startedAt] still bounds the whole wait.
                 if (!sawPlaying) c.loadedAt = deps.clock()
@@ -824,6 +851,8 @@ class Renderer(
     private fun seekSettled(p: PendingSeek, state: String?, raw: Double?, now: Long): Boolean {
         if (state != null && state !in SEEK_SETTLED_STATES) p.sawTransitioning = true
         if (now - p.startedMs > SEEK_SETTLE_DEADLINE_MS) return true
+        // The hold of a Play after a paused Seek: PAUSED_PLAYBACK at the target is still the old state, only PLAYING ends it.
+        if (p.awaitPlay) return state == "PLAYING" || state == "STOPPED" || state == "NO_MEDIA_PRESENT"
         if (state == null || state !in SEEK_SETTLED_STATES) return false
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
         if (p.sawTransitioning) return true
@@ -854,13 +883,17 @@ class Renderer(
         if (p.id > seekSeqAtStart) return
         val now = deps.clock()
         if (!seekSettled(p, state, polledRaw, now)) return
+        // While the hold lasted a PLAYING player was reported to the sender as buffering (Player.getState, plan 03-20).
+        val wasBuffering = status == PlayerStatus.PLAYING
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
         if (state !in SEEK_SETTLED_STATES) note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
         val raw = polledRaw ?: speakerPosition() ?: return
-        val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING) (now - p.shownAt) / 1000.0 else 0.0
-        if (Math.abs(raw - senderIsAt) > SEEK_CORRECTION_TOLERANCE_S && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
-            correctSender()
+        // A bar that was buffering did not count on, so it is where it was told; a playing one has counted on since.
+        val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING && !wasBuffering) (now - p.shownAt) / 1000.0 else 0.0
+        val drifted = Math.abs(raw - senderIsAt) > SEEK_CORRECTION_TOLERANCE_S
+        if ((wasBuffering || drifted) && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
+            correctSender() // tells the sender the speaker's position, and playing instead of buffering
         }
     }
 
@@ -1051,6 +1084,7 @@ class Renderer(
                     sawPlaying = true
                     if (c != null) confirmFormat(c)
                 }
+                if (c != null) c.seekedWhilePaused = false // the speaker plays: nothing is owed to a Play after a paused Seek
                 if (c != null && c === current) sendOwedSeek(c)
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true

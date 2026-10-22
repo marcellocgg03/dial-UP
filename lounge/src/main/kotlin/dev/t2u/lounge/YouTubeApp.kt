@@ -635,7 +635,7 @@ class YouTubeApp(
         var nowPlayingChanged = true
         var autoplayChanged = true
         if (previous != null) {
-            statusChanged = previous.status != current.status
+            statusChanged = previous.senderCode != current.senderCode
             positionChanged = previous.position != current.position
             volumeChanged = previous.volume != current.volume
             nowPlayingChanged = previous.queue.current?.id != current.queue.current?.id ||
@@ -645,7 +645,7 @@ class YouTubeApp(
         }
         val messages = ArrayList<OutgoingMessage>()
         if (statusChanged || positionChanged) messages.add(OutgoingMessage.onStateChange(aid, current))
-        if (nowPlayingChanged || (statusChanged && (previous == null || previous.status != PlayerStatus.PLAYING))) {
+        if (nowPlayingChanged || (statusChanged && (previous == null || previous.senderCode != PlayerStatus.PLAYING.code))) {
             messages.add(OutgoingMessage.nowPlaying(aid, current))
             messages.add(navMessage(aid))
         }

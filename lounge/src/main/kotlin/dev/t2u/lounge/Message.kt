@@ -51,7 +51,7 @@ data class OutgoingMessage(val aid: Int?, val name: String, val payload: Map<Str
                 payload["cpn"] = state.cpn
                 payload["loadedTime"] = 0
                 payload["videoId"] = current.id
-                payload["state"] = state.status.code
+                payload["state"] = state.senderCode
                 payload["seekableStartTime"] = 0
                 payload["seekableEndTime"] = state.duration
                 val context = current.context
@@ -67,7 +67,7 @@ data class OutgoingMessage(val aid: Int?, val name: String, val payload: Map<Str
         /** Tells the senders the current player state (Message.OnStateChange). */
         fun onStateChange(aid: Int?, state: PlayerState): OutgoingMessage {
             val payload = LinkedHashMap<String, Any?>()
-            payload["state"] = state.status.code
+            payload["state"] = state.senderCode
             payload["currentTime"] = state.position
             payload["duration"] = state.duration
             payload["loadedTime"] = if (active(state.status)) state.duration else 0

@@ -17,7 +17,11 @@ data class Volume(val level: Int, val muted: Boolean)
 /** What the sender's next/previous buttons can do. */
 data class NavInfo(val hasPrevious: Boolean, val hasNext: Boolean, val autoplayMode: AutoplayMode)
 
-/** Everything a state message to the sender is built from. */
+/**
+ * Everything a state message to the sender is built from. [buffering] is true while the player is PLAYING but the
+ * speaker has not yet started after a seek (or a Play that followed a paused seek): the sender is then told state 3
+ * (loading), see [senderCode]. It is a flag, not a status, so a Pause from the sender still acts on a PLAYING player.
+ */
 data class PlayerState(
     val status: PlayerStatus,
     val queue: PlaylistState,
@@ -25,7 +29,11 @@ data class PlayerState(
     val duration: Double,
     val volume: Volume,
     val cpn: String,
-)
+    val buffering: Boolean = false,
+) {
+    /** The state code the sender is told: 3 (loading) while [buffering], otherwise the status's own. */
+    val senderCode: Int get() = if (buffering && status == PlayerStatus.PLAYING) PlayerStatus.LOADING.code else status.code
+}
 
 /** [aid] is the id of the sender command this state answers (null for a state the player raised itself). */
 data class PlayerStateEvent(val aid: Int?, val current: PlayerState, val previous: PlayerState?)
@@ -77,6 +85,14 @@ abstract class Player {
     protected open fun clockMs(): Long = System.currentTimeMillis()
 
     /**
+     * True while the speaker has accepted a seek (or a Play after a paused seek) but has not started playing yet. A PLAYING
+     * player is then reported to the sender as loading ([PlayerState.buffering]) instead of playing, so the sender's bar does
+     * not run ahead of a silent speaker (plan 03-20, PLAY-06). The renderer overrides it with its pending-seek hold; the
+     * default is false, which keeps yt-cast-receiver's behaviour.
+     */
+    protected open fun seekHoldActive(): Boolean = false
+
+    /**
      * Where the sender's seekbar should be now: the position of the last state emitted plus the time elapsed since, while
      * that state was PLAYING. Null before the first state. Plan 03-18.
      */
@@ -86,7 +102,7 @@ abstract class Player {
         return t.position + (clockMs() - t.atMs) / 1000.0
     }
 
-    /** The last state emitted to the senders: the position the sender's bar was given, when, and the status it showed. */
+    /** The last state emitted to the senders: the position the sender's bar was given, when, and the status it showed (LOADING while buffering). */
     private class Told(val position: Double, val atMs: Long, val status: PlayerStatus)
 
     @Volatile
@@ -319,14 +335,18 @@ abstract class Player {
         autoplayMode = autoplayMode,
     )
 
-    suspend fun getState(): PlayerState = PlayerState(
-        status = status,
-        queue = queue.getState(),
-        position = getPosition(),
-        duration = getDuration(),
-        volume = getVolume(),
-        cpn = cpn,
-    )
+    suspend fun getState(): PlayerState {
+        val current = status
+        return PlayerState(
+            status = current,
+            queue = queue.getState(),
+            position = getPosition(),
+            duration = getDuration(),
+            volume = getVolume(),
+            cpn = cpn,
+            buffering = current == PlayerStatus.PLAYING && seekHoldActive(),
+        )
+    }
 
     /**
      * Signals a change the player did not cause (the speaker stopped, the track ended, a position
@@ -358,7 +378,8 @@ abstract class Player {
     }
 
     private suspend fun emitState(event: PlayerStateEvent) {
-        told = Told(event.current.position, clockMs(), event.current.status)
+        // A bar that is buffering does not count on: it stays where it was told until the next state.
+        told = Told(event.current.position, clockMs(), if (event.current.senderCode == PlayerStatus.LOADING.code) PlayerStatus.LOADING else event.current.status)
         for (listener in listeners) {
             try {
                 listener.onState(event)

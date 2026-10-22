@@ -36,6 +36,11 @@ class FakePlayer : Player() {
 
     override fun clockMs(): Long = nowMs
 
+    /** True while the fake speaker has not started after a seek (plan 03-20): the player reports buffering. */
+    @Volatile var seekHold: Boolean = false
+
+    override fun seekHoldActive(): Boolean = seekHold
+
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
@@ -695,6 +700,49 @@ class PlayerTest {
             val atReset = assertNotNull(player.senderPosition(), "the IDLE state of the reset is the last one told")
             player.nowMs += 30_000
             assertEquals(atReset, player.senderPosition(), "an IDLE player does not count on")
+        }
+    }
+
+    @Test
+    fun aSeekOnASpeakerThatHasNotStartedIsToldToTheSenderAsLoadingNotPlaying() {
+        runBlocking {
+            val (player, events) = playing()
+            events.clear()
+            player.seekHold = true
+            assertTrue(player.seek(42.0))
+            assertEquals(PlayerStatus.PLAYING, player.status, "the player itself keeps playing so a Pause still acts")
+            val codes = events.map { OutgoingMessage.onStateChange(null, it.current).payload["state"] }
+            assertTrue(codes.isNotEmpty() && codes.all { it == 3 }, "the sender is told loading (3), never playing (1): $codes")
+
+            player.seekHold = false
+            player.position = 42.0
+            player.notifyPositionCorrection()
+            assertEquals(1, OutgoingMessage.onStateChange(null, events.last().current).payload["state"], "playing once the hold ends")
+        }
+    }
+
+    @Test
+    fun aPauseWhileTheSenderIsShownLoadingStillPauses() {
+        runBlocking {
+            val (player, events) = playing()
+            player.seekHold = true
+            assertTrue(player.seek(42.0))
+            events.clear()
+            assertTrue(player.pause(), "the player is PLAYING underneath the loading state")
+            assertEquals(PlayerStatus.PAUSED, player.status)
+            assertEquals(2, OutgoingMessage.onStateChange(null, events.last().current).payload["state"])
+        }
+    }
+
+    @Test
+    fun theBarOfASenderThatIsBufferingDoesNotCountOn() {
+        runBlocking {
+            val (player, _) = playing()
+            player.position = 100.0 // what the renderer reports while it holds the seek target
+            player.seekHold = true
+            assertTrue(player.seek(100.0))
+            player.nowMs += 8_000
+            assertEquals(100.0, player.senderPosition(), "no counting on while the sender shows loading")
         }
     }
 }
