@@ -36,6 +36,7 @@ import dev.t2u.upnp.fetchDescription
 import dev.t2u.upnp.parseSink
 import dev.t2u.upnp.summarizeDidl
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -76,6 +77,9 @@ private const val PAUSE_START_WAIT_MS = 3000L
  * Stop (whose join is 10 s), and speakers are cleared in parallel, so the worst case is one budget.
  */
 const val CLEAR_BUDGET_MS = 4000L
+
+/** How long a clear waits for a SetAVTransportURI that a load has in flight, so the URI cannot land after the empty one (plan 03-21). */
+const val CLEAR_INFLIGHT_WAIT_MS = CLEAR_BUDGET_MS / 2
 
 /**
  * How close to the end of the track (seconds) the last polled position must be for a stop seen on the speaker
@@ -298,8 +302,14 @@ class Renderer(
 
     @Volatile private var destroyed = false
 
-    /** True once a track was handed to the speaker and until the speaker was cleared (CAST-06 guard). */
+    /**
+     * True from the moment a load starts sending a SetAVTransportURI (the speaker may hold one of our streams from then on,
+     * whether or not the load finishes) until the speaker was cleared (CAST-06 guard, plan 03-21).
+     */
     @Volatile private var loadedThisSession = false
+
+    /** One entry per SetAVTransportURI a load has sent and not yet seen answered; a clear waits for them (plan 03-21). */
+    private val uriInFlight: MutableSet<CompletableDeferred<Unit>> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
@@ -437,13 +447,22 @@ class Renderer(
             expectStop = true
             safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
             if (superseded(seq)) return false
-            call(
-                AV_TRANSPORT,
-                "SetAVTransportURI",
-                "InstanceID" to 0,
-                "CurrentURI" to item.url,
-                "CurrentURIMetaData" to item.metadata,
-            )
+            // From here the speaker may hold our stream, so a clear must act on it (the flag) and must wait for this call (the entry).
+            val sending = CompletableDeferred<Unit>()
+            uriInFlight.add(sending)
+            loadedThisSession = true
+            try {
+                call(
+                    AV_TRANSPORT,
+                    "SetAVTransportURI",
+                    "InstanceID" to 0,
+                    "CurrentURI" to item.url,
+                    "CurrentURIMetaData" to item.metadata,
+                )
+            } finally {
+                uriInFlight.remove(sending)
+                sending.complete(Unit)
+            }
             if (superseded(seq)) return false
             if (startPlaying) {
                 call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
@@ -702,7 +721,16 @@ class Renderer(
     override suspend fun clearSpeaker() {
         if (destroyed || !loadedThisSession) return
         try {
-            val finished = withTimeoutOrNull(CLEAR_BUDGET_MS) { clearNow() }
+            // A load that is sending its URI must not go on to Play once the URI has landed: cancel it now, then wait for the call.
+            val sending = uriInFlight.toList()
+            if (sending.isNotEmpty()) {
+                loadSeq.incrementAndGet()
+                pending = null
+            }
+            val finished = withTimeoutOrNull(CLEAR_BUDGET_MS) {
+                awaitUriCalls(sending)
+                clearNow()
+            }
             if (finished == null) {
                 note("warn", "clear gave up: the speaker did not answer within ${CLEAR_BUDGET_MS / 1000} s")
                 // The track is gone from our side either way; the speaker may still hold it.
@@ -715,6 +743,16 @@ class Renderer(
         }
     }
 
+    /**
+     * Waits (at most [CLEAR_INFLIGHT_WAIT_MS]) for the SetAVTransportURI calls of loads that were cancelled by a clear, so the
+     * speaker has taken or refused the URI before the clear looks at it: the empty URI is then the last word at the speaker.
+     */
+    private suspend fun awaitUriCalls(sending: List<CompletableDeferred<Unit>>) {
+        if (sending.isEmpty()) return
+        val answered = withTimeoutOrNull(CLEAR_INFLIGHT_WAIT_MS) { sending.forEach { it.await() } }
+        if (answered == null) note("warn", "clear: the speaker did not answer SetAVTransportURI within ${CLEAR_INFLIGHT_WAIT_MS / 1000} s - clearing anyway")
+    }
+
     private suspend fun clearNow() {
         val uri = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.get("CurrentURI").orEmpty()
         if (uri.isEmpty() || !uri.contains("$ip:${config.mediaPort}/stream/")) {
@@ -723,6 +761,7 @@ class Renderer(
         }
         loadSeq.incrementAndGet() // cancels a pending load
         pending = null
+        awaitUriCalls(uriInFlight.toList()) // a load that began its URI call after clearSpeaker took its snapshot
         expectStop = true
         stopPolling()
         safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
