@@ -127,6 +127,9 @@ internal const val DRIFT_CONFIRM_POLLS = 2
  */
 internal const val START_HARD_CAP_FACTOR = 4
 
+/** Consecutive polls that must read another source's URI before the speaker counts as taken over (plan 03-25, T-03-61). */
+internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
+
 /** Transport states in which a speaker's RelTime can be believed again after a Seek. */
 private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
 
@@ -324,6 +327,12 @@ class Renderer(
      * A clear that finds one cancels it (bumps [loadSeq]) so it never reaches the speaker (plan 03-22).
      */
     private val loadsBeforeUri = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Consecutive polls that read a non-empty speaker URI that is not one of our own streams while we hold a track (plan 03-25).
+     * Two of them mean another source took the speaker over. Only the poll moves it, [adopt] resets it.
+     */
+    private var foreignPolls = 0
 
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
@@ -626,6 +635,7 @@ class Renderer(
         lastError = null
         sawPlaying = false
         metaReported = false
+        foreignPolls = 0
         expectStop = false
         loadedThisSession = true
         startPolling()
@@ -1240,13 +1250,20 @@ class Renderer(
         transport = state
         // The speaker's position as this poll read it, for the pending-Seek rule; null when not read or not our stream.
         var polledRaw: Double? = null
+        // Did this poll read a non-empty URI that is not ours while we hold a track? (plan 03-25; no extra SOAP call)
+        var foreign = false
+        var foreignUri: String? = null
         if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
             val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
             if (r != null) {
                 val uri = r["TrackURI"]
                 val startAt = current?.startAt ?: 0
-                // Do not take position or duration from a speaker still on the previous track.
-                val stale = isOnOtherStream(uri)
+                if (current != null && !uri.isNullOrEmpty() && !isOurStream(uri)) {
+                    foreign = true
+                    foreignUri = uri
+                }
+                // Do not take position or duration from a speaker still on the previous track, or on another source.
+                val stale = isOnOtherStream(uri) || foreign
                 if (!stale) polledRaw = parseHms(r["RelTime"]) + startAt
                 position = PollPosition(
                     rel = if (stale) position?.rel ?: startAt.toDouble() else parseHms(r["RelTime"]) + startAt,
@@ -1263,6 +1280,11 @@ class Renderer(
         if (destroyed) return
         // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
         if (epoch != commandEpoch.get()) return
+
+        if (countForeignPoll(foreign) && current != null) {
+            releaseTakenOverSpeaker(foreignUri)
+            return
+        }
 
         settlePendingSeek(state, polledRaw, seekSeqAtStart)
         // A poll that began before a Seek was sent read the speaker from before it: its position proves nothing.
@@ -1311,6 +1333,37 @@ class Renderer(
                 }
             }
         }
+    }
+
+    /**
+     * Debounce for [releaseTakenOverSpeaker]: counts a poll that read another source's URI, resets on any other reading (ours,
+     * empty, nothing). Left alone while a stop, a load or a clear is in progress (a load's own SetAVTransportURI changes what the
+     * speaker holds). True when the second consecutive foreign poll has just been read.
+     */
+    private fun countForeignPoll(foreign: Boolean): Boolean {
+        if (expectStop || destroyed || loadsBeforeUri.get() > 0 || uriInFlight.isNotEmpty()) return false
+        if (!foreign) {
+            foreignPolls = 0
+            return false
+        }
+        foreignPolls++
+        return foreignPolls >= FOREIGN_POLLS_FOR_TAKEOVER
+    }
+
+    /**
+     * Another source (Sonos radio, a line-in, another app) took the speaker over while a track of ours was loaded (plan 03-25,
+     * CAST-04, CAST-06). Our side is released without sending anything to the speaker: polling stops, the track is forgotten as
+     * a Stop would forget it, and the sender is told the player stopped, which also drops the speaker from the cast count. This
+     * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log (T-03-62).
+     */
+    private fun releaseTakenOverSpeaker(uri: String?) {
+        stopPolling()
+        foreignPolls = 0
+        forgetTrack()
+        val scheme = uri?.substringBefore(':', "")?.filter { it.isLetterOrDigit() || it == '-' || it == '+' || it == '.' }?.take(24).orEmpty()
+        note("info", "the speaker was taken over by another source - released", "scheme" to scheme)
+        // Launched, because the poll that got here runs in the job stopPolling just cancelled.
+        scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
     }
 
     /**

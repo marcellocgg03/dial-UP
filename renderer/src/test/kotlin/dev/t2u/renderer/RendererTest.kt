@@ -1167,7 +1167,7 @@ class RendererTest {
                 val mark = fake.calls.size
 
                 fake.state.currentUri = radio // PLAYING stays: the speaker plays the radio now
-                until(3000) { r.status == PlayerStatus.STOPPED }
+                until(3000) { r.status == PlayerStatus.STOPPED && told.any { it.current.status == PlayerStatus.STOPPED } }
 
                 assertEquals(PlayerStatus.STOPPED, r.status, "the count source still counts the speaker")
                 assertTrue(told.any { it.current.status == PlayerStatus.STOPPED }, "the sender was not told the player stopped")
