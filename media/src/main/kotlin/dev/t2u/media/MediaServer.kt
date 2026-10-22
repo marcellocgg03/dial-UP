@@ -839,6 +839,12 @@ class MediaServer(
         if (head) {
             // Headers only, no process and no resolve (a HEAD must never start ffmpeg).
             dlnaHeaders(call, entry)
+            // No length is known, so the answer is chunked, and CIO writes the terminator (0 CRLF CRLF) after the headers
+            // even though a HEAD answer has no body. On a kept-alive connection a client reads those bytes as the start
+            // of its next response (JDK client: Invalid status line "0", plan 03-27). CIO cannot send this answer without
+            // them (NoContent adds Content-Length: 0, which would say the track is empty; Transfer-Encoding is an
+            // engine-only header), so the answer ends its connection and the client opens a new one for its GET.
+            call.response.header(HttpHeaders.Connection, "close")
             out.status = 200
             call.respond(
                 object : OutgoingContent.WriteChannelContent() {
