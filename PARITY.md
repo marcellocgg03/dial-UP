@@ -15,25 +15,25 @@ Where the Kotlin port stands against the Node project it is ported from. This fi
 
 ## (b) File map
 
-Status values: `planned` (this phase, plan 02-14 sets the final status), `not ported`, `out of scope`.
+Status values: `planned` (later phase), `not ported`, `out of scope`.
 
 | Node file | Kotlin file(s) | Status |
 |-----------|----------------|--------|
-| `src/config.js` | `renderer/Config.kt` (Phase 2 defaults; `config.json` is Phase 3 SVC-07) | planned |
-| `src/dataStore.js` | `renderer/DataStore.kt` | planned |
-| `src/formats.js` | `media/Formats.kt`, plus `MIME_ALIASES` in `upnp/Upnp.kt` (`:upnp` does not depend on `:media`, and `sinkAccepts` needs the aliases) | planned |
+| `src/config.js` | `renderer/Config.kt` (Phase 2 defaults; `config.json` is Phase 3 SVC-07) | ported |
+| `src/dataStore.js` | `renderer/DataStore.kt` | ported |
+| `src/formats.js` | `media/Formats.kt`, plus `MIME_ALIASES` in `upnp/Upnp.kt` (`:upnp` does not depend on `:media`, and `sinkAccepts` needs the aliases) | ported |
 | `src/history.js` | none | not ported (v2 UI-02) |
-| `src/index.js` | `renderer/RendererRegistry.kt`, `renderer/Bridge.kt`, `app/CastFeature.kt` | planned |
-| `src/logger.js` | `upnp/EventSink.kt`, `app/EvidenceLog.kt` | planned |
-| `src/mediaServer.js` | `media/MediaServer.kt`, `media/RangeParser.kt`, `media/PipeLauncher.kt` | planned |
-| `src/net.js` | `renderer/Net.kt` | planned |
-| `src/ports.js` | `renderer/Ports.kt` | planned |
-| `src/renderer.js` | `renderer/Renderer.kt` (Phase 2 slice) | planned |
-| `src/resolver.js` | `media/Resolver.kt` | planned |
+| `src/index.js` | `renderer/RendererRegistry.kt`, `renderer/Bridge.kt`, `app/CastFeature.kt` | ported |
+| `src/logger.js` | `upnp/EventSink.kt`, `app/EvidenceLog.kt` | ported |
+| `src/mediaServer.js` | `media/MediaServer.kt`, `media/RangeParser.kt`, `media/PipeLauncher.kt` | ported |
+| `src/net.js` | `renderer/Net.kt` | ported |
+| `src/ports.js` | `renderer/Ports.kt` | ported |
+| `src/renderer.js` | `renderer/Renderer.kt` (Phase 2 slice) | partial (Phase 2 slice; format chain, gapless and seek variants in Phases 3-4) |
+| `src/resolver.js` | `media/Resolver.kt` | ported |
 | `src/settings.js` | none | not ported (status-page settings, v2 UI-01) |
 | `src/soap.js` | `upnp/Soap.kt` | ported in plan 02-03 |
 | `src/sponsorblock.js` | none | not ported (v2 EXT-01) |
-| `src/ssdp.js` | `upnp/Ssdp.kt`, `upnp/SsdpMessage.kt` | planned |
+| `src/ssdp.js` | `upnp/Ssdp.kt`, `upnp/SsdpMessage.kt` | ported |
 | `src/stats.js` | none | not ported (v2 UI-03) |
 | `src/statusServer.js`, `src/ui/` | none | out of scope (no status web page) |
 | `src/upnp.js` | `upnp/Upnp.kt` | ported in plan 02-03 |
@@ -43,10 +43,10 @@ Libraries:
 
 | Library file | Kotlin file(s) | Status |
 |--------------|----------------|--------|
-| yt-cast-receiver 2.1.0 (MIT): `lib/app/*.js`, `lib/Player.js`, `lib/YouTubeCastReceiver.js`, `lib/Constants.js` | `lounge/*.kt`; planned names: `Constants`, `Player`, `Playlist`, `PlaylistRequestHandler`, `Sender`, `CastReceiver`, `BindParams`, `ChunkDecoder` (replaces `Message.parseIncoming`), `Message`, `Session`, `LoungeLog`, `YouTubeApp`, `YouTubeCastReceiver` | planned |
+| yt-cast-receiver 2.1.0 (MIT): `lib/app/*.js`, `lib/Player.js`, `lib/YouTubeCastReceiver.js`, `lib/Constants.js` | `lounge/*.kt`; planned names: `Constants`, `Player`, `Playlist`, `PlaylistRequestHandler`, `Sender`, `CastReceiver`, `BindParams`, `ChunkDecoder` (replaces `Message.parseIncoming`), `Message`, `Session`, `LoungeLog`, `YouTubeApp`, `YouTubeCastReceiver` | ported |
 | yt-cast-receiver `lib/utils/DataStore.js` | `lounge/DataStore.kt` (interface contract, written in plan 02-03) | ported in plan 02-03 |
 | yt-cast-receiver `lib/app/PairingCodeRequestService.js` | none | not ported (v2 PAIR-01) |
-| peer-dial (LGPL-3.0-or-later) | `dial/DialServer.kt`, `dial/DialXml.kt`, `upnp/SsdpResponder.kt`, `upnp/SsdpMessage.kt` | planned |
+| peer-dial (LGPL-3.0-or-later) | `dial/DialServer.kt`, `dial/DialXml.kt`, `upnp/SsdpResponder.kt`, `upnp/SsdpMessage.kt` | ported |
 
 ## (c) Node tests
 
