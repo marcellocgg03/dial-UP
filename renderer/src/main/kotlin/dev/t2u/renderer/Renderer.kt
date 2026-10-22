@@ -311,6 +311,12 @@ class Renderer(
     /** One entry per SetAVTransportURI a load has sent and not yet seen answered; a clear waits for them (plan 03-21). */
     private val uriInFlight: MutableSet<CompletableDeferred<Unit>> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+    /**
+     * Loads that have started and not yet registered their SetAVTransportURI call: still resolving, preparing or sending Stop.
+     * A clear that finds one cancels it (bumps [loadSeq]) so it never reaches the speaker (plan 03-22).
+     */
+    private val loadsBeforeUri = java.util.concurrent.atomic.AtomicInteger()
+
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
 
@@ -440,6 +446,8 @@ class Renderer(
         val seq = loadSeq.incrementAndGet()
         pending = null
         stopPolling()
+        loadsBeforeUri.incrementAndGet()
+        var beforeUri = true
         try {
             val item = prepareItem(video, position, format, forceOffset)
             if (superseded(seq)) return false
@@ -451,7 +459,12 @@ class Renderer(
             val sending = CompletableDeferred<Unit>()
             uriInFlight.add(sending)
             loadedThisSession = true
+            // Registered above, then the check: a clear either bumped loadSeq before this check (the load stops here) or it
+            // finds the entry and the flag after its own bump and waits for the call, so no ordering lets the song land (plan 03-22).
+            beforeUri = false
+            loadsBeforeUri.decrementAndGet()
             try {
+                if (superseded(seq)) return false
                 call(
                     AV_TRANSPORT,
                     "SetAVTransportURI",
@@ -504,6 +517,8 @@ class Renderer(
             note("error", "Play ${video.id} failed: $lastError")
             expectStop = false
             return false
+        } finally {
+            if (beforeUri) loadsBeforeUri.decrementAndGet()
         }
     }
 
@@ -719,7 +734,14 @@ class Renderer(
      * sent, never a volume command.
      */
     override suspend fun clearSpeaker() {
-        if (destroyed || !loadedThisSession) return
+        if (destroyed) return
+        // A load still resolving or preparing is cancelled first, whatever the speaker holds: it must never reach the speaker
+        // after the sender is gone. The clear does not wait for the resolver (plan 03-22).
+        if (loadsBeforeUri.get() > 0) {
+            loadSeq.incrementAndGet()
+            pending = null
+        }
+        if (!loadedThisSession) return
         try {
             // A load that is sending its URI must not go on to Play once the URI has landed: cancel it now, then wait for the call.
             val sending = uriInFlight.toList()
