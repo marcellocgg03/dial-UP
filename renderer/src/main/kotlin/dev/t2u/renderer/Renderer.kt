@@ -97,6 +97,14 @@ internal const val SEEK_SETTLE_DEADLINE_MS = 15_000L
  */
 internal const val SEEK_CORRECTION_TOLERANCE_S = 3.0
 
+/**
+ * Upper bound on the wait for a speaker's first PLAYING, as a multiple of the start timeout, counted from the load (or
+ * the first Play of a stream loaded while paused). A Seek sent before the speaker has played restarts the start timeout
+ * clock (a Sonos can spend 13 s seeking near the end of a file, Lamp 2026-10-21 22:01), so this cap is what keeps a speaker
+ * that is dead but still takes Seeks from being waited for forever (T-03-47).
+ */
+internal const val START_HARD_CAP_FACTOR = 4
+
 /** Transport states in which a speaker's RelTime can be believed again after a Seek. */
 private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
 
@@ -138,6 +146,22 @@ private class Current(val video: Video, val format: String, val startAt: Int, va
 
     /** False for a stream loaded while paused (SetAVTransportURI only) until the first Play is sent for it. */
     @Volatile var playSent: Boolean = false
+
+    /**
+     * When the wait for this stream's first PLAYING began (the load, or the first Play of a stream loaded while paused).
+     * Unlike [loadedAt] a Seek does not move it, so it anchors the hard cap on the start wait.
+     */
+    @Volatile var startedAt: Long = 0
+
+    /**
+     * The position (seconds, absolute) this stream is meant to play from: the position it was loaded at, or the target of
+     * the last Seek the speaker accepted. A start-failure reload goes back to it when the speaker was never polled
+     * playing, so the reload does not restart the song.
+     */
+    @Volatile var wantedAt: Double = 0.0
+
+    /** A position the post-Play Seek could not be sent to (the speaker refused it while starting); sent once it plays. */
+    @Volatile var owedSeek: Double? = null
 }
 
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */
@@ -213,6 +237,9 @@ class Renderer(
 
     /** The format that last reached PLAYING on this speaker (loaded from its store, see [confirmFormat]). */
     @Volatile private var learnedFormat: String? = null
+
+    /** Formats that reached PLAYING on this speaker since this renderer started; a start failure never forgets one of these. */
+    private val playedFormats: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     @Volatile private var ip: String? = null
 
@@ -394,7 +421,14 @@ class Renderer(
                 if (position > 1 && item.current.startAt == 0) {
                     waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
                     if (superseded(seq)) return false
-                    safeCall(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))
+                    if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
+                        // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
+                        pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
+                    } else {
+                        // A speaker still starting can refuse a Seek; the first PLAYING poll sends it again (plan 03-17).
+                        item.current.owedSeek = position
+                        note("warn", "Seek to ${Math.floor(position).toInt()}s after Play was refused - sending it again once the speaker plays")
+                    }
                     if (superseded(seq)) return false
                 }
             }
@@ -460,6 +494,7 @@ class Renderer(
         val seekable = FORMATS[fmt]?.seekable ?: false
         val startAt = restartOffset(position, info.duration, !seekable || forceOffset)
         val cur = Current(video, fmt, startAt, info.mime)
+        cur.wantedAt = position
         val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
             if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
             cur.fetched = true
@@ -498,6 +533,7 @@ class Renderer(
     /** Make [item] the current track after the speaker was told to play it. */
     private fun adopt(item: PreparedItem) {
         item.current.loadedAt = deps.clock()
+        item.current.startedAt = item.current.loadedAt
         current = item.current
         nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail)
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
@@ -557,6 +593,7 @@ class Renderer(
         val c = current
         if (c != null && !c.playSent) {
             c.loadedAt = deps.clock()
+            c.startedAt = c.loadedAt
             sawPlaying = false
             note("info", "Play sent for the stream loaded while paused", "startAt" to c.startAt)
             val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
@@ -565,6 +602,7 @@ class Renderer(
         }
         if (c != null && !sawPlaying) {
             c.loadedAt = deps.clock()
+            c.startedAt = c.loadedAt
             note("info", "Start clock restarted at Play (speaker not yet seen playing)")
         }
         return ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
@@ -677,6 +715,10 @@ class Renderer(
             if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
                 // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
                 pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
+                c.wantedAt = position
+                // A speaker that has not played yet may spend long seeking: the start timeout is measured from the last
+                // command that can delay its first PLAYING (plan 03-17). [Current.startedAt] still bounds the whole wait.
+                if (!sawPlaying) c.loadedAt = deps.clock()
                 return true
             }
         }
@@ -937,7 +979,7 @@ class Renderer(
         // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
         val c = current
         if (!sawPlaying && state != "PLAYING" && c != null && status == PlayerStatus.PLAYING &&
-            deps.clock() - c.loadedAt > config.startTimeoutMs
+            startTimedOut(c, deps.clock())
         ) {
             handleStartFailure(c)
             return
@@ -949,6 +991,7 @@ class Renderer(
                     sawPlaying = true
                     if (c != null) confirmFormat(c)
                 }
+                if (c != null && c === current) sendOwedSeek(c)
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
@@ -974,6 +1017,39 @@ class Renderer(
                     scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
                 }
             }
+        }
+    }
+
+    /**
+     * Has the wait for the speaker's first PLAYING run out? [Current.loadedAt] is the last command that can delay it (the
+     * load, a Play, a Seek), so the start timeout counts from the latest of them. A native Seek the speaker accepted and
+     * has not finished (a pending Seek, at most [SEEK_SETTLE_DEADLINE_MS]) also holds the verdict back: a speaker that is
+     * busy seeking is not a speaker that cannot play the format (Lamp, 13 s near the end of a file, 2026-10-21 22:01).
+     * [Current.startedAt] never moves and caps the whole wait at [START_HARD_CAP_FACTOR] times the start timeout, so a
+     * dead speaker that keeps taking Seeks is still given up on (T-03-47).
+     */
+    private fun startTimedOut(c: Current, now: Long): Boolean {
+        if (now - c.startedAt > config.startTimeoutMs * START_HARD_CAP_FACTOR) return true
+        if (now - c.loadedAt <= config.startTimeoutMs) return false
+        val seeking = pending?.let { now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
+        return !seeking
+    }
+
+    /**
+     * The Seek the load could not send because the speaker refused it while starting (see [Current.owedSeek]). Sent once,
+     * when the speaker is seen playing. If it is refused again the speaker plays from the start, and the sender, which was
+     * told the requested position, is told the speaker's real one.
+     */
+    private suspend fun sendOwedSeek(c: Current) {
+        val owed = c.owedSeek ?: return
+        c.owedSeek = null
+        if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(owed - c.startAt))) {
+            pending = PendingSeek(seekSeq.incrementAndGet(), owed, deps.clock())
+            note("info", "Seek to ${Math.floor(owed).toInt()}s sent once the speaker played")
+        } else {
+            c.wantedAt = 0.0
+            note("warn", "Seek to ${Math.floor(owed).toInt()}s refused again - the speaker plays from the start")
+            notifyPositionCorrection()
         }
     }
 
@@ -1026,6 +1102,7 @@ class Renderer(
      * the user's choice and is never written.
      */
     private suspend fun confirmFormat(c: Current) {
+        playedFormats.add(c.format)
         if (config.outputFormat != "auto" || learnedFormat == c.format) return
         learnedFormat = c.format
         note("info", "Format ${c.format} works on this speaker - remembered")
@@ -1042,14 +1119,20 @@ class Renderer(
     private suspend fun handleStartFailure(c: Current) {
         val auto = config.outputFormat == "auto"
         val next = if (auto) nextFormat(c.format, protocols, c.sourceMime) else null
-        if (auto && learnedFormat != null) {
+        // A remembered format that has played on this speaker in this session is working: a start failure of one track
+        // (or of another format) does not make the app forget it (plan 03-17, T-03-48). One that never played is cleared.
+        val remembered = learnedFormat
+        if (auto && remembered != null && remembered !in playedFormats) {
             learnedFormat = null
             store?.set(LEARNED_FORMAT_KEY, null)
         }
         if (next != null) {
             note("warn", "Renderer did not start ${c.format} - trying $next")
             stopPolling()
-            val resumeAt = position?.rel ?: c.startAt.toDouble()
+            // Where the speaker was last polled playing, if that is newer than the last load or Seek and off the start;
+            // otherwise where this stream was meant to play from (the load position or the last accepted Seek).
+            val polled = position?.takeIf { it.at >= c.loadedAt && it.rel - c.startAt >= 1 }?.rel
+            val resumeAt = polled ?: maxOf(c.wantedAt, c.startAt.toDouble())
             val before = loadSeq.get()
             scope.launch {
                 val started = load(c.video, resumeAt, next, startPlaying = true)
