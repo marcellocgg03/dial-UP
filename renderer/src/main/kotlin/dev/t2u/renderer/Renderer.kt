@@ -83,6 +83,23 @@ const val CLEAR_BUDGET_MS = 4000L
  */
 const val TRACK_END_TOLERANCE_S = 10.0
 
+/**
+ * How long after a native Seek the position told to the sender is held at the seek target while the speaker has not
+ * settled. A Sonos can spend 5 to 10 s TRANSITIONING after a Seek and reports a RelTime of 0-1 s meanwhile (device
+ * session C, 2026-10-21); past this the speaker's own position is used again, so a speaker that never settles cannot
+ * pin the seekbar.
+ */
+internal const val SEEK_SETTLE_DEADLINE_MS = 15_000L
+
+/**
+ * The seekbar of a sender counts on from the last position it was sent. When the speaker settles and its position
+ * differs from where that count has got to by more than this (seconds), the sender is sent the speaker's position.
+ */
+internal const val SEEK_CORRECTION_TOLERANCE_S = 3.0
+
+/** Transport states in which a speaker's RelTime can be believed again after a Seek. */
+private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
+
 private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
 
 /**
@@ -135,6 +152,17 @@ private class PreparedItem(
     val url: String,
     val metadata: String,
 )
+
+/**
+ * A native Seek the speaker accepted but may not have finished: until it reports a settled transport state the
+ * position handed to the sender is [target]. [shown] and [shownAt] are the last position handed out and when, which
+ * is what the sender's seekbar counts on from.
+ */
+private class PendingSeek(val id: Int, val target: Double, val startedMs: Long) {
+    @Volatile var shown: Double = target
+
+    @Volatile var shownAt: Long = startedMs
+}
 
 /** Result of the last poll: [rel] is already shifted by the stream offset. */
 private data class PollPosition(val rel: Double, val dur: Double, val uri: String?, val at: Long)
@@ -191,6 +219,12 @@ class Renderer(
     @Volatile private var transport: String? = null
 
     @Volatile private var position: PollPosition? = null
+
+    /** The native Seek whose settling is still being waited for (plan 03-15); null when there is none. */
+    @Volatile private var pending: PendingSeek? = null
+
+    /** Numbers the pending Seeks, so a poll can tell that the state it read is from before the Seek it sees. */
+    private val seekSeq = AtomicInteger()
 
     private val loadSeq = AtomicInteger()
 
@@ -292,6 +326,7 @@ class Renderer(
         destroyed = true
         loadSeq.incrementAndGet()
         current = null
+        pending = null
         stopPolling()
         try {
             val rec = receiver
@@ -330,6 +365,7 @@ class Renderer(
         forceOffset: Boolean = false,
     ): Boolean {
         val seq = loadSeq.incrementAndGet()
+        pending = null
         stopPolling()
         try {
             val item = prepareItem(video, position, format, forceOffset)
@@ -538,6 +574,7 @@ class Renderer(
     override suspend fun doStop(): Boolean {
         loadSeq.incrementAndGet() // cancel any pending load
         position = null
+        pending = null
         transport = "STOPPED"
         current = null
         stopPolling()
@@ -584,6 +621,7 @@ class Renderer(
             return
         }
         loadSeq.incrementAndGet() // cancels a pending load
+        pending = null
         expectStop = true
         stopPolling()
         safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
@@ -596,6 +634,7 @@ class Renderer(
         current = null
         nowPlaying = null
         position = null
+        pending = null
         transport = "STOPPED"
         loadedThisSession = false
     }
@@ -611,6 +650,8 @@ class Renderer(
      *    a new file that starts at the position (clamped to one second before the end, see [restartOffset]). `direct`
      *    has no such fallback: the seek is reported as failed.
      * Only Seek, Stop, SetAVTransportURI and Play reach the speaker; nothing touches the volume.
+     * After a native Seek the position told to the sender is the target until the speaker leaves TRANSITIONING
+     * (see [doGetPosition]); the reload and restart paths already return a correct start position.
      */
     override suspend fun doSeek(position: Double): Boolean {
         val c = current ?: return false
@@ -629,7 +670,11 @@ class Renderer(
         val before = position < base
         if (!before) {
             val target = position - base
-            if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) return true
+            if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
+                // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
+                pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
+                return true
+            }
         }
         if (c.format !in FILE_FORMATS) {
             note("warn", "Renderer rejected Seek - ${c.format} has no restart fallback")
@@ -667,16 +712,62 @@ class Renderer(
         )
     }
 
+    /**
+     * The position told to the sender. Normally the speaker's own RelTime plus the offset our ffmpeg started at. While
+     * a native Seek is pending (the speaker accepted it but is still TRANSITIONING, reporting 0-1 s) it is the seek
+     * target instead; the speaker's value is used again as soon as it reports a settled transport state, or when
+     * [SEEK_SETTLE_DEADLINE_MS] has passed. The poll keeps its own raw copy in [position], which the track-end rule
+     * reads, so the target never reaches that rule.
+     */
     override suspend fun doGetPosition(): Double {
         val offset = current?.startAt ?: 0
         // A stream loaded while paused has not been played: the speaker's RelTime belongs to the previous one.
         if (current?.playSent == false) return offset.toDouble()
+        val raw = speakerPosition()
+        val p = pending ?: return raw ?: offset.toDouble()
+        val now = deps.clock()
+        val holding = !seekSettled(p, transportState(), now)
+        val told = if (holding || raw == null) p.target else raw
+        p.shown = told
+        p.shownAt = now
+        return told
+    }
+
+    /** The speaker's position with our offset added; null when it cannot be read or names another stream. */
+    private suspend fun speakerPosition(): Double? {
+        val offset = current?.startAt ?: 0
         val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
         // Right after a track change some speakers still report the previous track for a moment. If the
         // speaker names a different stream than ours, its numbers are not ours.
-        if (r == null || isOnOtherStream(r["TrackURI"])) return offset.toDouble()
+        if (r == null || isOnOtherStream(r["TrackURI"])) return null
         // The speaker counts from the start of the stream it got; add the offset our ffmpeg started at.
         return parseHms(r["RelTime"]) + offset
+    }
+
+    /** Has the speaker finished a pending Seek, or have we waited long enough for it? */
+    private fun seekSettled(p: PendingSeek, state: String?, now: Long): Boolean =
+        state in SEEK_SETTLED_STATES || now - p.startedMs > SEEK_SETTLE_DEADLINE_MS
+
+    /**
+     * Called by the poll with the transport [state] it just read: drops a pending Seek the speaker has finished (or
+     * that outlived the deadline) and, when the sender's seekbar has drifted from the speaker's position, sends the
+     * speaker's position once. The sender counts on from the last position it was sent, so after a 5 s TRANSITIONING
+     * it is about 5 s ahead of a speaker that has only just started playing.
+     */
+    private suspend fun settlePendingSeek(state: String, seekSeqAtStart: Int) {
+        val p = pending ?: return
+        // The Seek was sent after this poll began reading: the state it holds is from before the Seek.
+        if (p.id > seekSeqAtStart) return
+        val now = deps.clock()
+        if (!seekSettled(p, state, now)) return
+        pending = null
+        if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
+        if (state !in SEEK_SETTLED_STATES) note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
+        val raw = speakerPosition() ?: return
+        val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING) (now - p.shownAt) / 1000.0 else 0.0
+        if (Math.abs(raw - senderIsAt) > SEEK_CORRECTION_TOLERANCE_S && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
+            notifyPositionCorrection()
+        }
     }
 
     override suspend fun doGetDuration(): Double {
@@ -779,6 +870,7 @@ class Renderer(
         if (expectStop) return
         polls++
         val epoch = commandEpoch.get()
+        val seekSeqAtStart = seekSeq.get()
         val state = transportState()
         if (state == null || destroyed) return
         transport = state
@@ -804,6 +896,8 @@ class Renderer(
         if (destroyed) return
         // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
         if (epoch != commandEpoch.get()) return
+
+        settlePendingSeek(state, seekSeqAtStart)
 
         // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
         val c = current

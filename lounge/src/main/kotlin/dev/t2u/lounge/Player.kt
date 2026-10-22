@@ -317,6 +317,19 @@ abstract class Player {
         setStatusAndEmit(newStatus)
     }
 
+    /**
+     * Tells the senders the position again, even when it equals the last one sent. A sender counts on from the last
+     * state it got, so the same number can still be wrong (a seek the speaker took seconds to finish): the event
+     * carries a previous state whose position is -1, which never equals a real position, so the session sends the
+     * state. Plan 03-15 (renderer.js has no counterpart).
+     */
+    suspend fun notifyPositionCorrection() {
+        val previous = previousState?.copy(position = -1.0)
+        val current = getState()
+        previousState = current
+        emitState(PlayerStateEvent(null, current, previous))
+    }
+
     private suspend fun setStatusAndEmit(newStatus: PlayerStatus?, aid: Int? = null) {
         val previous = previousState
         if (newStatus != null) statusState.value = newStatus
