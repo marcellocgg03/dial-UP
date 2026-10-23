@@ -481,8 +481,9 @@ internal class GaplessTest {
             harness(fake, handler).use { h ->
                 val r = queued(h, A, B)
                 assertTrue(r.doPlay(Video(A), 0.0))
-                waitUntil { fake.state.nextUri.isNotEmpty() }
-                val queuedNote = h.notes("Queued the next track on the speaker").single()
+                // The fake sets nextUri before it answers; the note follows the answer.
+                waitUntil { fake.state.nextUri.isNotEmpty() && h.notes("Queued the next track on the speaker").isNotEmpty() }
+                val queuedNote =h.notes("Queued the next track on the speaker").single()
                 assertEquals(B, queuedNote["videoId"])
 
                 handler.nextOf = { null }

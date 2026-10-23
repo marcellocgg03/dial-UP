@@ -402,9 +402,15 @@ class Renderer(
 
     /**
      * Does this speaker take SetNextAVTransportURI? Null until a send has been answered; false after a refusal that
-     * [isGaplessRefusal] names, for the rest of this run (plan 04-06 keeps it across runs).
+     * [isGaplessRefusal] names. Read from the speaker's store at [init] and written back when it changes (D-08, plan 04-06).
      */
     @Volatile private var gaplessSupported: Boolean? = null
+
+    /** Whether the speaker is known to take SetNextAVTransportURI: null while unknown (tests and the cast state read it). */
+    internal val gaplessSupport: Boolean? get() = gaplessSupported
+
+    /** The identity a stored gapless answer belongs to ([speakerModel] of the description), set in [init]. */
+    @Volatile private var model: String = ""
 
     /**
      * The queued track the speaker played on into by itself, between the poll seeing the switch and [doPlay] adopting it
@@ -470,6 +476,12 @@ class Renderer(
         // T-03-19: a stored value counts only when it names a chain format.
         learnedFormat = (store.get(LEARNED_FORMAT_KEY) as? JsonPrimitive)
             ?.takeIf { it.isString }?.content?.takeIf { it in FALLBACK_CHAIN }
+        // D-08, D-13: what this speaker answered to SetNextAVTransportURI in an earlier run. Another model's answer is dropped.
+        model = speakerModel(desc.manufacturer, desc.modelName, desc.modelNumber)
+        val storedGapless = store.get(LEARNED_GAPLESS_KEY)
+        gaplessSupported = readGaplessMemory(storedGapless, model, deps.clock())
+        val storedModel = gaplessMemoryModel(storedGapless)
+        if (storedModel != null && storedModel != model) store.set(LEARNED_GAPLESS_KEY, null)
         val rec = deps.createReceiver.create(
             this,
             ReceiverOptions(
@@ -767,6 +779,8 @@ class Renderer(
         // Taken by a load, or replaced, while this was on its way: nothing to hand over.
         if (synchronized(queueLock) { queued } !== q) return
         q.sendAttempts++
+        // What the speaker answered; the in-memory flag and the store are updated after the call, outside its try.
+        var learned: Boolean? = null
         try {
             call(
                 AV_TRANSPORT,
@@ -778,19 +792,33 @@ class Renderer(
             q.sentToRenderer = true
             note("info", "Queued the next track on the speaker", "videoId" to q.video.id, "format" to q.item.format)
             if (gaplessSupported != true) note("info", "Renderer supports gapless playback (SetNextAVTransportURI)")
-            gaplessSupported = true
+            learned = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: UpnpError) {
             if (isGaplessRefusal(e)) {
-                val wasKnown = gaplessSupported == false
-                gaplessSupported = false
-                if (!wasKnown) note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
+                learned = false
+                // A speaker that was believed to do gapless and now refuses is a contradiction (D-13): the answer flips.
+                if (gaplessSupported != false) {
+                    note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
+                }
             } else {
                 note("debug", "SetNextAVTransportURI failed: ${e.message}")
             }
         } catch (e: Exception) {
             note("debug", "SetNextAVTransportURI failed: ${e.message ?: e::class.java.simpleName}")
+        }
+        when (learned) {
+            true -> {
+                val before = gaplessSupported
+                gaplessSupported = true
+                if (before != true) store?.set(LEARNED_GAPLESS_KEY, gaplessMemory(true, model, deps.clock()))
+            }
+            false -> {
+                gaplessSupported = false
+                store?.set(LEARNED_GAPLESS_KEY, gaplessMemory(false, model, deps.clock()))
+            }
+            null -> Unit
         }
     }
 
