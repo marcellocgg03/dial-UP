@@ -1,0 +1,41 @@
+# Tube2U[PnP] for Android
+
+A native Kotlin Android app that makes the phone the whole cast bridge. It finds UPnP/DLNA speakers
+(Sonos Amp, Arc, SYMFONISK) on the Wi-Fi network, shows each one as a cast target in the YouTube and
+YouTube Music apps (DIAL), resolves audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves
+the stream to the speaker. No always-on server is needed.
+
+It is a port of [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) (a Node.js project, fork of upnpTube).
+`PARITY.md` records which upstream commit has been ported and how each Node file maps to Kotlin.
+
+**Status:** work in progress, built for one phone and one set of speakers. Expect rough edges.
+The YouTube lounge/DIAL protocol is undocumented and can change without notice.
+
+## Modules
+
+| Module | Job |
+|--------|-----|
+| `upnp` | SSDP, SOAP control, device descriptions |
+| `dial` | DIAL server and SSDP responder, one per speaker |
+| `lounge` | YouTube lounge receiver and InnerTube client |
+| `media` | Local media server (Range, pipe, file cache) |
+| `renderer` | Per-speaker playback logic, queue, gapless hand-off |
+| `app` | Android service, config, yt-dlp / ffmpeg wiring |
+
+`tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
+
+## Build
+
+Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via the wrapper.
+`tools/bootstrap-toolchain.sh` installs the toolchain in user space.
+
+```
+./gradlew test        # JVM unit tests
+./gradlew :app:assembleDebug
+```
+
+Only arm64 devices are targeted. The APK is sideloaded; yt-dlp based apps are unlikely to pass Play review.
+
+## Licence
+
+GPL-3.0-only, see `LICENSE`. Third-party components are listed in `THIRD_PARTY_NOTICES.md`.

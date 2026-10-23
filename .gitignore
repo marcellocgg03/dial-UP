@@ -7,6 +7,5 @@ local.properties
 .t2u/
 .idea/
 *.iml
-.planning/phases/*/evidence/*/screenshots/
 tools/lounge-capture/node_modules/
 tools/lounge-capture/out/
