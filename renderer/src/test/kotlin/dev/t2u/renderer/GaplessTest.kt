@@ -2,8 +2,9 @@ package dev.t2u.renderer
 
 // Port of the gapless/prefetch tests of reference/tube2upnp/test/renderer.test.js (lines 208-344), GPL-3.0-only.
 // Wave 0 of Phase 4 (D-16): the six Node titles exist here, under their exact Node titles, before any gapless code
-// is written. Each is @Disabled and names the plan that turns it on (04-04 prefetch, 04-05 gapless hand-off); the
-// enabling plan may adjust a test body when the real timing demands it, keeping the title and the assertions.
+// is written. Each started disabled and was turned on by the plan that implements it (04-04 prefetch, 04-05 gapless
+// hand-off; all six are on now); the enabling plan may adjust a test body when the real timing demands it, keeping the
+// title and the assertions.
 //
 // Kotlin differences from the Node tests (the traps D-16 names):
 //  * Node assigns `r.getUpcomingVideo = () => ({ id: B })`. Here the queue is the real lounge queue: a setPlaylist
@@ -24,13 +25,13 @@ import dev.t2u.lounge.PreviousNextVideos
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.VideoContext
 import dev.t2u.upnp.FakeRenderer
+import dev.t2u.upnp.UpnpError
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -162,7 +163,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08, PLAY-09: enabled by plan 04-05")
     @DisplayName("gapless: if the queue turns out to be over, the track the renderer played on into is stopped")
     fun ifTheQueueTurnsOutToBeOverThePlayedOnTrackIsStopped() {
         withFake { fake ->
@@ -210,7 +210,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08, PLAY-09: enabled by plan 04-05")
     @DisplayName("queue change replaces the prepared next track")
     fun queueChangeReplacesThePreparedNextTrack() {
         withFake { fake ->
@@ -565,6 +564,164 @@ internal class GaplessTest {
                 assertEquals(stopsBefore, fake.count("Stop"))
             }
         }
+    }
+
+    @Test
+    @DisplayName("a speaker that refuses SetNextAVTransportURI is asked once and its next track still starts after the current one")
+    fun aRefusingSpeakerIsAskedOnceAndStillAdvances() {
+        withFake(FakeRenderer(noGapless = true)) { fake ->
+            val handler = NextHandler()
+            handler.nextOf = { id -> if (id == A) video(B, 1) else if (id == B) video(C, 2) else null }
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B, C)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                waitUntil { fake.count("SetNextAVTransportURI") >= 1 }
+                delay(500) // about ten polls
+                assertEquals(1, fake.count("SetNextAVTransportURI"), "refused once, not asked again")
+                assertEquals(1, h.notes("Renderer has no SetNextAVTransportURI").size)
+                assertTrue(h.notes("Renderer supports gapless").isEmpty())
+                assertTrue(h.notes("Queued the next track").isEmpty())
+                assertEquals(listOf(A, B), h.resolves.toList())
+
+                // The end of A: B is loaded from the prepared item; C is then prepared but never offered to the speaker.
+                assertTrue(r.doPlay(Video(B), 0.0))
+                assertEquals(listOf(A, B), h.resolves.toList(), "B not resolved again")
+                waitUntil { h.notes("Prepared next track").size == 2 }
+                delay(300)
+                assertEquals(1, fake.count("SetNextAVTransportURI"), "no second SetNextAVTransportURI for the following track")
+                assertEquals(1, h.notes("Renderer has no SetNextAVTransportURI").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("gapless off: the next track is prepared but never handed to the speaker, and starts after the current one ends")
+    fun gaplessOffPreparesButNeverSendsNext() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler, gapless = false).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                assertEquals(listOf(A, B), h.resolves.toList())
+                delay(300)
+                assertEquals(0, fake.count("SetNextAVTransportURI"))
+                assertEquals("", fake.state.nextUri)
+
+                fake.nearTheEnd()
+                delay(200)
+                fake.state.transport = "STOPPED"
+                waitUntil { fake.count("SetAVTransportURI") == 2 }
+                assertEquals(2, fake.count("SetAVTransportURI"))
+                assertEquals(listOf(A, B), h.resolves.toList(), "B loaded from the prepared item")
+                assertEquals(0, fake.count("SetNextAVTransportURI"))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("gapless without prefetch is ignored: nothing is prepared and nothing is sent")
+    fun gaplessWithoutPrefetchIsIgnored() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler, prefetch = false, gapless = true).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                delay(500) // ten polls
+                assertEquals(listOf(A), h.resolves.toList())
+                assertEquals(0, fake.count("SetNextAVTransportURI"))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a Stop from the phone while the hand-off waits for a refresh still stops the speaker and the track is not adopted")
+    fun aStopWhileTheHandOffWaitsStillStopsTheSpeaker() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+
+                handler.refreshDelayMs = 800
+                h.scope.launch { r.queue.updateByMessage("updatePlaylist", updatePayload(A, B), Client.YT) }
+                waitUntil { r.queue.isUpdating }
+                assertTrue(r.queue.isUpdating, "the refresh is in flight")
+
+                val stopsBefore = fake.count("Stop")
+                fake.advance()
+                waitUntil { h.notes("Renderer continued into the next track").isNotEmpty() }
+                assertTrue(r.queue.isUpdating, "the hand-off is waiting")
+                assertTrue(r.stop())
+                assertTrue(fake.count("Stop") > stopsBefore, "the Stop reached the speaker")
+                assertEquals("STOPPED", fake.state.transport)
+                assertEquals(null, r.nowPlaying)
+
+                waitUntil { !r.queue.isUpdating }
+                delay(300)
+                assertTrue(h.notes("Now playing").none { (it["message"] as String).contains("continued gaplessly") })
+                assertEquals(null, r.nowPlaying)
+                assertTrue(h.released.contains(streamPath(2)), "B's stream was released: ${h.released}")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a playlist refresh in flight at the switch is waited for, then the queued track is adopted without a reload")
+    fun aRefreshInFlightAtTheSwitchIsWaitedFor() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+
+                handler.refreshDelayMs = 400
+                h.scope.launch { r.queue.updateByMessage("updatePlaylist", updatePayload(A, B), Client.YT) }
+                waitUntil { r.queue.isUpdating }
+                val loadsBefore = fake.count("SetAVTransportURI")
+                val stopsBefore = fake.count("Stop")
+                fake.advance()
+                waitUntil { h.notes("Renderer continued into the next track").isNotEmpty() }
+                assertTrue(r.nowPlaying?.videoId != B || !r.queue.isUpdating, "not adopted before the refresh ends")
+
+                waitUntil { r.nowPlaying?.videoId == B }
+                assertEquals(B, r.nowPlaying?.videoId)
+                assertEquals(loadsBefore, fake.count("SetAVTransportURI"), "B was not loaded")
+                assertEquals(stopsBefore, fake.count("Stop"), "no Stop")
+                assertEquals("PLAYING", fake.state.transport)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an unchanged queue hands the next track to the speaker only once")
+    fun anUnchangedQueueSendsNextOnlyOnce() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { fake.count("SetNextAVTransportURI") >= 1 }
+                delay(300) // six polls
+                assertEquals(1, fake.count("SetNextAVTransportURI"))
+                assertEquals(1, h.notes("Queued the next track on the speaker").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("only a 401, a 602 or a missing service counts as a refusal of SetNextAVTransportURI")
+    fun onlyTheRefusalCodesMeanNoGaplessSupport() {
+        assertTrue(isGaplessRefusal(UpnpError("x", "EUPNP", 500, "401")))
+        assertTrue(isGaplessRefusal(UpnpError("x", "EUPNP", 500, "602")))
+        assertTrue(isGaplessRefusal(UpnpError("x", "ENOACTION", 500, "")))
+        assertTrue(isGaplessRefusal(UpnpError("x", "ENOSERVICE")))
+        assertTrue(!isGaplessRefusal(UpnpError("x", "EUPNP", 500, "501")))
+        assertTrue(!isGaplessRefusal(UpnpError("x", "EUPNP", 500, "")))
+        assertTrue(!isGaplessRefusal(UpnpError("x", "ENETWORK")))
     }
 
     private companion object {
