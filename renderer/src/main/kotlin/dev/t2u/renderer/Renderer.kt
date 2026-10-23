@@ -134,7 +134,46 @@ internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
 /** Transport states in which a speaker's RelTime can be believed again after a Seek. */
 private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
 
+/** The first wait before a next track that failed to prepare is tried again; it doubles per failure (renderer.js PREFETCH_RETRY_MS, D-06). */
+internal const val PREFETCH_RETRY_MS = 30_000L
+
+/** The longest that wait grows to (renderer.js PREFETCH_RETRY_MAX_MS). */
+internal const val PREFETCH_RETRY_MAX_MS = 600_000L
+
+/** How many video ids the prefetch remembers a failure for; the oldest are dropped first. */
+internal const val PREFETCH_FAILURES_KEPT = 50
+
 private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
+
+/**
+ * Per-video back-off for the prefetch (renderer.js `#prefetchFailures`, D-06): a video that could not be prepared is not tried
+ * again by the poll before `retryMs * 2^(failures-1)` (capped at [maxMs]) has passed. Remembers the last [kept] ids; a repeated
+ * failure moves its id to the newest end. Times are on the renderer's injected clock.
+ */
+internal class PrefetchBackoff(private val retryMs: Long, private val maxMs: Long, private val kept: Int) {
+    private class Failure(val count: Int, val until: Long)
+
+    private val failures = LinkedHashMap<String, Failure>()
+
+    val size: Int get() = synchronized(failures) { failures.size }
+
+    /** The time before which [id] is not tried again; 0 when it has no failure on record. */
+    fun blockedUntil(id: String): Long = synchronized(failures) { failures[id]?.until ?: 0L }
+
+    /** Records a failure at [now] and returns the wait that now applies, in milliseconds. */
+    fun failed(id: String, now: Long): Long = synchronized(failures) {
+        val count = (failures[id]?.count ?: 0) + 1
+        val delay = minOf(retryMs * (1L shl minOf(count - 1, 30)), maxMs)
+        failures.remove(id) // re-insert: the oldest entries are dropped first
+        failures[id] = Failure(count, now + delay)
+        while (failures.size > kept) failures.remove(failures.keys.first())
+        delay
+    }
+
+    fun succeeded(id: String) {
+        synchronized(failures) { failures.remove(id) }
+    }
+}
 
 /**
  * Everything a [Renderer] needs from the outside. [http] must derive from `lanHttpClient()` (SVC-05),
@@ -348,6 +387,8 @@ class Renderer(
     @Volatile private var queued: Queued? = null
 
     private val queueLock = Any()
+
+    private val prefetchBackoff = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
 
     /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one (RESEARCH Pitfall 1). */
     private val prefetching = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -625,8 +666,22 @@ class Renderer(
             return
         }
         if (queued?.video?.id == upcoming.id) return
+        if (prefetchBackoff.blockedUntil(upcoming.id) > deps.clock()) return
         val t0 = deps.clock()
-        val item = prepareItem(upcoming, 0.0, null)
+        val item = try {
+            prepareItem(upcoming, 0.0, null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The track-end load still tries this video with its normal handling; only the poll backs off (D-06).
+            val delayMs = prefetchBackoff.failed(upcoming.id, deps.clock())
+            note(
+                "warn",
+                "Preparing next track ${upcoming.id} failed: ${e.message ?: e::class.java.simpleName} - next try in ${Math.round(delayMs / 1000.0)} s",
+            )
+            return
+        }
+        prefetchBackoff.succeeded(upcoming.id)
         synchronized(queueLock) {
             // The world may have moved on while this prepared: a newer load, a removal, another track, another next video.
             val stillWanted = !destroyed && loadSeq.get() == seq && current?.video?.id == currentId &&

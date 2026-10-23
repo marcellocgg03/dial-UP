@@ -234,7 +234,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08: enabled by plan 04-04 task 2")
     @DisplayName("a next track that cannot be prepared is not retried on every poll")
     fun aNextTrackThatCannotBePreparedIsNotRetriedOnEveryPoll() {
         withFake { fake ->
@@ -307,6 +306,162 @@ internal class GaplessTest {
                 assertEquals(listOf(A), h.resolves.toList())
                 assertEquals(1, h.registered.size)
                 assertTrue(h.notes("Prepared next track").isEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a failed prepare is backed off per video: 30 s, doubling")
+    fun aFailedPrepareIsBackedOffPerVideo() {
+        val now = AtomicLong(1_000_000L)
+        withFake { fake ->
+            val handler = NextHandler()
+            RendererHarness(
+                fake, config = cfg(), playlistRequestHandlerFactory = { handler }, clock = { now.get() },
+            ).use { h ->
+                h.resolveFailure = { id -> if (id == B) IllegalStateException("ERROR: [youtube] $B: Video unavailable") else null }
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                fun attempts() = h.resolves.count { it == B }
+                waitUntil { attempts() == 1 }
+                delay(200)
+                assertEquals(1, attempts())
+
+                now.addAndGet(29_000)
+                delay(300)
+                assertEquals(1, attempts(), "29 s after the failure: no new attempt")
+                now.addAndGet(2_000) // 31 s
+                waitUntil { attempts() == 2 }
+                assertEquals(2, attempts(), "31 s after the failure: a second attempt")
+
+                now.addAndGet(59_000)
+                delay(300)
+                assertEquals(2, attempts(), "59 s after the second failure: none")
+                now.addAndGet(2_000) // 61 s
+                waitUntil { attempts() == 3 }
+                assertEquals(3, attempts(), "61 s after the second failure: a third attempt")
+
+                val message = h.notes("Preparing next track").first()["message"] as String
+                assertTrue(message.startsWith("Preparing next track $B failed: "), message)
+                assertTrue(message.endsWith(" - next try in 30 s"), message)
+                assertTrue(!message.contains("http"), "the note carries no URL")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the prefetch back-off doubles to a ten minute cap, forgets a success and keeps 50 ids")
+    fun prefetchBackoffArithmetic() {
+        val b = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
+        var now = 0L
+        val delays = (1..9).map { b.failed(B, now) }
+        assertEquals(listOf(30_000L, 60_000L, 120_000L, 240_000L, 480_000L, 600_000L, 600_000L, 600_000L, 600_000L), delays)
+        assertTrue(b.blockedUntil(B) > now)
+        now += 600_001
+        assertTrue(b.blockedUntil(B) <= now, "10 min and 1 ms after the last failure one more attempt is allowed")
+        b.succeeded(B)
+        assertEquals(0L, b.blockedUntil(B))
+        assertEquals(30_000L, b.failed(B, now), "a success cleared the count")
+
+        val many = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
+        for (i in 0 until 60) many.failed("id$i", 1)
+        assertEquals(50, many.size)
+        assertEquals(0L, many.blockedUntil("id0"), "the oldest ids were dropped")
+        assertTrue(many.blockedUntil("id59") > 0)
+        many.failed("id10", 1) // updated: moves to the newest end
+        for (i in 60 until 70) many.failed("id$i", 1)
+        assertTrue(many.blockedUntil("id10") > 0, "an updated id survives later drops")
+        assertEquals(50, many.size)
+    }
+
+    @Test
+    @DisplayName("a slow prepare does not hold up the poll: the track end is acted on at once")
+    fun aSlowPrepareDoesNotHoldUpThePoll() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                h.prepareDelayFor = { e -> if (e.videoId == B) 3000L else 0L }
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { h.prepared.any { it.videoId == B } }
+                assertTrue(h.prepared.any { it.videoId == B }, "the prepare of B has started")
+                delay(200) // the poll has seen A playing
+                fake.nearTheEnd()
+                delay(200)
+                val at = System.currentTimeMillis()
+                fake.state.transport = "STOPPED"
+                waitUntil { r.queue.current?.id == B }
+                val took = System.currentTimeMillis() - at
+                assertEquals(B, r.queue.current?.id)
+                assertTrue(took < 1000, "the track end was acted on within 1 s of the STOPPED (took $took ms)")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a playlist refresh in flight keeps the prepared next track")
+    fun aPlaylistRefreshInFlightKeepsThePreparedTrack() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                assertEquals(1, h.prepared.count { it.videoId == B })
+
+                handler.refreshDelayMs = 400
+                h.scope.launch { r.queue.updateByMessage("updatePlaylist", updatePayload(A, B), Client.YT) }
+                waitUntil { r.queue.isUpdating }
+                assertTrue(r.queue.isUpdating, "the refresh is in flight")
+                delay(300) // polls during the refresh
+                assertEquals(1, h.prepared.count { it.videoId == B }, "no new prepare of B")
+                assertTrue(h.released.none { it == streamPath(2) }, "B was not released")
+
+                waitUntil { !r.queue.isUpdating }
+                delay(200)
+                assertEquals(1, h.prepared.count { it.videoId == B })
+                assertTrue(r.doPlay(Video(B), 0.0))
+                assertEquals(listOf(A, B), h.resolves.toList(), "B is still the prepared one")
+                assertTrue(h.notes("Using prepared track").isNotEmpty())
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a replaced or unused prepared track is released")
+    fun replacedAndUnusedPreparedTracksAreReleased() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { h.notes("Prepared next track").size == 1 }
+
+                // The upcoming video becomes C: C is prepared and B's stream is released.
+                handler.nextOf = { id -> if (id == A) video(C, 1) else null }
+                r.queue.updateByMessage("updatePlaylist", updatePayload(A, C), Client.YT)
+                waitUntil { h.notes("Prepared next track").size == 2 }
+                assertEquals(C, h.registered[2].videoId)
+                assertTrue(h.released.contains(streamPath(2)), "B's stream was released: ${h.released}")
+
+                // A load of another video does not adopt the prepared C: C is released.
+                assertTrue(r.doPlay(Video(B), 0.0))
+                assertTrue(h.released.contains(streamPath(3)), "the unused C was released: ${h.released}")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("destroy releases the prepared next track")
+    fun destroyReleasesThePreparedTrack() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                r.destroy()
+                assertTrue(h.released.contains(streamPath(2)), "B's stream was released: ${h.released}")
             }
         }
     }
