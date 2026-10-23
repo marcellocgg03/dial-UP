@@ -186,7 +186,8 @@ class BridgeMediaWiringTest {
     fun withoutASourceDownloaderAFileFormatFailsButTheBridgeRuns() = h.run<Unit> {
         val buffer = File(tmp, "buffer").also { it.mkdirs() }
         val bridge = h.newBridge(
-            h.testConfig(outputFormat = "mp4"),
+            // No retries: this test is about the first failure (plan 04-07 retries an unclear failure twice before it gives up).
+            h.testConfig(outputFormat = "mp4").copy(playRetryDelaysMs = emptyList()),
             launcher = JvmPipeLauncher("/usr/bin/ffmpeg"),
             bufferDir = buffer,
         )

@@ -69,6 +69,12 @@ private const val QUEUE_SETTLE_STEP_MS = 100L
 private const val SKIP_STOPPED_WAIT_MS = 2000L
 private const val SKIP_STEP_MS = 50L
 
+/** Step of the wait before a retry of a track that could not be prepared, so a newer play ends it quickly (plan 04-07). */
+private const val RETRY_WAIT_STEP_MS = 20L
+
+/** How long a play whose retry wait was overtaken waits for the newer play to settle before it reports (plan 04-07). */
+private const val SUPERSEDED_SETTLE_MS = 10_000L
+
 /**
  * Upper bound on how long a Pause waits for a speaker that is still starting. A Pause that lands while the
  * speaker is fetching its first bytes makes it drop that connection and refetch the stream at the next Play
@@ -588,23 +594,66 @@ class Renderer(
     }
 
     /**
-     * Loads [video] for a play the sender asked for and applies D-11 when preparing it fails (plan 04-07): the track is
-     * skipped by [skipUnplayable], so one broken track does not end the playlist. A failure of the speaker itself, or a
-     * load a newer play overtook, is not a track problem and just ends the play as before. The seek restart and the
-     * format fallback call [load] directly and never skip.
+     * Loads [video] for a play the sender asked for and applies D-11 when preparing it fails (plan 04-07): a failure for a
+     * reason that is not clearly permanent is tried again after each of [Config.playRetryDelaysMs] with a fresh lookup (the
+     * cached resolve is invalidated, as the download ladder does), then the track is skipped by [skipUnplayable], so one
+     * broken track does not end the playlist. A failure of the speaker itself, or a load a newer play overtook, is not a track
+     * problem and just ends the play as before. The seek restart and the format fallback call [load] directly and never retry or skip.
      */
     private suspend fun playWithRetries(video: Video, position: Double): Boolean {
-        return when (val result = loadResult(video, position)) {
-            is LoadResult.Started -> {
-                unplayableStreak.set(0)
-                true
+        var attempt = 0
+        while (true) {
+            when (val result = loadResult(video, position)) {
+                is LoadResult.Started -> {
+                    unplayableStreak.set(0)
+                    return true
+                }
+                is LoadResult.PrepareFailed -> {
+                    val delays = config.playRetryDelaysMs
+                    if (attempt >= delays.size || isPermanentlyUnavailable(result.error.message)) {
+                        skipUnplayable(video, loadSeq.get(), result.error)
+                        return false
+                    }
+                    val seq = loadSeq.get()
+                    val why = result.error.message ?: result.error::class.java.simpleName
+                    note(
+                        "warn",
+                        "Could not prepare ${video.id} ($why) - retrying in ${Math.round(delays[attempt] / 1000.0)} s (${attempt + 1}/${delays.size})",
+                        "videoId" to video.id,
+                    )
+                    deps.resolver.invalidate(video.id)
+                    if (!waitForRetry(delays[attempt], seq)) return outcomeOfNewerPlay()
+                    attempt++
+                }
+                is LoadResult.SpeakerFailed, is LoadResult.Superseded -> return false
             }
-            is LoadResult.PrepareFailed -> {
-                skipUnplayable(video, loadSeq.get(), result.error)
-                false
-            }
-            is LoadResult.SpeakerFailed, is LoadResult.Superseded -> false
         }
+    }
+
+    /**
+     * What [playWithRetries] reports when a newer play, a stop or a removal overtook its retry wait. Player.play puts this play's
+     * result on the senders when doPlay returns, which after a wait of seconds would be STOPPED over the newer play's PLAYING.
+     * So the answer waits for the newer play to settle (bounded by [SUPERSEDED_SETTLE_MS]) and reports what the player shows:
+     * true while it plays (the senders see PLAYING once more, which is what they already show), false after a stop or a failure.
+     */
+    private suspend fun outcomeOfNewerPlay(): Boolean {
+        val deadline = deps.clock() + SUPERSEDED_SETTLE_MS
+        while (!destroyed && status == PlayerStatus.LOADING && deps.clock() < deadline) delay(RETRY_WAIT_STEP_MS)
+        return !destroyed && status == PlayerStatus.PLAYING
+    }
+
+    /**
+     * Waits [ms] for a retry in small steps, so a newer play, a stop or removal (a change of [loadSeq]) ends the wait at once
+     * instead of after the full delay. False when the wait was overtaken.
+     */
+    private suspend fun waitForRetry(ms: Long, seq: Int): Boolean {
+        val deadline = deps.clock() + ms
+        while (!superseded(seq)) {
+            val left = deadline - deps.clock()
+            if (left <= 0) return true
+            delay(minOf(left, RETRY_WAIT_STEP_MS))
+        }
+        return false
     }
 
     /**
