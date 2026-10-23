@@ -79,13 +79,12 @@ class FileBuilder(
     private val downloader: SourceDownloader,
     private val flacBits: Int = 16,
     private val ffmpegLogLevel: String = "error",
-    private val maxKept: Int = 6,
+    cacheLimitBytes: () -> Long = { DEFAULT_CACHE_LIMIT_BYTES },
     private val retryDelaysMs: List<Long> = listOf(2000L, 5000L),
     private val onEvent: (Map<String, Any?>) -> Unit = {},
 ) {
     init {
         require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
-        require(maxKept >= 1) { "maxKept must be at least 1" }
     }
 
     private val dir: File = dir.absoluteFile
@@ -94,21 +93,18 @@ class FileBuilder(
     private val buildJobs = HashMap<String, Deferred<File>>()
     private val sourceJobs = HashMap<String, Deferred<File>>()
 
-    private class Built(val file: File, val videoId: String)
-
-    /** Finished builds of this run, oldest first. Completion order, never mtimes (interim rule, see [recordBuilt]). */
-    private val built = ArrayList<Built>()
+    private val cache = FileCache(this.dir, cacheLimitBytes, onEvent)
 
     /** The finished file for the key, or null when it is not there. */
     fun fileFor(videoId: String, format: String, startAt: Int): File? {
         val file = finalFile(videoId, format, startAt)
-        return file.takeIf { isFinished(it) }
+        return file.takeIf { isFinished(it) }?.also { cache.touch(it) }
     }
 
     /** Returns the finished file, building it (download first, then ffmpeg) when it does not exist yet. */
     suspend fun ensure(videoId: String, format: String, startAt: Int): File {
         val final = finalFile(videoId, format, startAt)
-        if (isFinished(final)) return final
+        if (isFinished(final)) return final.also { cache.touch(it) }
         val key = keyOf(videoId, format, startAt)
         val job = synchronized(lock) {
             buildJobs[key] ?: scope.async(start = CoroutineStart.LAZY) { build(videoId, format, startAt, final) }.also { j ->
@@ -128,7 +124,6 @@ class FileBuilder(
 
     /** Deletes every file in the build directory (an earlier run's leftovers, or this run's at the end). */
     fun wipe() {
-        synchronized(lock) { built.clear() }
         dir.listFiles()?.forEach { runCatching { it.delete() } }
     }
 
@@ -186,30 +181,10 @@ class FileBuilder(
         } finally {
             proc?.let { p -> withContext(NonCancellable + Dispatchers.IO) { if (p.isAlive) p.destroyForcibly() } }
         }
-        recordBuilt(final, videoId)
+        // D-04: the file just built and its source are kept even when they alone exceed the cap.
+        cache.prune(keep = setOf(final.name, src.name))
         emit("built", videoId, format, startAt)
         return final
-    }
-
-    /**
-     * Interim disk bound (RESEARCH Pitfall 7): keep the newest [maxKept] final files and delete the older ones in
-     * completion order, together with a source nothing refers to any more. The real cache (a size cap, eviction
-     * order that follows use, files pinned while read, a rebuild of a vanished file) is Phase 4, PLAY-10.
-     */
-    private fun recordBuilt(final: File, videoId: String) {
-        synchronized(lock) {
-            built.removeAll { it.file == final }
-            built.add(Built(final, videoId))
-            while (built.size > maxKept) {
-                val old = built.removeAt(0)
-                old.file.delete()
-                val id = old.videoId
-                val inUse = built.any { it.videoId == id } ||
-                    buildJobs.keys.any { it.startsWith(id) } ||
-                    sourceJobs.containsKey(id)
-                if (!inUse) sourcePath(id).delete()
-            }
-        }
     }
 
     /** Waits for [p] to exit; cancellation interrupts the wait, and a build that runs too long is killed. */
@@ -233,7 +208,7 @@ class FileBuilder(
      */
     suspend fun sourceFile(videoId: String): File {
         val dest = sourcePath(videoId)
-        if (isFinished(dest)) return dest
+        if (isFinished(dest)) return dest.also { cache.touch(it) }
         val job = synchronized(lock) {
             sourceJobs[videoId] ?: scope.async(start = CoroutineStart.LAZY) { downloadSource(videoId, dest) }.also { j ->
                 sourceJobs[videoId] = j

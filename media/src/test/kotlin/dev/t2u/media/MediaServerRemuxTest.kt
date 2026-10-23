@@ -103,7 +103,6 @@ class MediaServerRemuxTest {
         downloader: SourceDownloader,
         resolver: VideoResolver = StubResolver(),
         flacBits: Int = 16,
-        maxKept: Int = 6,
         retryDelaysMs: List<Long> = listOf(10L, 10L),
     ): MediaServer {
         val builder = FileBuilder(
@@ -112,7 +111,6 @@ class MediaServerRemuxTest {
             resolver = resolver,
             downloader = downloader,
             flacBits = flacBits,
-            maxKept = maxKept,
             retryDelaysMs = retryDelaysMs,
         )
         return MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "pipe"), resolver, files = builder).also {
@@ -396,22 +394,6 @@ class MediaServerRemuxTest {
         assertTrue(File(buildDir, "mmmmmmmmmmm-mp4-0.m4a").length() > 0)
         assertEquals(1, launcher.starts.get())
         Unit
-    }
-
-    @Test
-    fun onlyTheNewestSixBuildsStayAndStartThenStopLeavesTheDirectoryEmpty() = runBlocking {
-        buildDir.mkdirs()
-        File(buildDir, "stale-from-an-earlier-run.m4a").writeText("old")
-        val ms = serve(FakeSourceDownloader(source), maxKept = 6)
-        assertEquals(emptyList(), buildDir.listFiles()!!.toList(), "start() wipes an earlier run")
-        val ids = (0..6).map { "ooooooooooo".dropLast(1) + it }
-        for (id in ids) ms.prepare(VideoEntry(id, "mp4"))
-        val names = buildDir.listFiles()!!.map { it.name }.sorted()
-        val finals = names.filter { it.endsWith(".m4a") }
-        assertEquals(ids.drop(1).map { "$it-mp4-0.m4a" }, finals, "the newest six final files remain")
-        assertEquals(ids.drop(1).map { "$it.source" }, names.filter { it.endsWith(".source") }, "sources stay for videos that still have a build")
-        ms.stop()
-        assertEquals(emptyList(), buildDir.listFiles()!!.toList(), "stop() leaves the build directory empty")
     }
 
     @Test
