@@ -9,3 +9,14 @@ local.properties
 *.iml
 tools/lounge-capture/node_modules/
 tools/lounge-capture/out/
+
+# Claude Code / GSD workflow files (kept local for now)
+.claude/
+.gsd/
+.planning/
+CLAUDE.md
+*.md
+# ...except the project documents that are published
+!README.md
+!PARITY.md
+!THIRD_PARTY_NOTICES.md
