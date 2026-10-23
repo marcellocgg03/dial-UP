@@ -237,6 +237,151 @@ internal class GaplessLearningTest {
         }
     }
 
+    // ---- Task 2: contradictions, the stop at the switch, the bounded retry ----
+
+    /** The model string the fake's description gives (asserted against the renderer's own in the first test below). */
+    private val fakeModel = speakerModel("Acme", "Speaker 1", "")
+
+    private fun streamPath(n: Int) = "/stream/" + n.toString().padStart(32, '0') + ".aac"
+
+    /** A is playing, the speaker took B as its next track, and a poll has seen A near its end. */
+    private suspend fun RendererHarness.playingWithBQueued(fake: FakeRenderer): Renderer {
+        val r = queued(this, A, B)
+        assertTrue(r.play(r.queue.current!!, 0.0))
+        waitUntil { fake.state.nextUri.isNotEmpty() && r.gaplessSupport == true }
+        kotlinx.coroutines.delay(200) // a poll has seen A playing
+        fake.nearTheEnd()
+        kotlinx.coroutines.delay(200) // and near its end
+        return r
+    }
+
+    @Test
+    @DisplayName("the fake's model string is the one the renderer stores")
+    fun theFakeModelMatches() {
+        withFake { fake ->
+            harness(fake, newDir()).use { h ->
+                h.renderer.init()
+                assertEquals(fakeModel, modelOf(h))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a stored true followed by a refusal becomes false and nothing more is sent this run")
+    fun aStoredTrueThenARefusalBecomesFalse() {
+        val dir = newDir()
+        seed(dir, gaplessMemory(true, fakeModel, System.currentTimeMillis()))
+        withFake(FakeRenderer(noGapless = true)) { fake ->
+            harness(fake, dir).use { h ->
+                val r = queued(h, A, B)
+                assertEquals(true, r.gaplessSupport, "the stored true is trusted")
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { supportedIn(dir) == false }
+                assertEquals(false, supportedIn(dir))
+                assertEquals(false, r.gaplessSupport)
+                kotlinx.coroutines.delay(400)
+                assertEquals(1, fake.count("SetNextAVTransportURI"), "no further SetNext this run")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that stops at the end instead of playing the accepted queued track forgets gapless and the queue advances with the prepared track")
+    fun aStopInsteadOfTheSwitchForgetsGapless() {
+        val dir = newDir()
+        withFake { fake ->
+            harness(fake, dir).use { h ->
+                val r = h.playingWithBQueued(fake)
+                waitUntil { supportedIn(dir) == true }
+                assertEquals(true, supportedIn(dir))
+                // The speaker ignores its next slot: it stops with the current URI still A.
+                fake.state.transport = "STOPPED"
+                waitUntil { fake.count("SetAVTransportURI") == 2 }
+                assertEquals(2, fake.count("SetAVTransportURI"))
+                val second = fake.calls.filter { it.action == "SetAVTransportURI" }[1]
+                assertTrue(second.body.contains(streamPath(2)), "B's path")
+                assertEquals(listOf(A, B), h.resolves.toList())
+                assertNull(stored(dir), "the key is removed")
+                assertNull(r.gaplessSupport)
+                assertEquals(1, h.notes("Speaker stopped at the end instead of playing the queued track - gapless support forgotten").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a STOPPED reading while the speaker holds the queued stream waits, and a following PLAYING is adopted as a normal switch")
+    fun aStopAtTheSwitchThenPlayingIsAdopted() {
+        val dir = newDir()
+        withFake { fake ->
+            harness(fake, dir).use { h ->
+                val r = h.playingWithBQueued(fake)
+                val loads = fake.count("SetAVTransportURI")
+                val stops = fake.count("Stop")
+                val plays = fake.count("Play")
+                fake.state.currentUri = fake.state.nextUri
+                fake.state.nextUri = ""
+                fake.state.transport = "STOPPED"
+                waitUntil { h.notes("Speaker stopped at the switch - waiting for it to play the queued track").isNotEmpty() }
+                kotlinx.coroutines.delay(50) // about one more poll, within the grace
+                fake.state.transport = "PLAYING"
+                waitUntil { r.nowPlaying?.videoId == B }
+                assertEquals(B, r.nowPlaying?.videoId)
+                assertEquals(loads, fake.count("SetAVTransportURI"), "B was not loaded")
+                assertEquals(stops, fake.count("Stop"), "no Stop for B")
+                assertEquals(plays, fake.count("Play"), "B's start did not play twice")
+                assertEquals(1, h.notes("Speaker stopped at the switch").size, "noted once")
+                assertTrue(h.notes("Now playing").any { (it["message"] as String).contains("continued gaplessly") })
+                assertNotNull(h.notes("Renderer continued into the next track").single()["via"])
+                assertEquals(true, supportedIn(dir), "the memory is kept")
+                assertEquals(true, r.gaplessSupport)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that holds the queued stream but stays STOPPED past the grace is advanced normally, once, and gapless is forgotten")
+    fun aStopPastTheGraceAdvancesNormally() {
+        val dir = newDir()
+        withFake { fake ->
+            harness(fake, dir).use { h ->
+                val r = h.playingWithBQueued(fake)
+                val plays = fake.count("Play")
+                fake.state.currentUri = fake.state.nextUri
+                fake.state.nextUri = ""
+                fake.state.transport = "STOPPED"
+                waitUntil { fake.count("SetAVTransportURI") == 2 && fake.count("Play") == plays + 1 }
+                kotlinx.coroutines.delay(400)
+                assertEquals(2, fake.count("SetAVTransportURI"), "B loaded once")
+                assertEquals(plays + 1, fake.count("Play"), "one Play for B")
+                assertEquals(listOf(A, B), h.resolves.toList())
+                assertEquals(B, r.nowPlaying?.videoId)
+                assertNull(stored(dir), "the key is removed")
+                assertNull(r.gaplessSupport)
+                assertTrue(h.notes("Speaker stopped at the switch").size == 1)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an unclear SetNextAVTransportURI failure is retried from the next polls, at most three times, and never marks the speaker unsupported")
+    fun anUnclearFailureIsRetriedThreeTimes() {
+        val dir = newDir()
+        withFake(FakeRenderer(bareFaultOn = setOf("SetNextAVTransportURI"))) { fake ->
+            harness(fake, dir).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                kotlinx.coroutines.delay(700) // about fourteen polls
+                assertEquals(3, fake.count("SetNextAVTransportURI"), "three attempts, then none")
+                assertNull(r.gaplessSupport, "an unclear error never marks the speaker as unsupported")
+                assertNull(stored(dir))
+                assertTrue(r.doPlay(Video(B), 0.0))
+                assertEquals(listOf(A, B), h.resolves.toList(), "B still starts from the prepared item")
+                assertEquals(2, fake.count("SetAVTransportURI"))
+            }
+        }
+    }
+
     private companion object {
         fun video(id: String, index: Int) = Video(id, Client.YT, VideoContext(playlistId = "PL", index = index))
     }

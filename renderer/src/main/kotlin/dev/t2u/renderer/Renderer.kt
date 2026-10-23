@@ -131,6 +131,12 @@ internal const val START_HARD_CAP_FACTOR = 4
 /** Consecutive polls that must read another source's URI before the speaker counts as taken over (plan 03-25, T-03-61). */
 internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
 
+/**
+ * Polls a STOPPED reading at the end of a track is waited out while the speaker already holds the queued stream, before the
+ * queue advances the normal way (plan 04-06, RESEARCH Pitfall 10): a Sonos may report STOPPED for a moment as it switches.
+ */
+internal const val GAPLESS_STOP_GRACE_POLLS = 3
+
 /** Transport states in which a speaker's RelTime can be believed again after a Seek. */
 private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
 
@@ -417,6 +423,12 @@ class Renderer(
      * (renderer.js `#advanced`). Set and cleared only on the paths that follow the switch.
      */
     @Volatile private var advanced: Queued? = null
+
+    /**
+     * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream (plan 04-06,
+     * RESEARCH Pitfall 10). Touched only by the poll; reset by [adopt] and by any poll that reads PLAYING.
+     */
+    private var stopGracePolls = 0
 
     /** True only while the hand-off's own [next] runs: the one Stop that may be skipped because the speaker already moved on. */
     @Volatile private var handingOff = false
@@ -727,7 +739,15 @@ class Renderer(
             }
             return
         }
-        if (queued?.video?.id == upcoming.id) return
+        val held = queued
+        if (held?.video?.id == upcoming.id) {
+            // An unclear SetNextAVTransportURI failure (a bare 500, a timeout) is tried again from the next polls, at most 3
+            // attempts per queued track (RESEARCH Pitfall 7). A classified refusal made gaplessSupported false, so it is not retried.
+            if (!held.sentToRenderer && held.sendAttempts < 3 && config.prefetch && config.gapless && gaplessSupported != false) {
+                sendNextToRenderer(held)
+            }
+            return
+        }
         if (prefetchBackoff.blockedUntil(upcoming.id) > deps.clock()) return
         val t0 = deps.clock()
         val item = try {
@@ -926,6 +946,7 @@ class Renderer(
         }
         metaReported = false
         foreignPolls = 0
+        stopGracePolls = 0
         expectStop = false
         loadedThisSession = true
         startPolling()
@@ -1602,6 +1623,7 @@ class Renderer(
 
         when {
             state == "PLAYING" -> {
+                stopGracePolls = 0
                 if (!sawPlaying) {
                     sawPlaying = true
                     if (c != null) confirmFormat(c)
@@ -1629,11 +1651,30 @@ class Renderer(
                 if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
             }
             (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING -> {
+                val p = position
+                val ended = trackEnded(p, c?.startAt ?: 0)
+                val accepted = queued?.takeIf { it.sentToRenderer }
+                if (ended && accepted != null) {
+                    // The speaker took the queued track as its next one but did not play on into it (plan 04-06, D-13).
+                    // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
+                    // the poll waits a few polls instead of reloading it (a reload would start the track twice, Pitfall 10).
+                    if (stopGracePolls < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
+                        if (destroyed || epoch != commandEpoch.get()) return
+                        if (stopGracePolls == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
+                        stopGracePolls++
+                        return
+                    }
+                    if (destroyed || epoch != commandEpoch.get()) return
+                    // It stopped instead of switching, or held the stream and never played it: what it was believed to do is wrong.
+                    stopGracePolls = 0
+                    gaplessSupported = null
+                    store?.set(LEARNED_GAPLESS_KEY, null)
+                    note("info", "Speaker stopped at the end instead of playing the queued track - gapless support forgotten")
+                }
                 // The speaker stopped. Both the launched coroutines below run outside this one, because they
                 // stop and restart polling, which would cancel the poll in the middle of the call.
                 stopPolling()
-                val p = position
-                if (trackEnded(p, c?.startAt ?: 0)) {
+                if (ended) {
                     note("info", "Track finished on renderer - advancing queue")
                     advanceAfterTrackEnd()
                 } else {
@@ -1752,6 +1793,12 @@ class Renderer(
         if (!fromPosition.isNullOrEmpty()) return if (fromPosition.contains(path)) "TrackURI" else null
         val fromMediaInfo = readCurrentUri()
         return if (fromMediaInfo != null && fromMediaInfo.contains(path)) "GetMediaInfo.CurrentURI" else null
+    }
+
+    /** Does the speaker hold [q]'s stream as its current one (GetMediaInfo read once)? Compared with `contains`, never equality. */
+    private suspend fun speakerHolds(q: Queued): Boolean {
+        val path = q.item.current.streamPath ?: return false
+        return readCurrentUri()?.contains(path) == true
     }
 
     /**
