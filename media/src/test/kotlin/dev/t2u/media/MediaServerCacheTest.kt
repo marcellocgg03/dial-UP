@@ -1,5 +1,6 @@
 package dev.t2u.media
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -192,6 +194,41 @@ class MediaServerCacheTest {
         File(buildDir, "eeeeeeeeeee.source.download.info.json").writeText("x")
         ms.stop()
         assertEquals(listOf("ddddddddddd-mp4-0.m4a", "ddddddddddd.source"), cached())
+        Unit
+    }
+
+    @Test
+    @DisplayName("clearing the cache keeps a file that is being played")
+    fun clearingTheCacheKeepsAFileThatIsBeingPlayed() = runBlocking {
+        // Bigger than the loopback socket buffers, so the server is still sending when the cache is cleared.
+        val ms = serve(FakeSourceDownloader(makeSource("big.m4a", 1800)))
+        val entry = VideoEntry("ppppppppppp", "mp4")
+        ms.prepare(entry)
+        val path = ms.registerVideo(entry)
+        // A renderer mid-track: connected, reads the headers and then nothing.
+        val socket = Socket("127.0.0.1", ms.resolvedPort())
+        try {
+            socket.soTimeout = 30_000
+            socket.getOutputStream().apply {
+                write(RawHttp.requestBytes("GET", path, "HTTP/1.1", emptyMap()))
+                flush()
+            }
+            val (status, _) = RawHttp.readHead(socket.getInputStream().buffered())
+            assertEquals(200, status)
+            delay(200)
+            assertEquals(1, ms.clearCache(), "only the source is deleted")
+            assertEquals(listOf("ppppppppppp-mp4-0.m4a"), cached())
+        } finally {
+            socket.close()
+        }
+        // the response ends with the connection: the pin is released and the file can go
+        var removed = 0
+        val deadline = System.currentTimeMillis() + 10_000
+        while (removed == 0 && System.currentTimeMillis() < deadline) {
+            removed = ms.clearCache()
+            if (removed == 0) delay(50)
+        }
+        assertEquals(1, removed, "the pin is released once the socket is closed")
         Unit
     }
 }
