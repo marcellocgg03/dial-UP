@@ -157,8 +157,75 @@ class MediaServerCacheTest {
         }
     }
 
+    // ----- token pins (D-04): the playing and the prefetched file are never evicted -----------------
+
+    private fun builtOf(id: String) = File(buildDir, "$id-mp4-0.m4a")
+
     @Test
-    fun aRegisteredFileWhoseSourceVanishedToIsRebuiltByDownloadingAgain() = runBlocking {
+    fun aFileBehindALiveTokenIsNeverEvictedUntilTheStreamIsReleased() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val a = VideoEntry("aaaaaaaaaaa", "mp4")
+        ms.prepare(a)
+        val pathA = ms.registerVideo(a) // the prefetched case: registered, never fetched
+        val b = VideoEntry("bbbbbbbbbbb", "mp4")
+        ms.prepare(b)
+        ms.registerVideo(b)
+        assertTrue(builtOf("aaaaaaaaaaa").isFile, "pinned by its token: survives the prune after B's build")
+        ms.release(pathA)
+        val c = VideoEntry("ccccccccccc", "mp4")
+        ms.prepare(c)
+        assertTrue(!builtOf("aaaaaaaaaaa").exists(), "released: the next prune takes it")
+        assertTrue(builtOf("bbbbbbbbbbb").isFile || builtOf("ccccccccccc").isFile)
+        Unit
+    }
+
+    @Test
+    fun aTokenPinnedFileSurvivesClearCacheUntilReleased() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val a = VideoEntry("aaaaaaaaaaa", "mp4")
+        ms.prepare(a)
+        val path = ms.registerVideo(a)
+        ms.clearCache()
+        assertTrue(builtOf("aaaaaaaaaaa").isFile, "pinned file kept")
+        ms.release(path)
+        ms.release(path) // a second release is harmless
+        ms.clearCache()
+        assertTrue(!builtOf("aaaaaaaaaaa").exists(), "released file removed")
+        Unit
+    }
+
+    @Test
+    fun evictingAFileTokenAtMaxTokensReleasesItsPin() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val a = VideoEntry("aaaaaaaaaaa", "mp4")
+        ms.prepare(a)
+        val pathA = ms.registerVideo(a)
+        repeat(MediaServer.MAX_TOKENS) {
+            ms.register(StreamEntry(StreamSource.PipeSource(emptyList()), "adts", "audio/aac", "filler"))
+        }
+        assertEquals(MediaServer.MAX_TOKENS, ms.tokenCount())
+        assertEquals(404, get(ms, pathA).status, "the first token left the table")
+        ms.prepare(VideoEntry("ccccccccccc", "mp4"))
+        assertTrue(!builtOf("aaaaaaaaaaa").exists(), "its file is no longer pinned")
+        Unit
+    }
+
+    @Test
+    fun stopReleasesEveryTokenPin() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val a = VideoEntry("aaaaaaaaaaa", "mp4")
+        ms.prepare(a)
+        ms.registerVideo(a)
+        ms.stop()
+        assertTrue(builtOf("aaaaaaaaaaa").isFile, "stop keeps finished files")
+        ms.start() // same builder, same pin table
+        ms.prepare(VideoEntry("ccccccccccc", "mp4"))
+        assertTrue(!builtOf("aaaaaaaaaaa").exists(), "the pin did not survive stop")
+        Unit
+    }
+
+    @Test
+    fun aRegisteredFileWhoseSourceVanishedTooIsRebuiltByDownloadingAgain() = runBlocking {
         val downloader = FakeSourceDownloader(makeSource("src.m4a", 60))
         val ms = serve(downloader)
         val entry = VideoEntry("rrrrrrrrrrr", "mp4")

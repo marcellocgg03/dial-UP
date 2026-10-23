@@ -334,11 +334,12 @@ class MediaServer(
      */
     private fun registerFile(entry: VideoEntry): String {
         require(entry.startAt >= 0) { "startAt must not be negative" }
-        val builder = files ?: throw IllegalStateException("no file builder: format ${entry.format} cannot be served")
+        check(files != null) { "no file builder: format ${entry.format} cannot be served" }
+        val builder: FileBuilder = files
         val file = builder.fileFor(entry.videoId, entry.format, entry.startAt)
             ?: builder.pathFor(entry.videoId, entry.format, entry.startAt)
         val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
-        val unpin = builder.pin(file) // by name: a file that does not exist yet is pinned too
+        val unpin = files.pin(file) // by name: a file that does not exist yet is pinned too
         val rebuild: suspend () -> File = { builder.ensure(entry.videoId, entry.format, entry.startAt) }
         val path = try {
             register(StreamEntry(StreamSource.FileSource(file, rebuild), entry.format, mime, entry.videoId))
