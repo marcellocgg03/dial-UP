@@ -65,6 +65,10 @@ private const val TRANSPORT_WAIT_STEP_MS = 300L
 /** Step of the wait for a playlist refresh in flight at a track end. */
 private const val QUEUE_SETTLE_STEP_MS = 100L
 
+/** How long a skip waits for the player to report the failed track STOPPED, and the step of that wait (plan 04-07). */
+private const val SKIP_STOPPED_WAIT_MS = 2000L
+private const val SKIP_STEP_MS = 50L
+
 /**
  * Upper bound on how long a Pause waits for a speaker that is still starting. A Pause that lands while the
  * speaker is fetching its first bytes makes it drop that connection and refetch the stream at the next Play
@@ -243,6 +247,21 @@ private class Current(val video: Video, val format: String, val startAt: Int, va
     @Volatile var seekedWhilePaused: Boolean = false
 }
 
+/** How a [Renderer.loadResult] ended (plan 04-07, D-11). */
+private sealed interface LoadResult {
+    /** The speaker was told to play the track. */
+    data object Started : LoadResult
+
+    /** A newer play, a stop or removal overtook the load. */
+    data object Superseded : LoadResult
+
+    /** Taking or preparing the item failed (the lookup, the format chain, the registration): a problem with the track. */
+    class PrepareFailed(val error: Exception) : LoadResult
+
+    /** A call to the speaker failed. */
+    class SpeakerFailed(val error: Exception) : LoadResult
+}
+
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */
 private class PreparedItem(
     val current: Current,
@@ -360,6 +379,9 @@ class Renderer(
     @Volatile private var lastCorrectionAt: Long = Long.MIN_VALUE / 2
 
     private val loadSeq = AtomicInteger()
+
+    /** Tracks that could not be prepared one after another (plan 04-07, D-11); reset when a play starts or a gapless switch is adopted. */
+    private val unplayableStreak = AtomicInteger()
 
     /**
      * Counts the Pause and Play commands this app sends. A poll that began before such a command finished read
@@ -557,11 +579,69 @@ class Renderer(
             // The speaker is already playing it (gapless): bring our state in line, send nothing (D-09).
             loadSeq.incrementAndGet()
             adopt(adv.item, alreadyPlaying = true)
+            unplayableStreak.set(0)
             note("info", "Now playing \"${adv.item.title}\" (continued gaplessly)", "videoId" to video.id)
             return true
         }
         releaseStream(adv?.item?.current)
-        return load(video, position)
+        return playWithRetries(video, position)
+    }
+
+    /**
+     * Loads [video] for a play the sender asked for and applies D-11 when preparing it fails (plan 04-07): the track is
+     * skipped by [skipUnplayable], so one broken track does not end the playlist. A failure of the speaker itself, or a
+     * load a newer play overtook, is not a track problem and just ends the play as before. The seek restart and the
+     * format fallback call [load] directly and never skip.
+     */
+    private suspend fun playWithRetries(video: Video, position: Double): Boolean {
+        return when (val result = loadResult(video, position)) {
+            is LoadResult.Started -> {
+                unplayableStreak.set(0)
+                true
+            }
+            is LoadResult.PrepareFailed -> {
+                skipUnplayable(video, loadSeq.get(), result.error)
+                false
+            }
+            is LoadResult.SpeakerFailed, is LoadResult.Superseded -> false
+        }
+    }
+
+    /**
+     * Moves the queue on after [video] could not be prepared (D-11): the player ends STOPPED for this track (the sender is
+     * told through the normal state change), then the queue's next track, or the autoplay video, is played. [MAX_UNPLAYABLE_IN_A_ROW]
+     * failures in a row, or the end of the queue, leave the player STOPPED. Only the queue's current video moves the queue:
+     * a direct doPlay of another video does not. The note carries the id and a reason class, never the message (it may hold a URL).
+     */
+    private fun skipUnplayable(video: Video, seq: Int, error: Exception) {
+        if (queue.current?.id != video.id) return
+        val n = unplayableStreak.incrementAndGet()
+        if (n >= MAX_UNPLAYABLE_IN_A_ROW) {
+            unplayableStreak.set(0)
+            note("error", "$n tracks in a row could not be played - stopping")
+            return
+        }
+        val reason = if (isPermanentlyUnavailable(error.message)) "unavailable" else error::class.java.simpleName
+        note("warn", "Skipping ${video.id}: it could not be resolved or prepared", "videoId" to video.id, "reason" to reason)
+        scope.launch {
+            // Player.play reports STOPPED for the failed track after doPlay returns; the move on waits for that report.
+            val deadline = deps.clock() + SKIP_STOPPED_WAIT_MS
+            while (status == PlayerStatus.LOADING && !superseded(seq) && deps.clock() < deadline) delay(SKIP_STEP_MS)
+            if (superseded(seq) || queue.current?.id != video.id || status != PlayerStatus.STOPPED) return@launch
+            // An autoplay video has no playlist index and Player.play only looks around it once it plays, so the video after a
+            // failed one is not known yet: ask for it, or the chain would end at the first failure.
+            if ((video.context?.index ?: -1) < 0 && queue.autoplayMode == AutoplayMode.ENABLED && queue.autoplay == null) {
+                try {
+                    queue.refreshAfterHop()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    note("debug", "Looking up the video after ${video.id} failed: ${e.message ?: e::class.java.simpleName}")
+                }
+                if (superseded(seq) || queue.current?.id != video.id || status != PlayerStatus.STOPPED) return@launch
+            }
+            advanceAfterTrackEnd()
+        }
     }
 
     /** True when a newer play, a stop or destroy() has overtaken the load that took [seq]. */
@@ -579,7 +659,21 @@ class Renderer(
         format: String? = null,
         startPlaying: Boolean = true,
         forceOffset: Boolean = false,
-    ): Boolean {
+    ): Boolean = loadResult(video, position, format, startPlaying, forceOffset) is LoadResult.Started
+
+    /**
+     * [load] with the reason it did not start (plan 04-07, D-11): [LoadResult.PrepareFailed] when taking or preparing the item
+     * failed (the lookup, the format chain, the registration), which the sender's own plays retry and skip past;
+     * [LoadResult.SpeakerFailed] when a call to the speaker failed; [LoadResult.Superseded] when a newer play, a stop or
+     * removal overtook the load.
+     */
+    private suspend fun loadResult(
+        video: Video,
+        position: Double,
+        format: String? = null,
+        startPlaying: Boolean = true,
+        forceOffset: Boolean = false,
+    ): LoadResult {
         val seq = loadSeq.incrementAndGet()
         // Taken after the bump: a prefetch that finishes later sees the new loadSeq and releases its item itself. Node re-sends
         // the speaker's next slot after a load; the gapless hand-off (plan 04-05) does the same through the poll.
@@ -590,6 +684,7 @@ class Renderer(
         var beforeUri = true
         var prepared: PreparedItem? = null
         var adopted = false
+        var preparing = true
         try {
             if (taken != null && format == null && !forceOffset && position < 2 && taken.video.id == video.id) {
                 prepared = taken.item
@@ -599,11 +694,12 @@ class Renderer(
                 prepared = prepareItem(video, position, format, forceOffset)
             }
             val item = prepared
-            if (superseded(seq)) return false
+            preparing = false
+            if (superseded(seq)) return LoadResult.Superseded
 
             expectStop = true
             safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
-            if (superseded(seq)) return false
+            if (superseded(seq)) return LoadResult.Superseded
             // From here the speaker may hold our stream, so a clear must act on it (the flag) and must wait for this call (the entry).
             val sending = CompletableDeferred<Unit>()
             uriInFlight.add(sending)
@@ -613,7 +709,7 @@ class Renderer(
             beforeUri = false
             loadsBeforeUri.decrementAndGet()
             try {
-                if (superseded(seq)) return false
+                if (superseded(seq)) return LoadResult.Superseded
                 call(
                     AV_TRANSPORT,
                     "SetAVTransportURI",
@@ -625,15 +721,15 @@ class Renderer(
                 uriInFlight.remove(sending)
                 sending.complete(Unit)
             }
-            if (superseded(seq)) return false
+            if (superseded(seq)) return LoadResult.Superseded
             if (startPlaying) {
                 call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
                 item.current.playSent = true
-                if (superseded(seq)) return false
+                if (superseded(seq)) return LoadResult.Superseded
 
                 if (position > 1 && item.current.startAt == 0) {
                     waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
-                    if (superseded(seq)) return false
+                    if (superseded(seq)) return LoadResult.Superseded
                     if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
                         // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
                         pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
@@ -642,7 +738,7 @@ class Renderer(
                         item.current.owedSeek = position
                         note("warn", "Seek to ${Math.floor(position).toInt()}s after Play was refused - sending it again once the speaker plays")
                     }
-                    if (superseded(seq)) return false
+                    if (superseded(seq)) return LoadResult.Superseded
                 }
             }
 
@@ -660,14 +756,18 @@ class Renderer(
                 "hasArt" to (sent?.albumArtUri?.isNotEmpty() == true),
                 "didlChars" to item.metadata.length,
             )
-            return true
+            return LoadResult.Started
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             lastError = e.message ?: e::class.java.simpleName
             note("error", "Play ${video.id} failed: $lastError")
             expectStop = false
-            return false
+            return when {
+                !preparing -> LoadResult.SpeakerFailed(e)
+                superseded(seq) -> LoadResult.Superseded
+                else -> LoadResult.PrepareFailed(e)
+            }
         } finally {
             if (beforeUri) loadsBeforeUri.decrementAndGet()
             // A prepared item this load did not adopt (superseded, or failed after preparing) must not stay pinned.

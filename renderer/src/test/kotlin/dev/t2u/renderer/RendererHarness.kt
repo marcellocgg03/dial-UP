@@ -78,6 +78,9 @@ internal class RendererHarness(
     val prepared = CopyOnWriteArrayList<VideoEntry>()
     val resolves = CopyOnWriteArrayList<String>()
 
+    /** The video ids the renderer asked the resolver to forget (a fresh lookup before a retry, plan 04-07). */
+    val invalidated = CopyOnWriteArrayList<String>()
+
     /** The stream paths the renderer told the media seam it no longer needs (plan 03-20). */
     val released = CopyOnWriteArrayList<String>()
 
@@ -108,7 +111,9 @@ internal class RendererHarness(
             )
         }
 
-        override fun invalidate(videoId: String) {}
+        override fun invalidate(videoId: String) {
+            invalidated.add(videoId)
+        }
     }
 
     private val media = object : MediaRegistrar {

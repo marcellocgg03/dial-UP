@@ -83,6 +83,9 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
  *   next track; tuning for tests, not readable from config.json (plan 03-09).
+ * @property playRetryDelaysMs the waits before the retries of a track whose lookup or preparation failed for an unclear
+ *   reason (D-11): the track is tried again after each wait, with a fresh lookup, and skipped when the last retry fails;
+ *   tuning for tests, not readable from config.json, like [queueSettleTimeoutMs].
  * @property cacheMb size cap in MiB of the converted and downloaded track cache (built mp4/flac files and .source
  *   files; the pipe range cache and read-ahead are separate). Read by the cache each time it prunes, so a changed
  *   value applies at the next prune (D-02; Node CACHE_MB, default 512 there). 0 is legal: only the file just built stays.
@@ -116,6 +119,7 @@ data class Config(
     val cacheMb: Int = 256,
     val prefetch: Boolean = true,
     val gapless: Boolean = true,
+    val playRetryDelaysMs: List<Long> = listOf(2000L, 5000L),
 ) {
     /** Throws [IllegalArgumentException] naming the offending setting. */
     fun validate() {
@@ -131,6 +135,7 @@ data class Config(
         require(pollIntervalMs > 0) { "pollIntervalMs must be positive" }
         require(startTimeoutMs > 0) { "startTimeoutMs must be positive" }
         require(queueSettleTimeoutMs >= 0) { "queueSettleTimeoutMs must not be negative" }
+        require(playRetryDelaysMs.all { it >= 0 }) { "playRetryDelaysMs must not contain a negative delay" }
         require(cacheMb in 0..32768) { "cacheMb must be a whole number from 0 to 32768" }
     }
 }
