@@ -164,6 +164,8 @@ class MediaServerDownloadRungTest {
     @DisplayName("adts/mp3: falls back to the yt-dlp download when YouTube keeps refusing ffmpeg")
     fun adtsMp3FallsBackToTheYtDlpDownloadWhenYouTubeKeepsRefusingFfmpeg() {
         for (format in listOf("adts", "mp3")) {
+            // Start no longer wipes the cache (D-12): the earlier iteration's source would be reused, so empty it.
+            File(dir, "build").listFiles()?.forEach { it.delete() }
             val resolver = RefusedResolver(base)
             val downloader = FakeSourceDownloader(source)
             val ms = serve(resolver, builder(resolver, downloader))

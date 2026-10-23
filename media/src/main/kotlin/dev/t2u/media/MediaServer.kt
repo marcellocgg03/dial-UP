@@ -208,7 +208,7 @@ class MediaServer(
     fun start() {
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
-        files?.wipe()
+        files?.start() // keeps the finished files of an earlier run, drops half-written ones (D-12)
         // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
         val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
             reuseAddress = true
@@ -232,6 +232,12 @@ class MediaServer(
     }
 
     fun isRunning(): Boolean = server != null
+
+    /** Node `clearCache`: deletes every cached built and source file and returns how many went. */
+    fun clearCache(): Int = files?.clear() ?: 0
+
+    /** Node `cacheInfo`: the number and size of cached files and the cap; null without a file builder. */
+    fun cacheInfo(): CacheInfo? = files?.info()
 
     fun resolvedPort(): Int = boundPort
 

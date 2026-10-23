@@ -116,16 +116,23 @@ class FileBuilder(
         return job.await()
     }
 
-    /** Cancels running builds and downloads (their ffmpeg processes are destroyed) and deletes every file. */
+    /** Scans the directory for the cache of an earlier run (D-12): finished files stay, half-written ones go. */
+    fun start(): CacheInfo = cache.scan()
+
+    /**
+     * Cancels running builds and downloads (their ffmpeg processes are destroyed) and deletes their temp files.
+     * Finished cache files stay: a service stop does not empty the cache (D-12).
+     */
     fun close() {
         scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
-        wipe()
+        cache.deleteTempFiles()
     }
 
-    /** Deletes every file in the build directory (an earlier run's leftovers, or this run's at the end). */
-    fun wipe() {
-        dir.listFiles()?.forEach { runCatching { it.delete() } }
-    }
+    /** Deletes every cache file (Node `clearCache`) and returns how many went. */
+    fun clear(): Int = cache.clear()
+
+    /** What the cache holds now. */
+    fun info(): CacheInfo = cache.info()
 
     // ------------------------------------------------------------------------------------ names
 
@@ -238,6 +245,8 @@ class FileBuilder(
                 downloader.download(videoId, info, part)
                 check(isFinished(part)) { "the download left no file" }
                 withContext(Dispatchers.IO) { Files.move(part.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING) }
+                // RESEARCH Pattern 5: sources downloaded for the pipe rung are bounded by the same cap.
+                cache.prune(keep = setOf(dest.name))
                 emit("downloaded", videoId, "source", 0)
                 return dest
             } catch (e: CancellationException) {

@@ -87,6 +87,57 @@ class FileCache(
         evicted
     }
 
+    /**
+     * The start scan (D-12, Node `start`): the whole directory belongs to the builder, so every regular file that is
+     * not a finished non-empty cache file goes (`.part`, `.source.download`, `.info.json`, yt-dlp leftovers such as
+     * `.ytdl` and `.part-Frag`, empty files, anything foreign); the rest is kept, then pruned to the current cap.
+     * Creates the directory when missing. Only names listed from [dir] are ever deleted (T-04-01).
+     */
+    fun scan(): CacheInfo {
+        dir.mkdirs()
+        var removed = 0
+        var kept = 0
+        var keptBytes = 0L
+        synchronized(lock) {
+            for (name in dir.list().orEmpty()) {
+                val f = File(dir, name)
+                if (!f.isFile) continue
+                if (isCacheFileName(name) && f.length() > 0) {
+                    kept++
+                    keptBytes += f.length()
+                } else if (f.delete()) {
+                    removed++
+                }
+            }
+        }
+        emit(mapOf("event" to "cache-scan", "kept" to kept, "keptBytes" to keptBytes, "removed" to removed))
+        prune()
+        return info()
+    }
+
+    /** Deletes every cache file (Node `clearCache`) and returns how many went. */
+    fun clear(): Int = synchronized(lock) {
+        var removed = 0
+        for (name in dir.list().orEmpty()) {
+            if (!isCacheFileName(name)) continue
+            val f = File(dir, name)
+            if (f.isFile && f.delete()) removed++
+        }
+        emit(mapOf("event" to "cache-clear", "removed" to removed, "keptInUse" to 0))
+        removed
+    }
+
+    /** Deletes every regular file that is not a cache file: the temp files of builds a stop cancelled. */
+    fun deleteTempFiles() {
+        synchronized(lock) {
+            for (name in dir.list().orEmpty()) {
+                if (isCacheFileName(name)) continue
+                val f = File(dir, name)
+                if (f.isFile) runCatching { f.delete() }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------ listing
 
     private class Entry(val name: String, val size: Long, val modified: Long)
