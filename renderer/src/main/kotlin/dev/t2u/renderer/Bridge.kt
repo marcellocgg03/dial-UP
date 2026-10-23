@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -163,8 +164,9 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
         try {
             val wifi = net.wifiIp.hostAddress.orEmpty()
-            // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder wipes
-            // its directory at start and stop, so it gets a sub-directory of the buffer directory, never the buffer
+            // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder keeps its
+            // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
+            // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
             // directory itself (RESEARCH Pitfall 7). The media server owns the builder's lifetime.
             val launcher = deps.launcher
             val bufferDir = deps.bufferDir
@@ -177,6 +179,8 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
                     downloader,
                     flacBits = base.flacBits,
                     ffmpegLogLevel = base.ffmpegLogLevel,
+                    // read by the cache at every prune, so the deferred cache slider needs no restart
+                    cacheLimitBytes = { base.cacheMb.toLong() * 1_048_576L },
                     onEvent = { fields -> emit("filebuild", *fields.map { it.key to it.value }.toTypedArray()) },
                 )
             } else {
@@ -433,6 +437,16 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
                         }
                     },
                 ),
+            )
+            put(
+                "cache",
+                mediaServer?.cacheInfo()?.let { c ->
+                    buildJsonObject {
+                        put("files", c.files)
+                        put("bytes", c.bytes)
+                        put("limitBytes", c.limitBytes)
+                    }
+                } ?: JsonNull,
             )
             put("casting", castCount.value.casting)
             put("total", castCount.value.total)

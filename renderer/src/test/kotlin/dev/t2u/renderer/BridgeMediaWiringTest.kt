@@ -18,6 +18,11 @@ import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -127,6 +132,53 @@ class BridgeMediaWiringTest {
         assertTrue(after.any { it.endsWith(".flac") }, "the finished file survives Stop: $after")
         assertTrue(after.none { it.endsWith(".part") || it.endsWith(".download") }, "no half-written file survives Stop: $after")
         assertTrue(buffer.isDirectory, "the buffer directory itself stays")
+    }
+
+    /** Casts one mp4 track through a bridge built with [config] and the real ffmpeg; returns the bridge. */
+    private suspend fun castMp4(config: Config): Bridge {
+        assumeTrue(h.findFfmpeg() != null, "ffmpeg is not installed")
+        val source = File(tmp, "source/sine.m4a")
+        assumeTrue(h.makeSineSource(source), "could not make the sine source with ffmpeg")
+        val downloader = SourceDownloader { _, _, target ->
+            target.parentFile?.mkdirs()
+            source.copyTo(target, overwrite = true)
+        }
+        val bridge = h.newBridge(
+            config,
+            launcher = JvmPipeLauncher(h.findFfmpeg()!!),
+            bufferDir = File(tmp, "buffer").also { it.mkdirs() },
+            sourceDownloader = downloader,
+        )
+        castOne(bridge)
+        return bridge
+    }
+
+    private fun cacheOf(bridge: Bridge) = bridge.state()["cache"]!!.jsonObject
+
+    @Test
+    @DisplayName("config.json cacheMb is the cache cap the running bridge uses, and cast-state shows the cache")
+    fun cacheMbIsTheCapAndCastStateShowsTheCache() = h.run<Unit> {
+        val bridge = castMp4(h.testConfig(outputFormat = "mp4").copy(cacheMb = 64))
+        val cache = cacheOf(bridge)
+        assertEquals(64L * 1_048_576L, cache["limitBytes"]!!.jsonPrimitive.long)
+        assertTrue(cache["files"]!!.jsonPrimitive.int >= 2, "the built file and its source: $cache")
+        assertTrue(cache["bytes"]!!.jsonPrimitive.long > 0, "$cache")
+    }
+
+    @Test
+    @DisplayName("without a cacheMb in the config the cache cap is 256 MiB")
+    fun theDefaultCacheCapIs256MiB() = h.run<Unit> {
+        val bridge = castMp4(h.testConfig(outputFormat = "mp4"))
+        assertEquals(268_435_456L, cacheOf(bridge)["limitBytes"]!!.jsonPrimitive.long)
+    }
+
+    @Test
+    @DisplayName("a bridge without a file builder reports no cache")
+    fun aBridgeWithoutAFileBuilderReportsNoCache() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig(outputFormat = "auto"))
+        bridge.start()
+        assertEquals(JsonNull, bridge.state()["cache"])
+        assertTrue(bridge.state().containsKey("cache"))
     }
 
     @Test
