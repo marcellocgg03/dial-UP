@@ -7,6 +7,7 @@ package dev.t2u.renderer
 // gapless SetNextAVTransportURI and prefetch (Phase 4), SponsorBlock and play history (v2). The format chain
 // and per-speaker format learning (Phase 3) live in this class and in FormatChain.kt.
 
+import dev.t2u.lounge.AutoplayMode
 import dev.t2u.lounge.CastReceiver
 import dev.t2u.lounge.Player
 import dev.t2u.lounge.PlayerStatus
@@ -210,6 +211,9 @@ private class PreparedItem(
     val metadata: String,
 )
 
+/** The next track, prepared ahead of its turn (renderer.js `#queued`): the video it was prepared for and the ready item. */
+private class Queued(val video: Video, val item: PreparedItem)
+
 /**
  * A native Seek the speaker accepted but may not have finished: until the speaker has visibly moved on from it the
  * position handed to the sender is [target]. [shown] and [shownAt] are the last position handed out and when, which
@@ -337,6 +341,17 @@ class Renderer(
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
 
+    /**
+     * The upcoming track, prepared in the background while the current one plays (D-05, PLAY-08). Taken by [load] when it is
+     * the video asked for; every other fate (replaced, dropped, not adopted) releases its stream. Guarded by [queueLock].
+     */
+    @Volatile private var queued: Queued? = null
+
+    private val queueLock = Any()
+
+    /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one (RESEARCH Pitfall 1). */
+    private val prefetching = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** This speaker's persistent store, created in [init] and shared with the cast receiver. */
     @Volatile private var store: RendererDataStore? = null
 
@@ -421,6 +436,7 @@ class Renderer(
         destroyed = true
         loadSeq.incrementAndGet()
         releaseStream(current)
+        dropQueued()
         current = null
         pending = null
         stopPolling()
@@ -462,12 +478,24 @@ class Renderer(
         forceOffset: Boolean = false,
     ): Boolean {
         val seq = loadSeq.incrementAndGet()
+        // Taken after the bump: a prefetch that finishes later sees the new loadSeq and releases its item itself. Node re-sends
+        // the speaker's next slot after a load; the gapless hand-off (plan 04-05) does the same through the poll.
+        val taken = synchronized(queueLock) { queued.also { queued = null } }
         pending = null
         stopPolling()
         loadsBeforeUri.incrementAndGet()
         var beforeUri = true
+        var prepared: PreparedItem? = null
+        var adopted = false
         try {
-            val item = prepareItem(video, position, format, forceOffset)
+            if (taken != null && format == null && !forceOffset && position < 2 && taken.video.id == video.id) {
+                prepared = taken.item
+                note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
+            } else {
+                releaseStream(taken?.item?.current)
+                prepared = prepareItem(video, position, format, forceOffset)
+            }
+            val item = prepared
             if (superseded(seq)) return false
 
             expectStop = true
@@ -516,11 +544,13 @@ class Renderer(
             }
 
             adopt(item)
+            adopted = true
             // Evidence for the missing-artist question (G3): what we sent, as lengths and flags only.
             val sent = summarizeDidl(item.metadata)
             note(
                 "info",
                 "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})",
+                "videoId" to video.id,
                 "playDeferred" to !startPlaying,
                 "artistChars" to (sent?.creator?.length ?: 0),
                 "albumChars" to (sent?.album?.length ?: 0),
@@ -537,7 +567,85 @@ class Renderer(
             return false
         } finally {
             if (beforeUri) loadsBeforeUri.decrementAndGet()
+            // A prepared item this load did not adopt (superseded, or failed after preparing) must not stay pinned.
+            if (!adopted) releaseStream(prepared?.current)
         }
+    }
+
+    // ------------------------------------------------------------------------------------------ prefetch
+
+    /**
+     * The video that follows the current one (renderer.js `getUpcomingVideo`): the queue's next, else the autoplay video when
+     * autoplay is on. One read of the queue state.
+     */
+    fun getUpcomingVideo(): Video? {
+        val state = queue.getState()
+        return state.next ?: if (autoplayMode == AutoplayMode.ENABLED) state.autoplay else null
+    }
+
+    /** Takes the prepared next track out of the slot and frees its stream. */
+    private fun dropQueued() {
+        val q = synchronized(queueLock) { queued.also { queued = null } }
+        releaseStream(q?.item?.current)
+    }
+
+    /**
+     * Keeps the next track prepared while this one plays (renderer.js `#maintainNext`, D-05). Called from the poll, so it only
+     * launches: the preparing can take many seconds (a download, an ffmpeg build) and runs in its own coroutine, one at a time,
+     * so the poll keeps detecting the track end, the start failure and drift meanwhile (RESEARCH Pitfall 1, D-16).
+     * While a playlist refresh is in flight the queue's next is empty, so nothing is done then (it would read as end of queue).
+     */
+    private fun maintainNext() {
+        if (!config.prefetch || destroyed || current == null || queue.isUpdating) return
+        if (!prefetching.compareAndSet(false, true)) return
+        val seq = loadSeq.get()
+        val currentId = current?.video?.id
+        if (currentId == null) {
+            prefetching.set(false)
+            return
+        }
+        scope.launch {
+            try {
+                prefetchOnce(seq, currentId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                note("debug", "Prefetch failed: ${e.message ?: e::class.java.simpleName}")
+            } finally {
+                prefetching.set(false)
+            }
+        }
+    }
+
+    private suspend fun prefetchOnce(seq: Int, currentId: String) {
+        val upcoming = getUpcomingVideo()
+        if (queue.isUpdating) return // a refresh began since the poll looked: the empty next is not the end of the queue
+        if (upcoming == null || upcoming.id == currentId) {
+            dropQueued()
+            return
+        }
+        if (queued?.video?.id == upcoming.id) return
+        val t0 = deps.clock()
+        val item = prepareItem(upcoming, 0.0, null)
+        synchronized(queueLock) {
+            // The world may have moved on while this prepared: a newer load, a removal, another track, another next video.
+            val stillWanted = !destroyed && loadSeq.get() == seq && current?.video?.id == currentId &&
+                getUpcomingVideo()?.id == upcoming.id && !queue.isUpdating
+            if (!stillWanted) {
+                releaseStream(item.current)
+                return
+            }
+            val old = queued
+            queued = Queued(upcoming, item)
+            releaseStream(old?.item?.current)
+        }
+        note(
+            "info",
+            "Prepared next track \"${item.title}\" (${item.format})",
+            "videoId" to upcoming.id,
+            "format" to item.format,
+            "ms" to (deps.clock() - t0),
+        )
     }
 
     /**
@@ -927,6 +1035,7 @@ class Renderer(
 
     private fun forgetTrack() {
         releaseStream(current)
+        dropQueued()
         current = null
         nowPlaying = null
         position = null
@@ -1310,6 +1419,8 @@ class Renderer(
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
+                // Last, and it only launches: the poll must not wait for a prepare (D-05, D-16).
+                if (c != null) maintainNext()
             }
             state == "PAUSED_PLAYBACK" -> {
                 if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)

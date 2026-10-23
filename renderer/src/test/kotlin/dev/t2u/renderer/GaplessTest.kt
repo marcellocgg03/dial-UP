@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -185,7 +186,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08: enabled by plan 04-04")
     @DisplayName("no gapless support: falls back cleanly and uses the prepared track at end of song")
     fun noGaplessSupportFallsBackAndUsesThePreparedTrack() {
         withFake(FakeRenderer(noGapless = true)) { fake ->
@@ -195,6 +195,8 @@ internal class GaplessTest {
                 assertTrue(r.doPlay(Video(A), 0.0))
                 waitUntil { h.resolves.size >= 2 }
                 assertEquals(listOf(A, B), h.resolves.toList(), "B resolved ahead of time")
+                // The resolve is recorded first; the item counts as prepared once it is registered and queued.
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
 
                 // The song ends, the speaker stops, YouTube asks for B.
                 assertTrue(r.doPlay(Video(B), 0.0))
@@ -232,7 +234,7 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08: enabled by plan 04-04")
+    @Disabled("PLAY-08: enabled by plan 04-04 task 2")
     @DisplayName("a next track that cannot be prepared is not retried on every poll")
     fun aNextTrackThatCannotBePreparedIsNotRetriedOnEveryPoll() {
         withFake { fake ->
@@ -249,6 +251,62 @@ internal class GaplessTest {
                 // because B cannot be resolved, but it is tried again.
                 r.doPlay(Video(B), 0.0)
                 assertEquals(listOf(A, B, B), h.resolves.toList())
+            }
+        }
+    }
+
+    // ---- Kotlin-only prefetch tests (plan 04-04) ----
+
+    /** The path the harness registers for its [n]th registered stream (adts config). */
+    private fun streamPath(n: Int) = "/stream/" + n.toString().padStart(32, '0') + ".aac"
+
+    private fun FakeRenderer.nearTheEnd() {
+        state.relTime = "0:03:28"
+    }
+
+    @Test
+    @DisplayName("the track-end load plays the prepared next track without a second lookup")
+    fun theTrackEndLoadPlaysThePreparedNextTrackWithoutASecondLookup() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                assertEquals(2, h.registered.size, "A and B registered")
+                assertEquals(B, h.registered[1].videoId)
+                val note = h.notes("Prepared next track").single()
+                assertEquals(B, note["videoId"])
+                assertEquals("adts", note["format"])
+
+                // A is playing (seen by a poll) and then the speaker reports A near its end and STOPPED.
+                delay(200)
+                fake.nearTheEnd()
+                delay(200)
+                fake.state.transport = "STOPPED"
+                waitUntil { fake.count("SetAVTransportURI") == 2 }
+                assertEquals(2, fake.count("SetAVTransportURI"))
+                val second = fake.calls.filter { it.action == "SetAVTransportURI" }[1]
+                assertTrue(second.body.contains(streamPath(2)), "the second URI is B's registered path")
+                assertEquals(listOf(A, B), h.resolves.toList(), "B was resolved once")
+                assertEquals(1, h.prepared.count { it.videoId == B }, "B was prepared once")
+                assertTrue(h.notes("Using prepared track").isNotEmpty(), "the load says it used the prepared track")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("prefetch off prepares nothing ahead")
+    fun prefetchOffPreparesNothingAhead() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler, prefetch = false).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                delay(500) // ten polls
+                assertEquals(listOf(A), h.resolves.toList())
+                assertEquals(1, h.registered.size)
+                assertTrue(h.notes("Prepared next track").isEmpty())
             }
         }
     }
