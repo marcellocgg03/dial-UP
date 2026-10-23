@@ -106,6 +106,9 @@ class ConfigLoaderTest {
         assertEquals(24, s["flacBits"]!!.jsonPrimitive.int)
         assertTrue(s["ytdlpVerbose"]!!.jsonPrimitive.boolean)
         assertEquals("info", s["ffmpegLogLevel"]!!.jsonPrimitive.content)
+        assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
+        assertTrue(s["gapless"]!!.jsonPrimitive.boolean)
+        assertEquals(256, s["cacheMb"]!!.jsonPrimitive.int)
         assertEquals(2, s["includeCount"]!!.jsonPrimitive.int)
         assertEquals(1, s["excludeCount"]!!.jsonPrimitive.int)
         assertTrue(s["found"]!!.jsonPrimitive.boolean)
@@ -122,10 +125,30 @@ class ConfigLoaderTest {
     fun summaryOfTheDefaultsWhenThereIsNoFile() {
         val s = configSummary(loadAppConfig(dir))
         assertEquals("auto", s["format"]!!.jsonPrimitive.content)
+        assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
+        assertTrue(s["gapless"]!!.jsonPrimitive.boolean)
+        assertEquals(256, s["cacheMb"]!!.jsonPrimitive.int)
         assertEquals(0, s["includeCount"]!!.jsonPrimitive.int)
         assertEquals(0, s["excludeCount"]!!.jsonPrimitive.int)
         assertFalse(s["found"]!!.jsonPrimitive.boolean)
         assertTrue(s["warnings"]!!.jsonArray.isEmpty())
+    }
+
+    @Test
+    fun prefetchGaplessAndCacheMbTravelFromTheFileIntoTheConfigAndTheSummary() {
+        write("""{"prefetch":false,"gapless":false,"cacheMb":64}""")
+        val r = loadAppConfig(dir)
+        assertTrue(r.warnings.isEmpty(), r.warnings.toString())
+        assertFalse(r.config.prefetch)
+        assertFalse(r.config.gapless)
+        assertEquals(64, r.config.cacheMb)
+        val s = configSummary(r)
+        assertFalse(s["prefetch"]!!.jsonPrimitive.boolean)
+        assertFalse(s["gapless"]!!.jsonPrimitive.boolean)
+        assertEquals(64, s["cacheMb"]!!.jsonPrimitive.int)
+        val f = configEvidenceFields(r)
+        assertEquals(false, f["prefetch"])
+        assertEquals(64L, f["cacheMb"])
     }
 
     @Test

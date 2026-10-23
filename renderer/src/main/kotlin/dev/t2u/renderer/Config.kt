@@ -83,6 +83,12 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
  *   next track; tuning for tests, not readable from config.json (plan 03-09).
+ * @property cacheMb size cap in MiB of the converted and downloaded track cache (built mp4/flac files and .source
+ *   files; the pipe range cache and read-ahead are separate). Read by the cache each time it prunes, so a changed
+ *   value applies at the next prune (D-02; Node CACHE_MB, default 512 there). 0 is legal: only the file just built stays.
+ * @property prefetch prepares the next track while the current one plays (Node PREFETCH).
+ * @property gapless hands the prepared next track to the speaker with SetNextAVTransportURI; ignored when [prefetch]
+ *   is false, because there is no prepared track to hand over (Node GAPLESS, D-07).
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
  *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
  */
@@ -107,6 +113,9 @@ data class Config(
     val ytdlpVerbose: Boolean = false,
     val ffmpegLogLevel: String = "error",
     val queueSettleTimeoutMs: Long = 10_000,
+    val cacheMb: Int = 256,
+    val prefetch: Boolean = true,
+    val gapless: Boolean = true,
 ) {
     /** Throws [IllegalArgumentException] naming the offending setting. */
     fun validate() {
@@ -122,6 +131,7 @@ data class Config(
         require(pollIntervalMs > 0) { "pollIntervalMs must be positive" }
         require(startTimeoutMs > 0) { "startTimeoutMs must be positive" }
         require(queueSettleTimeoutMs >= 0) { "queueSettleTimeoutMs must not be negative" }
+        require(cacheMb in 0..32768) { "cacheMb must be a whole number from 0 to 32768" }
     }
 }
 
