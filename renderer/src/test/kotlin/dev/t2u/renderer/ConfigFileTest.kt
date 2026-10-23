@@ -182,6 +182,55 @@ class ConfigFileTest {
     }
 
     @Test
+    fun prefetchAndGaplessAreStrictBooleans() {
+        val defaults = parse("{}").config
+        assertTrue(defaults.prefetch)
+        assertTrue(defaults.gapless)
+        val off = parse("""{"prefetch":false,"gapless":false}""")
+        assertFalse(off.config.prefetch)
+        assertFalse(off.config.gapless)
+        assertEquals(emptyList(), off.warnings)
+        for (key in listOf("prefetch", "gapless")) {
+            for (bad in listOf("\"false\"", "1", "0", "null", "\"SECRETVALUE\"")) {
+                val r = parse("""{"$key":$bad}""")
+                assertTrue(r.config.prefetch, "$key $bad")
+                assertTrue(r.config.gapless, "$key $bad")
+                assertEquals(1, r.warnings.size, "$key $bad")
+                assertContains(r.warnings[0], key)
+                assertFalse("SECRETVALUE" in r.warnings[0], r.warnings[0])
+            }
+        }
+    }
+
+    @Test
+    fun cacheMbIsAWholeNumberFromZeroTo32768() {
+        assertEquals(256, parse("{}").config.cacheMb)
+        assertEquals(64, parse("""{"cacheMb":64}""").config.cacheMb)
+        assertEquals(0, parse("""{"cacheMb":0}""").config.cacheMb)
+        assertEquals(32768, parse("""{"cacheMb":32768}""").config.cacheMb)
+        assertEquals(emptyList(), parse("""{"cacheMb":0}""").warnings)
+        for (bad in listOf("-1", "40000", "32769", "12.5", "\"64\"", "null", "true", "\"SECRETVALUE\"")) {
+            val r = parse("""{"cacheMb":$bad}""")
+            assertEquals(256, r.config.cacheMb, bad)
+            assertEquals(1, r.warnings.size, bad)
+            assertContains(r.warnings[0], "cacheMb")
+            assertFalse("SECRETVALUE" in r.warnings[0], r.warnings[0])
+            assertFalse("40000" in r.warnings[0], r.warnings[0])
+        }
+    }
+
+    @Test
+    fun configValidateRefusesACacheMbOutsideItsRange() {
+        base.copy(cacheMb = 0).validate()
+        base.copy(cacheMb = 32768).validate()
+        for (bad in listOf(-1, 32769)) {
+            val e = kotlin.runCatching { base.copy(cacheMb = bad).validate() }.exceptionOrNull()
+            assertTrue(e is IllegalArgumentException, "cacheMb $bad")
+            assertContains(e.message ?: "", "cacheMb")
+        }
+    }
+
+    @Test
     fun ffmpegLogLevel() {
         assertEquals("debug", parse("""{"ffmpegLogLevel":"debug"}""").config.ffmpegLogLevel)
         for (level in FFMPEG_LOG_LEVELS) assertEquals(level, parse("""{"ffmpegLogLevel":"$level"}""").config.ffmpegLogLevel)

@@ -78,12 +78,12 @@ Every test title in `reference/tube2upnp/test`, where it is ported and which Kot
 | `remux.test.js` | adts/mp3: falls back to the yt-dlp download when YouTube keeps refusing ffmpeg | Phase 3 | media MediaServerDownloadRungTest |
 | `remux.test.js` | adts/mp3: a stream that cannot be read at all is a 502, not an empty 200 | Phase 2 | media MediaServerLadderTest |
 | `remux.test.js` | a renderer that hangs up while the stream is being prepared leaves nothing running | Phase 2 | media MediaServerLadderTest |
-| `remux.test.js` | cache: a file larger than CACHE_MB is still served; older files are evicted first | Phase 4 | (planned, cache cap) |
-| `remux.test.js` | cache: a file that vanished after it was built is built again | Phase 4 | (planned, cache cap) |
+| `remux.test.js` | cache: a file larger than CACHE_MB is still served; older files are evicted first | Phase 4 | media MediaServerCacheTest |
+| `remux.test.js` | cache: a file that vanished after it was built is built again | Phase 4 | media MediaServerCacheTest |
 | `remux.test.js` | download retries with a fresh extraction after a 403 | Phase 3 | media MediaServerRemuxTest |
 | `remux.test.js` | download gives up after the configured retries | Phase 3 | media MediaServerRemuxTest |
-| `remux.test.js` | cache survives a restart; half-written files are dropped; clear works | Phase 4 | (planned, cache cap) |
-| `remux.test.js` | clearing the cache keeps a file that is being played | Phase 4 | (planned, cache cap) |
+| `remux.test.js` | cache survives a restart; half-written files are dropped; clear works | Phase 4 | media MediaServerCacheTest |
+| `remux.test.js` | clearing the cache keeps a file that is being played | Phase 4 | media MediaServerCacheTest |
 | `remux.test.js` | range parsing | Phase 2 | media MediaServerLadderTest |
 | `renderer.test.js` | init handles embedded renderer and names the receiver | Phase 2 | renderer RendererTest |
 | `renderer.test.js` | doPlay loads short URL with DIDL metadata and plays | Phase 2 | renderer RendererTest |
@@ -97,12 +97,12 @@ Every test title in `reference/tube2upnp/test`, where it is ported and which Kot
 | `renderer.test.js` | MP4: if the renderer rejects Seek, a new MP4 starting at the offset is sent | Phase 3 | renderer SeekFallbackTest |
 | `renderer.test.js` | seeking a non-seekable stream (mp3/adts) restarts it at the offset | Phase 3 | renderer SeekFallbackTest |
 | `renderer.test.js` | casting mid-video with a non-seekable format starts the stream at that position | Phase 3 | renderer SeekFallbackTest |
-| `renderer.test.js` | gapless: next track is prepared, queued with SetNextAVTransportURI, and adopted without reloading | Phase 4 | (planned, gapless) |
-| `renderer.test.js` | gapless: yt-cast-receiver stopping the player before play() does not cut off or reload the track | Phase 4 | (planned, gapless) |
-| `renderer.test.js` | gapless: if the queue turns out to be over, the track the renderer played on into is stopped | Phase 4 | (planned, gapless) |
-| `renderer.test.js` | no gapless support: falls back cleanly and uses the prepared track at end of song | Phase 4 | (planned, gapless) |
-| `renderer.test.js` | queue change replaces the prepared next track | Phase 4 | (planned, gapless) |
-| `renderer.test.js` | a next track that cannot be prepared is not retried on every poll | Phase 4 | (planned, gapless) |
+| `renderer.test.js` | gapless: next track is prepared, queued with SetNextAVTransportURI, and adopted without reloading | Phase 4 | renderer GaplessTest |
+| `renderer.test.js` | gapless: yt-cast-receiver stopping the player before play() does not cut off or reload the track | Phase 4 | renderer GaplessTest |
+| `renderer.test.js` | gapless: if the queue turns out to be over, the track the renderer played on into is stopped | Phase 4 | renderer GaplessTest |
+| `renderer.test.js` | no gapless support: falls back cleanly and uses the prepared track at end of song | Phase 4 | renderer GaplessTest |
+| `renderer.test.js` | queue change replaces the prepared next track | Phase 4 | renderer GaplessTest |
+| `renderer.test.js` | a next track that cannot be prepared is not retried on every poll | Phase 4 | renderer GaplessTest |
 | `renderer.test.js` | a renderer removed while a track is loading stays stopped | Phase 2 | renderer RendererTest |
 | `renderer.test.js` | per-renderer format override wins over the global setting and is persisted | v2 | (status page setting) |
 | `renderer.test.js` | SponsorBlock: seeks past a segment the renderer is inside | v2 | (EXT-01 / UI-02) |
