@@ -53,14 +53,21 @@ internal class HarnessReceiver : CastReceiver {
  * makes every prepare slow; [directDelegate] serves `direct` entries from a real media server; [duration] is the
  * length the stub resolver reports (0 means unknown); [clock] is the renderer's epoch-millisecond clock (a test can
  * move it by hand, see SeekPositionTest).
+ * [resolveFailure] may return a throwable for a video id about to be resolved (the id is recorded in [resolves] first,
+ * as Node's test resolver does); [prepareDelayFor] adds a delay to the prepare of a chosen entry on top of
+ * [prepareDelayMs] (plan 04-02, the gapless tests).
+ * The default config has `prefetch = false`: Node's test setup() omits PREFETCH, and the Config default (true) would
+ * otherwise make every renderer that has a next video prepare it behind the test's back (RESEARCH Pitfall 6).
  * [close] destroys the renderer.
  */
 internal class RendererHarness(
     val fake: FakeRenderer,
-    config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
+    config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", prefetch = false) },
     val dataDir: File = Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() },
     private val prepareDelayMs: Long = 0,
     @Volatile var prepareFailure: (VideoEntry) -> Throwable? = { null },
+    @Volatile var resolveFailure: (String) -> Throwable? = { null },
+    @Volatile var prepareDelayFor: (VideoEntry) -> Long = { 0L },
     private val directDelegate: MediaRegistrar? = null,
     playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
     private val duration: Double = 210.0,
@@ -85,6 +92,7 @@ internal class RendererHarness(
     private val resolver = object : VideoResolver {
         override suspend fun resolve(videoId: String): ResolvedInfo {
             resolves.add(videoId)
+            resolveFailure(videoId)?.let { throw it }
             return ResolvedInfo(
                 url = "https://example/v",
                 ext = "m4a",
@@ -108,6 +116,7 @@ internal class RendererHarness(
             order.add("prepare:${entry.format}")
             prepared.add(entry)
             if (prepareDelayMs > 0) delay(prepareDelayMs)
+            prepareDelayFor(entry).takeIf { it > 0 }?.let { delay(it) }
             prepareFailure(entry)?.let { throw it }
             directDelegate?.takeIf { entry.format == "direct" }?.prepare(entry)
         }

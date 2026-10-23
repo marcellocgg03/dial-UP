@@ -173,6 +173,9 @@ internal class BridgeHarness(
         flacBits = flacBits,
         ffmpegLogLevel = ffmpegLogLevel,
         ytdlpVerbose = ytdlpVerbose,
+        // Node's test setup() omits PREFETCH; the Config default (true) would prepare the next track behind these
+        // tests. Plan 04-08 turns it on where it wants it with testConfig().copy(prefetch = true).
+        prefetch = false,
     )
 
     fun newBridge(

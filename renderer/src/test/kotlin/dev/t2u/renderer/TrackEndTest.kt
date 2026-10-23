@@ -45,7 +45,11 @@ internal class TrackEndTest {
     }
 
     private fun cfg(settleMs: Long = 5000): (File) -> Config = {
-        Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "", queueSettleTimeoutMs = settleMs)
+        // prefetch = false: Node's test setup() omits PREFETCH, and the Config default (true) would prepare B behind these tests.
+        Config(
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+            queueSettleTimeoutMs = settleMs, prefetch = false,
+        )
     }
 
     /** Hands out B after A. [refreshDelayMs] makes every later lookup slow (a refresh in flight). */
