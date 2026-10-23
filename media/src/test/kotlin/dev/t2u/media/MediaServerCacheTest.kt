@@ -137,4 +137,61 @@ class MediaServerCacheTest {
         assertEquals(1, downloader.calls.get() - before, "source downloaded again")
         Unit
     }
+
+    @Test
+    @DisplayName("cache survives a restart; half-written files are dropped; clear works")
+    fun cacheSurvivesARestartHalfWrittenFilesAreDroppedClearWorks() = runBlocking {
+        val downloader = FakeSourceDownloader(makeSource("src.m4a", 5))
+        val entry = VideoEntry("iiiiiiiiiii", "mp4")
+        val first = serve(downloader)
+        first.prepare(entry)
+        first.stop()
+        assertEquals(1, downloader.calls.get())
+        // Simulate a crash mid-download of another track.
+        File(buildDir, "jjjjjjjjjjj.source.download").writeText("half")
+
+        val second = serve(downloader)
+        second.prepare(entry)
+        assertEquals(1, downloader.calls.get(), "served from the cache kept on disk, not downloaded again")
+        assertTrue(!File(buildDir, "jjjjjjjjjjj.source.download").exists(), "partial file removed")
+        assertTrue(second.cacheInfo()!!.files >= 2)
+
+        assertTrue(second.clearCache() >= 2)
+        assertEquals(0, second.cacheInfo()!!.files)
+        second.prepare(entry)
+        assertEquals(2, downloader.calls.get(), "downloaded again after clearing")
+        Unit
+    }
+
+    @Test
+    fun startKeepsOnlyFinishedCacheFilesAndReportsTheScan() {
+        buildDir.mkdirs()
+        File(buildDir, "aaaaaaaaaaa-mp4-0.m4a").writeBytes(ByteArray(100))
+        File(buildDir, "aaaaaaaaaaa.source").writeBytes(ByteArray(50))
+        File(buildDir, "bbbbbbbbbbb-flac-0.flac").writeBytes(ByteArray(0))
+        File(buildDir, "bbbbbbbbbbb-flac-0.flac.part").writeBytes(ByteArray(10))
+        File(buildDir, "ccccccccccc.source.download").writeBytes(ByteArray(10))
+        File(buildDir, "ccccccccccc.source.download.info.json").writeBytes(ByteArray(10))
+        File(buildDir, "ccccccccccc.source.download.ytdl").writeBytes(ByteArray(10))
+        File(buildDir, "notes.txt").writeBytes(ByteArray(10))
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        serve(FakeSourceDownloader(makeSource("src.m4a", 1)), events = events)
+        assertEquals(listOf("aaaaaaaaaaa-mp4-0.m4a", "aaaaaaaaaaa.source"), cached())
+        val scan = events.filter { it["event"] == "cache-scan" }
+        assertEquals(1, scan.size, events.toString())
+        assertEquals(2, scan.single()["kept"])
+        assertEquals(150L, scan.single()["keptBytes"])
+    }
+
+    @Test
+    fun stopKeepsFinishedFilesAndDeletesTempFiles() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)))
+        ms.prepare(VideoEntry("ddddddddddd", "mp4"))
+        File(buildDir, "ddddddddddd-flac-0.flac.part").writeText("x")
+        File(buildDir, "eeeeeeeeeee.source.download").writeText("x")
+        File(buildDir, "eeeeeeeeeee.source.download.info.json").writeText("x")
+        ms.stop()
+        assertEquals(listOf("ddddddddddd-mp4-0.m4a", "ddddddddddd.source"), cached())
+        Unit
+    }
 }

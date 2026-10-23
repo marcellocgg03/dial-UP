@@ -121,9 +121,11 @@ class BridgeMediaWiringTest {
         assertTrue(built.isNotEmpty(), "the built file is in <bufferDir>/files, not in the buffer directory itself")
         assertTrue(buffer.listFiles().orEmpty().none { it.name.endsWith(".flac") })
 
-        // Stop wipes the builder's directory and leaves the buffer directory
+        // Stop keeps the finished cache file (D-12) and leaves no half-written one; the buffer directory stays
         bridge.stop()
-        assertTrue(File(buffer, "files").listFiles().orEmpty().isEmpty(), "no built file survives Stop")
+        val after = File(buffer, "files").listFiles().orEmpty().map { it.name }
+        assertTrue(after.any { it.endsWith(".flac") }, "the finished file survives Stop: $after")
+        assertTrue(after.none { it.endsWith(".part") || it.endsWith(".download") }, "no half-written file survives Stop: $after")
         assertTrue(buffer.isDirectory, "the buffer directory itself stays")
     }
 
