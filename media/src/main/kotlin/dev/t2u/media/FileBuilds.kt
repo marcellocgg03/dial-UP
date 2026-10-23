@@ -101,6 +101,13 @@ class FileBuilder(
         return file.takeIf { isFinished(it) }?.also { cache.touch(it) }
     }
 
+    /**
+     * The validated path of the final file for the key, whether or not it exists yet: a token registered before its build
+     * (or after Android deleted the file) names this path, and [ensure] builds it there. Same validation as every
+     * builder path (T-03-17).
+     */
+    fun pathFor(videoId: String, format: String, startAt: Int): File = finalFile(videoId, format, startAt)
+
     /** Returns the finished file, building it (download first, then ffmpeg) when it does not exist yet. */
     suspend fun ensure(videoId: String, format: String, startAt: Int): File {
         val final = finalFile(videoId, format, startAt)

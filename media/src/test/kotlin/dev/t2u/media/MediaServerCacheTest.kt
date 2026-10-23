@@ -28,6 +28,7 @@ class MediaServerCacheTest {
     private lateinit var buildDir: File
     private lateinit var launcher: PipeLauncher
     private val servers = CopyOnWriteArrayList<MediaServer>()
+    private val seen = CopyOnWriteArrayList<MediaRequest>()
 
     /** Copies a generated source to the requested target, as a real download would leave a file there. */
     private class FakeSourceDownloader(private val src: File) : SourceDownloader {
@@ -83,7 +84,7 @@ class MediaServerCacheTest {
             retryDelaysMs = listOf(10L, 10L),
             onEvent = { e -> events?.add(e) },
         )
-        return MediaServer("127.0.0.1", 0, launcher, { }, File(dir, "pipe"), StubResolver(), files = builder).also {
+        return MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "pipe"), StubResolver(), files = builder).also {
             it.start()
             servers.add(it)
         }
@@ -109,11 +110,14 @@ class MediaServerCacheTest {
         val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 60)), cacheLimitBytes = 0)
         val a = VideoEntry("mmmmmmmmmmm", "mp4")
         ms.prepare(a)
-        val ra = get(ms, ms.registerVideo(a))
+        val pathA = ms.registerVideo(a)
+        val ra = get(ms, pathA)
         assertEquals(200, ra.status)
         assertTrue(durationOf(ra.body) > 59, "complete file served")
         assertEquals(listOf("mmmmmmmmmmm-mp4-0.m4a", "mmmmmmmmmmm.source"), cached(), "just built: kept")
 
+        // The renderer lets go of a stream when the next track replaces it (D-04); until then its token pins the file.
+        ms.release(pathA)
         val b = VideoEntry("nnnnnnnnnnn", "flac")
         ms.prepare(b)
         val rb = get(ms, ms.registerVideo(b))
@@ -137,6 +141,69 @@ class MediaServerCacheTest {
         assertEquals(200, again.status)
         assertTrue(durationOf(again.body) > 59)
         assertEquals(1, downloader.calls.get() - before, "source downloaded again")
+        Unit
+    }
+
+    /** Copies the source like [FakeSourceDownloader] until [failing] is set, then throws "nope". */
+    private class SwitchableDownloader(private val src: File) : SourceDownloader {
+        val calls = AtomicInteger()
+
+        @Volatile var failing = false
+
+        override suspend fun download(videoId: String, info: ResolvedInfo, target: File) {
+            calls.incrementAndGet()
+            if (failing) throw IllegalStateException("nope")
+            src.copyTo(target, overwrite = true)
+        }
+    }
+
+    @Test
+    fun aRegisteredFileWhoseSourceVanishedToIsRebuiltByDownloadingAgain() = runBlocking {
+        val downloader = FakeSourceDownloader(makeSource("src.m4a", 60))
+        val ms = serve(downloader)
+        val entry = VideoEntry("rrrrrrrrrrr", "mp4")
+        ms.prepare(entry)
+        val path = ms.registerVideo(entry)
+        buildDir.listFiles()!!.forEach { it.delete() } // built file and source gone, e.g. Android reclaimed the cache
+        val res = get(ms, path)
+        assertEquals(200, res.status)
+        assertTrue(durationOf(res.body) > 59, "complete file")
+        assertEquals(2, downloader.calls.get(), "the source was downloaded once more")
+        assertTrue(seen.none { it.status >= 400 }, seen.toString())
+        Unit
+    }
+
+    @Test
+    fun aRebuildThatFailsAnswers502WithAFixedNoteAndKeepsTheToken() = runBlocking {
+        val downloader = SwitchableDownloader(makeSource("src.m4a", 5))
+        val ms = serve(downloader)
+        val entry = VideoEntry("sssssssssss", "mp4")
+        ms.prepare(entry)
+        val path = ms.registerVideo(entry)
+        val tokens = ms.tokenCount()
+        buildDir.listFiles()!!.forEach { it.delete() }
+        downloader.failing = true
+        assertEquals(502, get(ms, path).status)
+        val failed = seen.last { it.status == 502 }
+        assertEquals("rebuild failed", failed.note)
+        assertTrue(!failed.note!!.contains("http"), "no URL in the note")
+        assertEquals(tokens, ms.tokenCount(), "the token table is unchanged")
+        // a later request builds it once the cause is gone
+        downloader.failing = false
+        assertEquals(200, get(ms, path).status)
+        Unit
+    }
+
+    @Test
+    fun aFileTokenWithoutARebuildPathStillAnswers404FileVanished() = runBlocking {
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 1)))
+        val file = File(buildDir, "plain.m4a").also { it.parentFile.mkdirs(); it.writeBytes(ByteArray(100)) }
+        val path = ms.register(StreamEntry(StreamSource.FileSource(file), "mp4", "audio/mp4", "plain"))
+        assertEquals(200, get(ms, path).status)
+        file.delete()
+        assertEquals(404, get(ms, path).status)
+        assertEquals(404, RawHttp.request(ms.resolvedPort(), "HEAD", path).status)
+        assertTrue(seen.any { it.status == 404 && it.note == "file vanished" }, seen.toString())
         Unit
     }
 
@@ -221,7 +288,8 @@ class MediaServerCacheTest {
         } finally {
             socket.close()
         }
-        // the response ends with the connection: the pin is released and the file can go
+        // the response ends with the connection and the renderer releases the stream: both pins are gone and the file can go
+        ms.release(path)
         var removed = 0
         val deadline = System.currentTimeMillis() + 10_000
         while (removed == 0 && System.currentTimeMillis() < deadline) {

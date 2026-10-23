@@ -197,9 +197,17 @@ class MediaServerRemuxTest {
     }
 
     @Test
-    fun registerVideoForAFileFormatWithoutPrepareFailsClearly() {
-        val ms = serve(FakeSourceDownloader(source))
-        assertFailsWith<IllegalStateException> { ms.registerVideo(VideoEntry("ccccccccccc", "mp4")) }
+    fun registerVideoForAFileFormatWithoutPrepareRegistersLazilyAndTheFirstGetBuildsIt() {
+        val downloader = FakeSourceDownloader(source)
+        val ms = serve(downloader)
+        val path = ms.registerVideo(VideoEntry("ccccccccccc", "mp4")) // D-14: no prepare, no throw
+        assertTrue(Regex("/stream/[0-9a-f]{32}\\.m4a").matches(path), path)
+        assertEquals(0, downloader.calls.get(), "registering builds nothing")
+        val res = get(ms, path)
+        assertEquals(200, res.status)
+        val built = File(buildDir, "ccccccccccc-mp4-0.m4a")
+        assertEquals(built.length(), res.body.size.toLong())
+        assertEquals(1, downloader.calls.get())
         assertFailsWith<IllegalArgumentException> { ms.registerVideo(VideoEntry("ccccccccccc", "ogg")) }
     }
 
@@ -374,7 +382,8 @@ class MediaServerRemuxTest {
         assertTrue(Regex("exited -?\\d+").containsMatchIn(e.message!!), e.message)
         assertFalse(Regex("https?://\\S*\\?").containsMatchIn(e.message!!), "no URL with a query string")
         assertEquals(emptyList(), buildDir.listFiles()!!.map { it.name }.filter { it.endsWith(".part") })
-        assertFailsWith<IllegalStateException> { ms.registerVideo(VideoEntry("lllllllllll", "mp4")) }
+        // D-14: registering never fails for a missing file; the token's first request would try the build again.
+        ms.registerVideo(VideoEntry("lllllllllll", "mp4"))
         Unit
     }
 
@@ -397,16 +406,30 @@ class MediaServerRemuxTest {
     }
 
     @Test
-    fun aRegisteredFileThatVanishedAnswers404ForGetAndHead() = runBlocking {
-        val ms = serve(FakeSourceDownloader(source))
+    fun aRegisteredFileThatVanishedIsRebuiltForGetAndHead() = runBlocking {
+        val downloader = FakeSourceDownloader(source)
+        val ms = serve(downloader)
         val entry = VideoEntry("ppppppppppp", "mp4")
         ms.prepare(entry)
         val path = ms.registerVideo(entry)
         val tokens = ms.tokenCount()
-        File(buildDir, "ppppppppppp-mp4-0.m4a").delete()
-        assertEquals(404, get(ms, path).status)
-        assertEquals(404, RawHttp.request(ms.resolvedPort(), "HEAD", path).status)
-        assertTrue(seen.any { it.status == 404 && it.note == "file vanished" }, seen.toString())
+        val built = File(buildDir, "ppppppppppp-mp4-0.m4a")
+
+        built.delete()
+        val head = RawHttp.request(ms.resolvedPort(), "HEAD", path)
+        assertEquals(200, head.status)
+        assertTrue(built.isFile, "HEAD rebuilt the file")
+        assertEquals(built.length(), head.header("Content-Length")!!.toLong())
+
+        built.delete()
+        val res = get(ms, path)
+        assertEquals(200, res.status)
+        assertEquals(built.length(), res.header("Content-Length")!!.toLong())
+        val copy = File(dir, "rebuilt.m4a").also { it.writeBytes(res.body) }
+        assertTrue(duration(copy) > 59, "the complete file")
+        assertEquals(1, downloader.calls.get(), "the source was still there: not downloaded again")
+        assertTrue(seen.none { it.status >= 400 }, "the sender sees no error: $seen")
+        assertTrue(seen.any { it.note == "rebuilt" }, seen.toString())
         assertEquals(tokens, ms.tokenCount(), "the token table is unchanged")
         Unit
     }

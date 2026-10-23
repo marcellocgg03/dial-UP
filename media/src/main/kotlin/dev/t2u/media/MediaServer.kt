@@ -42,8 +42,12 @@ import java.util.concurrent.TimeUnit
 
 /** Where the bytes of a registered stream come from. */
 sealed interface StreamSource {
-    /** A complete file: HEAD, GET and Range with a Content-Length. */
-    data class FileSource(val file: File) : StreamSource
+    /**
+     * A complete file: HEAD, GET and Range with a Content-Length. [rebuild] builds the file again when it has vanished
+     * since registration (evicted, or reclaimed by Android; D-03) and returns the finished file; null for a plain file,
+     * which then answers 404 when it is gone.
+     */
+    data class FileSource(val file: File, val rebuild: (suspend () -> File)? = null) : StreamSource
 
     /**
      * An ffmpeg run: [inputArgs] are the input side only (`-i ... -vn`); the server appends the output side
@@ -93,7 +97,9 @@ interface MediaRegistrar {
     /**
      * The renderer no longer needs the stream at [path] (a newer track replaced it, or the speaker was stopped or cleared):
      * whatever the server holds for it in memory can go (plan 03-20). The token itself stays registered, so a speaker that
-     * still asks for it is served. The default does nothing, so stubs that implement only [registerVideo] keep compiling.
+     * still asks for it is served. A file stream's file can be evicted by the cache from now on (D-04: the playing and the
+     * prefetched file are pinned from [registerVideo] until this call). The default does nothing, so stubs that implement
+     * only [registerVideo] keep compiling.
      */
     fun release(path: String) {}
 }
@@ -197,6 +203,9 @@ class MediaServer(
     private val tokens = LinkedHashMap<String, StreamEntry>()
     private val random = SecureRandom()
 
+    /** Token to the release of the cache pin a file token holds from registration (D-04). Each release is one-shot. */
+    private val tokenPins = ConcurrentHashMap<String, () -> Unit>()
+
     /** Windows read ahead for `direct` tokens (plan 03-20); bounded by [READ_AHEAD_TOTAL_BYTES]. */
     private val readAhead = ReadAheadStore(READ_AHEAD_TOTAL_BYTES)
     private val scans = ConcurrentHashMap<String, DirectScan>()
@@ -228,6 +237,7 @@ class MediaServer(
         server?.stop(200, 1000)
         server = null
         rangeCache?.clear()
+        releaseAllTokenPins()
         files?.close()
     }
 
@@ -266,14 +276,24 @@ class MediaServer(
         evicted.forEach {
             rangeCache?.drop(it) // a token that left the table takes its cached bytes with it
             dropReadAhead(it, forget = true)
+            releaseTokenPin(it) // and its file may be evicted from the cache again (D-04)
         }
         return "/stream/$token.$ext"
     }
 
-    /** Drops what is held in memory for the token of [path]; see [MediaRegistrar.release]. */
+    /** Drops what is held in memory for the token of [path] and lets the cache evict its file; see [MediaRegistrar.release]. */
     override fun release(path: String) {
         val token = TOKEN_PATH.matchEntire(path.substringBefore('?'))?.groupValues?.get(1) ?: return
         dropReadAhead(token, forget = false)
+        releaseTokenPin(token)
+    }
+
+    private fun releaseTokenPin(token: String) {
+        tokenPins.remove(token)?.invoke()
+    }
+
+    private fun releaseAllTokenPins() {
+        for (token in tokenPins.keys.toList()) releaseTokenPin(token)
     }
 
     /** The bytes held for read-ahead now, windows being fetched included (never more than [READ_AHEAD_TOTAL_BYTES]). */
@@ -307,13 +327,28 @@ class MediaServer(
         return register(StreamEntry(StreamSource.VideoPipe(entry), entry.format, mime, entry.videoId))
     }
 
-    /** A file format: the file must have been built by [prepare]; the token serves it with byte ranges. */
+    /**
+     * A file format: [prepare] normally built the file already, but a missing file does not fail the registration (D-14):
+     * the token is registered with a rebuild path and the first request builds it. The token pins the file's name in the
+     * cache until [release], token eviction or [stop] (D-04), so the playing and the prefetched file are never evicted.
+     */
     private fun registerFile(entry: VideoEntry): String {
         require(entry.startAt >= 0) { "startAt must not be negative" }
-        val file = files?.fileFor(entry.videoId, entry.format, entry.startAt)
-            ?: throw IllegalStateException("prepare() must complete first for ${entry.format} of ${entry.videoId}")
+        val builder = files ?: throw IllegalStateException("no file builder: format ${entry.format} cannot be served")
+        val file = builder.fileFor(entry.videoId, entry.format, entry.startAt)
+            ?: builder.pathFor(entry.videoId, entry.format, entry.startAt)
         val mime = FORMATS.getValue(entry.format).mime ?: throw IllegalArgumentException("format ${entry.format} has no fixed MIME")
-        return register(StreamEntry(StreamSource.FileSource(file), entry.format, mime, entry.videoId))
+        val unpin = builder.pin(file) // by name: a file that does not exist yet is pinned too
+        val rebuild: suspend () -> File = { builder.ensure(entry.videoId, entry.format, entry.startAt) }
+        val path = try {
+            register(StreamEntry(StreamSource.FileSource(file, rebuild), entry.format, mime, entry.videoId))
+        } catch (e: Throwable) {
+            unpin()
+            throw e
+        }
+        val token = TOKEN_PATH.matchEntire(path)?.groupValues?.get(1)
+        if (token != null) tokenPins[token] = unpin else unpin()
+        return path
     }
 
     private fun registerDirect(entry: VideoEntry): String {
@@ -358,7 +393,7 @@ class MediaServer(
             out.label = entry.label
             val head = method == HttpMethod.Head
             when (val src = entry.source) {
-                is StreamSource.FileSource -> serveFile(call, entry, src.file, head, out, "file")
+                is StreamSource.FileSource -> serveFile(call, entry, src.file, head, out, "file", src.rebuild)
                 is StreamSource.PipeSource -> servePipe(call, entry, src, head, out, token)
                 is StreamSource.VideoPipe -> {
                     if (!head) runCatching { src.entry.onRequest?.invoke() }
@@ -415,12 +450,14 @@ class MediaServer(
         head: Boolean,
         out: Outcome,
         pipeMode: String,
+        rebuild: (suspend () -> File)? = null,
     ) {
         // Pinned while the response is written, so eviction and clearCache skip it (D-04, Node `#serveFile` pin).
-        // Only files in the builder's directory are pinned; a HEAD answer releases at once.
+        // Only files in the builder's directory are pinned; a HEAD answer releases at once. A rebuilt file has the same
+        // name as the vanished one, so this pin covers it too.
         val unpin = files?.pin(file)
         try {
-            respondFile(call, entry, file, head, out, pipeMode)
+            respondFile(call, entry, file, head, out, pipeMode, rebuild)
         } finally {
             unpin?.invoke()
         }
@@ -429,19 +466,40 @@ class MediaServer(
     private suspend fun respondFile(
         call: ApplicationCall,
         entry: StreamEntry,
-        file: File,
+        original: File,
         head: Boolean,
         out: Outcome,
         pipeMode: String,
+        rebuild: (suspend () -> File)?,
     ) {
         out.pipeMode = pipeMode
+        var file = original
         if (!file.exists()) {
-            // Built, registered, then gone (the interim cleanup, or something outside): a plain 404, never an empty 200.
-            // Rebuilding a vanished file is Phase 4 (PLAY-10).
-            out.status = 404
-            out.note = "file vanished"
-            call.respond(HttpStatusCode.NotFound)
-            return
+            if (rebuild == null) {
+                // Registered, then gone, and nothing to build it with: a plain 404, never an empty 200.
+                out.status = 404
+                out.note = "file vanished"
+                call.respond(HttpStatusCode.NotFound)
+                return
+            }
+            // D-03: evicted or reclaimed by Android since registration. Build it again (downloading the source again if
+            // that is gone too) and serve it; the sender sees nothing. A failure answers 502 with a fixed note: no
+            // exception text, which could carry a URL (T-04-08). FileBuilder coalesces per key and the wait is bounded (T-04-07).
+            val rebuilt = try {
+                withTimeoutOrNull(prepareTimeoutMs) { rebuild() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (rebuilt == null || !rebuilt.exists()) {
+                out.status = 502
+                out.note = "rebuild failed"
+                call.respond(HttpStatusCode.BadGateway)
+                return
+            }
+            file = rebuilt
+            out.note = "rebuilt"
         }
         val size = file.length()
         val rangeHeader = call.request.headers[HttpHeaders.Range]
