@@ -251,7 +251,19 @@ private class PreparedItem(
 )
 
 /** The next track, prepared ahead of its turn (renderer.js `#queued`): the video it was prepared for and the ready item. */
-private class Queued(val video: Video, val item: PreparedItem)
+private class Queued(val video: Video, val item: PreparedItem) {
+    /** True once the speaker accepted this item as its next track (SetNextAVTransportURI). */
+    @Volatile var sentToRenderer: Boolean = false
+
+    @Volatile var sendAttempts: Int = 0
+}
+
+/**
+ * True when a SetNextAVTransportURI refusal means this speaker has no gapless support (renderer.js line 483): UPnP error 401
+ * (invalid action) or 602 (optional action not implemented), or no AVTransport service. Any other failure may be passing.
+ */
+internal fun isGaplessRefusal(e: UpnpError): Boolean =
+    e.errorCode == "401" || e.errorCode == "602" || e.code == "ENOACTION" || e.code == "ENOSERVICE"
 
 /**
  * A native Seek the speaker accepted but may not have finished: until the speaker has visibly moved on from it the
@@ -388,6 +400,21 @@ class Renderer(
 
     private val queueLock = Any()
 
+    /**
+     * Does this speaker take SetNextAVTransportURI? Null until a send has been answered; false after a refusal that
+     * [isGaplessRefusal] names, for the rest of this run (plan 04-06 keeps it across runs).
+     */
+    @Volatile private var gaplessSupported: Boolean? = null
+
+    /**
+     * The queued track the speaker played on into by itself, between the poll seeing the switch and [doPlay] adopting it
+     * (renderer.js `#advanced`). Set and cleared only on the paths that follow the switch.
+     */
+    @Volatile private var advanced: Queued? = null
+
+    /** True only while the hand-off's own [next] runs: the one Stop that may be skipped because the speaker already moved on. */
+    @Volatile private var handingOff = false
+
     private val prefetchBackoff = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
 
     /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one (RESEARCH Pitfall 1). */
@@ -478,6 +505,7 @@ class Renderer(
         loadSeq.incrementAndGet()
         releaseStream(current)
         dropQueued()
+        dropAdvanced()
         current = null
         pending = null
         stopPolling()
@@ -499,6 +527,16 @@ class Renderer(
 
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         if (destroyed) return false
+        val adv = advanced
+        advanced = null
+        if (adv != null && adv.video.id == video.id && position < 2) {
+            // The speaker is already playing it (gapless): bring our state in line, send nothing (D-09).
+            loadSeq.incrementAndGet()
+            adopt(adv.item, alreadyPlaying = true)
+            note("info", "Now playing \"${adv.item.title}\" (continued gaplessly)", "videoId" to video.id)
+            return true
+        }
+        releaseStream(adv?.item?.current)
         return load(video, position)
     }
 
@@ -624,10 +662,18 @@ class Renderer(
         return state.next ?: if (autoplayMode == AutoplayMode.ENABLED) state.autoplay else null
     }
 
-    /** Takes the prepared next track out of the slot and frees its stream. */
-    private fun dropQueued() {
+    /** Takes the prepared next track out of the slot and frees its stream; returns it. */
+    private fun dropQueued(): Queued? {
         val q = synchronized(queueLock) { queued.also { queued = null } }
         releaseStream(q?.item?.current)
+        return q
+    }
+
+    /** Forgets the track the speaker played on into and frees its stream. */
+    private fun dropAdvanced() {
+        val a = advanced
+        advanced = null
+        releaseStream(a?.item?.current)
     }
 
     /**
@@ -662,7 +708,11 @@ class Renderer(
         val upcoming = getUpcomingVideo()
         if (queue.isUpdating) return // a refresh began since the poll looked: the empty next is not the end of the queue
         if (upcoming == null || upcoming.id == currentId) {
-            dropQueued()
+            // Nothing upcoming any more: a track the speaker holds as its next one is taken back (renderer.js line 441).
+            val dropped = dropQueued()
+            if (dropped?.sentToRenderer == true) {
+                safeCall(AV_TRANSPORT, "SetNextAVTransportURI", "InstanceID" to 0, "NextURI" to "", "NextURIMetaData" to "")
+            }
             return
         }
         if (queued?.video?.id == upcoming.id) return
@@ -682,6 +732,7 @@ class Renderer(
             return
         }
         prefetchBackoff.succeeded(upcoming.id)
+        var queuedNow: Queued? = null
         synchronized(queueLock) {
             // The world may have moved on while this prepared: a newer load, a removal, another track, another next video.
             val stillWanted = !destroyed && loadSeq.get() == seq && current?.video?.id == currentId &&
@@ -691,7 +742,8 @@ class Renderer(
                 return
             }
             val old = queued
-            queued = Queued(upcoming, item)
+            queuedNow = Queued(upcoming, item)
+            queued = queuedNow
             releaseStream(old?.item?.current)
         }
         note(
@@ -701,6 +753,45 @@ class Renderer(
             "format" to item.format,
             "ms" to (deps.clock() - t0),
         )
+        queuedNow?.let { sendNextToRenderer(it) }
+    }
+
+    /**
+     * Hands the prepared [q] to the speaker as its next track (renderer.js `#sendNextToRenderer`, D-09): the speaker then plays on
+     * into it by itself and the poll follows. Needs prefetch and gapless (D-07) and a speaker not known to refuse. A refusal that
+     * [isGaplessRefusal] names is remembered for this run and logged once; any other failure is only noted. NextURI and DIDL go
+     * through the same SOAP escaping as SetAVTransportURI (T-04-14); the URL is never logged (T-04-16).
+     */
+    private suspend fun sendNextToRenderer(q: Queued) {
+        if (!config.prefetch || !config.gapless || gaplessSupported == false || destroyed) return
+        // Taken by a load, or replaced, while this was on its way: nothing to hand over.
+        if (synchronized(queueLock) { queued } !== q) return
+        q.sendAttempts++
+        try {
+            call(
+                AV_TRANSPORT,
+                "SetNextAVTransportURI",
+                "InstanceID" to 0,
+                "NextURI" to q.item.url,
+                "NextURIMetaData" to q.item.metadata,
+            )
+            q.sentToRenderer = true
+            note("info", "Queued the next track on the speaker", "videoId" to q.video.id, "format" to q.item.format)
+            if (gaplessSupported != true) note("info", "Renderer supports gapless playback (SetNextAVTransportURI)")
+            gaplessSupported = true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: UpnpError) {
+            if (isGaplessRefusal(e)) {
+                val wasKnown = gaplessSupported == false
+                gaplessSupported = false
+                if (!wasKnown) note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
+            } else {
+                note("debug", "SetNextAVTransportURI failed: ${e.message}")
+            }
+        } catch (e: Exception) {
+            note("debug", "SetNextAVTransportURI failed: ${e.message ?: e::class.java.simpleName}")
+        }
     }
 
     /**
@@ -787,8 +878,12 @@ class Renderer(
         }
     }
 
-    /** Make [item] the current track after the speaker was told to play it. */
-    private fun adopt(item: PreparedItem) {
+    /**
+     * Make [item] the current track after the speaker was told to play it. With [alreadyPlaying] (a gapless switch) the speaker
+     * has been playing it since before we noticed: it counts as played at once, so its position is the speaker's, the drift check
+     * is on and the start watchdog has nothing to wait for (RESEARCH Pitfall 4).
+     */
+    private fun adopt(item: PreparedItem, alreadyPlaying: Boolean = false) {
         item.current.loadedAt = deps.clock()
         item.current.startedAt = item.current.loadedAt
         if (current !== item.current) releaseStream(current) // the stream this one replaces
@@ -796,7 +891,11 @@ class Renderer(
         nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail)
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
         lastError = null
-        sawPlaying = false
+        sawPlaying = alreadyPlaying
+        if (alreadyPlaying) {
+            item.current.playSent = true
+            playedFormats.add(item.current.format)
+        }
         metaReported = false
         foreignPolls = 0
         expectStop = false
@@ -890,6 +989,11 @@ class Renderer(
      * service Stop reach.
      */
     override suspend fun doStop(): Boolean {
+        // yt-cast-receiver's play() stops a PLAYING player first. When the speaker already moved on to the queued track by itself,
+        // that Stop must not reach it: the track would be cut off and reloaded. Only the hand-off's own next() gets this; a Stop
+        // from the phone at any other time (including while the hand-off waits for a refresh) still stops the speaker.
+        val switching = if (handingOff) advanced else null
+        if (switching == null) dropAdvanced()
         loadSeq.incrementAndGet() // cancel any pending load
         position = null
         pending = null
@@ -898,9 +1002,13 @@ class Renderer(
         current = null
         stopPolling()
         expectStop = true
+        advanced = switching
         // T-03-58: the track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
-        // A speaker that holds nothing still gets it (harmless, as before).
-        val stopped = if (onAnotherSource(emptyCounts = false)) {
+        // A speaker that holds nothing still gets it (harmless, as before). The switch shortcut comes before any speaker read.
+        val stopped = if (switching != null) {
+            note("info", "stop not sent: the speaker already moved on to the queued track")
+            true
+        } else if (onAnotherSource(emptyCounts = false)) {
             note("info", "stop skipped: the speaker is on another source")
             true
         } else {
@@ -1091,6 +1199,7 @@ class Renderer(
     private fun forgetTrack() {
         releaseStream(current)
         dropQueued()
+        dropAdvanced()
         current = null
         nowPlaying = null
         position = null
@@ -1474,6 +1583,17 @@ class Renderer(
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
+                // The speaker played on into the track it was given as next: follow it (D-09).
+                val via = rendererAdvancedVia()
+                if (via != null) {
+                    val taken = synchronized(queueLock) { queued.also { queued = null } }
+                    advanced = taken
+                    // The poll runs in the job this cancels: nothing below may suspend. The hand-off runs in its own coroutine.
+                    stopPolling()
+                    note("info", "Renderer continued into the next track", "videoId" to taken?.video?.id, "via" to via)
+                    handOffAfterGaplessSwitch(loadSeq.get())
+                    return
+                }
                 // Last, and it only launches: the poll must not wait for a prepare (D-05, D-16).
                 if (c != null) maintainNext()
             }
@@ -1588,6 +1708,62 @@ class Renderer(
             if (queue.isUpdating) note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
             val advanced = next()
             if (!advanced && !superseded(seq) && status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.STOPPED)
+        }
+    }
+
+    /**
+     * Has the speaker moved on to the track it was given with SetNextAVTransportURI? Returns the field that showed it ("TrackURI",
+     * or "GetMediaInfo.CurrentURI" when the position info has none), else null. The speaker's URI is compared with
+     * `contains(streamPath)`, never equality: speakers rewrite host or escaping (RESEARCH Pattern 2). The URI itself is never returned.
+     */
+    private suspend fun rendererAdvancedVia(): String? {
+        val q = queued
+        val path = q?.item?.current?.streamPath
+        if (q == null || !q.sentToRenderer || path == null) return null
+        val fromPosition = position?.uri
+        if (!fromPosition.isNullOrEmpty()) return if (fromPosition.contains(path)) "TrackURI" else null
+        val fromMediaInfo = readCurrentUri()
+        return if (fromMediaInfo != null && fromMediaInfo.contains(path)) "GetMediaInfo.CurrentURI" else null
+    }
+
+    /**
+     * Moves the lounge queue on after the speaker played into the queued track by itself. Runs in its own coroutine because the
+     * poll that found the switch is cancelled by [stopPolling]. Waits (bounded by [Config.queueSettleTimeoutMs]) for a playlist
+     * refresh in flight, as [advanceAfterTrackEnd] does, then [next] reaches [doPlay], which adopts [advanced]; the Stop that
+     * `play()` sends first is skipped in [doStop] for this call only (D-16).
+     */
+    private fun handOffAfterGaplessSwitch(seq: Int) {
+        scope.launch {
+            val deadline = deps.clock() + config.queueSettleTimeoutMs
+            while (queue.isUpdating && !superseded(seq) && deps.clock() < deadline) delay(QUEUE_SETTLE_STEP_MS)
+            if (superseded(seq)) {
+                // A Stop, a newer play or a removal overtook the wait: the track the speaker moved on to is not ours to adopt.
+                dropAdvanced()
+                return@launch
+            }
+            if (queue.isUpdating) note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
+            handingOff = true
+            val moved = try {
+                next()
+            } finally {
+                handingOff = false
+            }
+            if (moved) return@launch
+            dropAdvanced()
+            if (destroyed) return@launch
+            when (status) {
+                // Queue over (the stop inside next() skipped the speaker): stop the track it played on into.
+                PlayerStatus.STOPPED -> {
+                    ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+                    note("info", "Queue over after a gapless switch - stopped the speaker")
+                }
+                // next() could not run (a refresh that never finished): the speaker plays something the phone does not know about.
+                PlayerStatus.PLAYING -> {
+                    note("warn", "Could not advance the queue after a gapless switch - stopping the speaker")
+                    stop()
+                }
+                else -> Unit
+            }
         }
     }
 

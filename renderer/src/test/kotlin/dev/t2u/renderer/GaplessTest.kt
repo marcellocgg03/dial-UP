@@ -54,9 +54,9 @@ internal class GaplessTest {
     }
 
     /** adts is pinned so registered paths end `.aac` (Node's `.m4a` regexes become `.aac`). */
-    private fun cfg(prefetch: Boolean = true, gapless: Boolean = true): (File) -> Config = {
+    private fun cfg(prefetch: Boolean = true, gapless: Boolean = true, startTimeoutMs: Long = 5000): (File) -> Config = {
         Config(
-            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = startTimeoutMs, nameSuffix = "",
             queueSettleTimeoutMs = 5000, prefetch = prefetch, gapless = gapless,
         )
     }
@@ -91,8 +91,13 @@ internal class GaplessTest {
 
     private fun FakeRenderer.count(action: String): Int = calls.count { it.action == action }
 
-    private fun harness(fake: FakeRenderer, handler: NextHandler, prefetch: Boolean = true, gapless: Boolean = true) =
-        RendererHarness(fake, config = cfg(prefetch, gapless), playlistRequestHandlerFactory = { handler })
+    private fun harness(
+        fake: FakeRenderer,
+        handler: NextHandler,
+        prefetch: Boolean = true,
+        gapless: Boolean = true,
+        startTimeoutMs: Long = 5000,
+    ) = RendererHarness(fake, config = cfg(prefetch, gapless, startTimeoutMs), playlistRequestHandlerFactory = { handler })
 
     /** A renderer whose queue holds [ids] with the first one current, not yet playing. */
     private suspend fun queued(h: RendererHarness, vararg ids: String): Renderer {
@@ -104,7 +109,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08, PLAY-09: enabled by plan 04-05")
     @DisplayName("gapless: next track is prepared, queued with SetNextAVTransportURI, and adopted without reloading")
     fun nextTrackIsPreparedQueuedAndAdoptedWithoutReloading() {
         withFake { fake ->
@@ -133,7 +137,6 @@ internal class GaplessTest {
     }
 
     @Test
-    @Disabled("PLAY-08, PLAY-09: enabled by plan 04-05")
     @DisplayName("gapless: yt-cast-receiver stopping the player before play() does not cut off or reload the track")
     fun stoppingThePlayerBeforePlayDoesNotCutOffOrReload() {
         withFake { fake ->
@@ -462,6 +465,104 @@ internal class GaplessTest {
                 waitUntil { h.notes("Prepared next track").isNotEmpty() }
                 r.destroy()
                 assertTrue(h.released.contains(streamPath(2)), "B's stream was released: ${h.released}")
+            }
+        }
+    }
+
+    // ---- Kotlin-only hand-off tests (plan 04-05) ----
+
+    /** Text of every renderer event, to look for a stream path or a URL where none may be. */
+    private fun RendererHarness.allText(): String = events.joinToString("\n") { it.second.toString() }
+
+    @Test
+    @DisplayName("the switch note names the field that showed it and never the stream URI")
+    fun theSwitchNoteNamesTheFieldAndNeverTheUri() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+                val queuedNote = h.notes("Queued the next track on the speaker").single()
+                assertEquals(B, queuedNote["videoId"])
+
+                handler.nextOf = { null }
+                fake.advance()
+                waitUntil { h.notes("Now playing").any { (it["message"] as String).contains("continued gaplessly") } }
+
+                val switched = h.notes("Renderer continued into the next track").single()
+                assertEquals(B, switched["videoId"])
+                assertEquals("TrackURI", switched["via"])
+                assertTrue(h.notes("Renderer supports gapless playback").isNotEmpty())
+                val text = h.allText()
+                assertTrue(!text.contains("http://"), "no URL in any note")
+                assertTrue(!text.contains(streamPath(2)), "no stream path in any note")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that reports no TrackURI is read through GetMediaInfo to see the switch")
+    fun aSpeakerWithoutTrackUriIsReadThroughGetMediaInfo() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.doPlay(Video(A), 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+
+                handler.nextOf = { null }
+                fake.state.reportedUri = ""
+                fake.advance()
+                waitUntil { r.nowPlaying?.videoId == B }
+                assertEquals(B, r.nowPlaying?.videoId)
+                assertEquals("GetMediaInfo.CurrentURI", h.notes("Renderer continued into the next track").single()["via"])
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an adopted track counts as already playing: its position is the speaker's and the start watchdog is off")
+    fun anAdoptedTrackCountsAsAlreadyPlaying() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler, startTimeoutMs = 300).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+
+                handler.nextOf = { null }
+                fake.advance()
+                waitUntil { r.nowPlaying?.videoId == B }
+                fake.state.relTime = "0:00:07"
+                assertTrue(kotlin.math.abs(r.doGetPosition() - 7.0) < 0.5, "the position is the speaker's RelTime, not 0")
+
+                // The speaker stops reporting PLAYING for longer than the start timeout: a track that was never seen
+                // playing would be given up on; the adopted one was playing already.
+                fake.state.transport = "TRANSITIONING"
+                delay(900)
+                assertTrue(h.notes("Renderer ").none { it["level"] == "error" }, "the start watchdog did not fire")
+                assertEquals(dev.t2u.lounge.PlayerStatus.PLAYING, r.status)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a play after the speaker moved on is adopted without a Stop and says so")
+    fun aPlayAfterTheSpeakerMovedOnSendsNoStop() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+
+                handler.nextOf = { null }
+                val stopsBefore = fake.count("Stop")
+                fake.advance()
+                waitUntil { r.nowPlaying?.videoId == B }
+                assertEquals(1, h.notes("stop not sent: the speaker already moved on to the queued track").size)
+                assertEquals(stopsBefore, fake.count("Stop"))
             }
         }
     }
