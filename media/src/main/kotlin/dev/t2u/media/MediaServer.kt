@@ -416,6 +416,24 @@ class MediaServer(
         out: Outcome,
         pipeMode: String,
     ) {
+        // Pinned while the response is written, so eviction and clearCache skip it (D-04, Node `#serveFile` pin).
+        // Only files in the builder's directory are pinned; a HEAD answer releases at once.
+        val unpin = files?.pin(file)
+        try {
+            respondFile(call, entry, file, head, out, pipeMode)
+        } finally {
+            unpin?.invoke()
+        }
+    }
+
+    private suspend fun respondFile(
+        call: ApplicationCall,
+        entry: StreamEntry,
+        file: File,
+        head: Boolean,
+        out: Outcome,
+        pipeMode: String,
+    ) {
         out.pipeMode = pipeMode
         if (!file.exists()) {
             // Built, registered, then gone (the interim cleanup, or something outside): a plain 404, never an empty 200.

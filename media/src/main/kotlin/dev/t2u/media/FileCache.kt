@@ -1,8 +1,9 @@
 package dev.t2u.media
 
-// GPL-3.0-only. Port of the cache half of reference/tube2upnp/src/mediaServer.js (#pruneCache, #reuse, cacheInfo):
-// one size cap over the built files and the downloaded sources, least-recently-used eviction by file modification
-// time. Pure JVM; the directory belongs to the file builder and nothing outside it is ever touched.
+// GPL-3.0-only. Port of the cache half of reference/tube2upnp/src/mediaServer.js (#pruneCache, #reuse, #pin,
+// cacheInfo): one size cap over the built files and the downloaded sources, least-recently-used eviction by file
+// modification time, pins for files in use. Pure JVM; the directory belongs to the file builder and nothing outside
+// it is ever touched (T-04-01).
 
 import java.io.File
 
@@ -24,6 +25,9 @@ data class CacheInfo(val files: Int, val bytes: Long, val limitBytes: Long)
  *
  * Only finished files (names passing [isCacheFileName], non-empty) count; `.part`, `.download` and `.info.json`
  * files are in-progress or leftover and are never counted, evicted or served.
+ *
+ * Pins are counted per file name in memory. A pinned file is skipped by [prune] and [clear], so the disk can pass
+ * the cap by the files in use: the cap, plus the files being read or built (T-04-02).
  */
 class FileCache(
     dir: File,
@@ -32,11 +36,35 @@ class FileCache(
 ) {
     private val dir: File = dir.absoluteFile
     private val lock = Any()
+    private val pins = HashMap<String, Int>()
 
     /** Sets the modification time of [file] to now: LRU order that survives a restart (Node `#reuse` uses utimes). */
     fun touch(file: File) {
         runCatching { file.setLastModified(System.currentTimeMillis()) }
     }
+
+    /**
+     * Pins [file] (a response is reading it, or ffmpeg is) and touches it. The returned release is one-shot: calling
+     * it a second time does not unpin another holder (Node `#pin`). A file outside the cache directory is not pinned.
+     */
+    fun pin(file: File): () -> Unit {
+        val name = file.name
+        if (file.absoluteFile.parentFile != dir) return {}
+        synchronized(lock) { pins.merge(name, 1, Int::plus) }
+        touch(file)
+        var released = false
+        return {
+            synchronized(lock) {
+                if (!released) {
+                    released = true
+                    val left = (pins[name] ?: 1) - 1
+                    if (left <= 0) pins.remove(name) else pins[name] = left
+                }
+            }
+        }
+    }
+
+    fun isPinned(name: String): Boolean = synchronized(lock) { pins.containsKey(name) }
 
     /** Counts only non-empty regular files whose name passes [isCacheFileName]; the limit is read now. */
     fun info(): CacheInfo {
@@ -51,24 +79,52 @@ class FileCache(
 
     /**
      * Deletes the least-recently-used cache files, oldest modification time first (ties by name), until the total
-     * fits the limit read now. Names in [keep] are never chosen (the file just built and its source, D-04: they
-     * survive even when they alone exceed the cap). [busy] is consulted by the source pairing of Task 3. Returns the
-     * number of files deleted.
+     * fits the limit read now. Never chosen: names in [keep] (the file just built and its source, D-04: they
+     * survive even when they alone exceed the cap) and pinned names.
+     *
+     * Pairing (D-01): when a built file goes and no other built file of its video remains, the video's `.source`
+     * goes in the same step, unless [busy] says a build or download of that video is running, or the source is
+     * kept or pinned. A source whose video still has a built file, or is busy, is skipped at its turn; an orphan
+     * source is an ordinary LRU entry. Returns the number of files deleted.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun prune(keep: Set<String> = emptySet(), busy: (String) -> Boolean = { false }): Int = synchronized(lock) {
         val limit = limitBytes()
         val entries = listCacheFiles().sortedWith(compareBy<Entry> { it.modified }.thenBy { it.name })
+        val present = entries.map { it.name }.toHashSet()
+        val sizes = entries.associate { it.name to it.size }
         var total = entries.sumOf { it.size }
         var evicted = 0
         var freed = 0L
+        var skippedPinned = 0
+
+        fun remove(name: String): Boolean {
+            val gone = File(dir, name).let { it.delete() || !it.exists() }
+            if (gone && present.remove(name)) {
+                val size = sizes.getValue(name)
+                total -= size
+                freed += size
+                evicted++
+            }
+            return gone
+        }
+
         for (e in entries) {
             if (total <= limit) break
-            if (e.name in keep) continue
-            if (File(dir, e.name).delete()) {
-                total -= e.size
-                freed += e.size
-                evicted++
+            val name = e.name
+            if (name !in present || name in keep) continue
+            if (pins.containsKey(name)) {
+                skippedPinned++
+                continue
+            }
+            val id = builtId(name)
+            if (id == null && name.endsWith(".source")) {
+                val sid = name.removeSuffix(".source")
+                if (present.any { builtId(it) == sid } || busy(sid)) continue
+            }
+            if (!remove(name)) continue
+            if (id != null && present.none { builtId(it) == id }) {
+                val source = "$id.source"
+                if (source in present && source !in keep && !pins.containsKey(source) && !busy(id)) remove(source)
             }
         }
         if (evicted > 0) {
@@ -79,6 +135,7 @@ class FileCache(
                     "freedBytes" to freed,
                     "totalBytes" to total,
                     "limitBytes" to limit,
+                    "pinned" to skippedPinned,
                     // RESEARCH Pitfall 12: the pipe range cache and the read-ahead windows are separate budgets.
                     "covers" to "built and source files",
                 ),
@@ -115,15 +172,20 @@ class FileCache(
         return info()
     }
 
-    /** Deletes every cache file (Node `clearCache`) and returns how many went. */
+    /** Deletes every unpinned cache file (Node `clearCache`) and returns how many went. */
     fun clear(): Int = synchronized(lock) {
         var removed = 0
+        var inUse = 0
         for (name in dir.list().orEmpty()) {
             if (!isCacheFileName(name)) continue
+            if (pins.containsKey(name)) {
+                inUse++
+                continue
+            }
             val f = File(dir, name)
             if (f.isFile && f.delete()) removed++
         }
-        emit(mapOf("event" to "cache-clear", "removed" to removed, "keptInUse" to 0))
+        emit(mapOf("event" to "cache-clear", "removed" to removed, "keptInUse" to inUse))
         removed
     }
 
@@ -156,11 +218,18 @@ class FileCache(
         return out
     }
 
+    /** The video id of a built file name `<11-char id>-<format>-<int>.<ext>`, or null for anything else. */
+    private fun builtId(name: String): String? = BUILT.matchEntire(name)?.groupValues?.get(1)
+
     private fun emit(event: Map<String, Any?>) {
         try {
             onEvent(event)
         } catch (_: Throwable) {
             // logging must never break the cache
         }
+    }
+
+    private companion object {
+        val BUILT = Regex("([A-Za-z0-9_-]{11})-[a-z0-9]+-\\d+\\.(?:m4a|flac)")
     }
 }

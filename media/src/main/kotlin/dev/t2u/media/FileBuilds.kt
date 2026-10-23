@@ -134,6 +134,13 @@ class FileBuilder(
     /** What the cache holds now. */
     fun info(): CacheInfo = cache.info()
 
+    /** Pins [file] for as long as a response reads it; call the returned release when done (one-shot). */
+    fun pin(file: File): () -> Unit = cache.pin(file)
+
+    /** True while a build or a source download of [videoId] runs: its source must not be evicted under it. */
+    private fun isBusy(videoId: String): Boolean =
+        synchronized(lock) { buildJobs.keys.any { it.startsWith("$videoId-") } || sourceJobs.containsKey(videoId) }
+
     // ------------------------------------------------------------------------------------ names
 
     private fun keyOf(videoId: String, format: String, startAt: Int): String = "$videoId-$format-$startAt"
@@ -160,7 +167,15 @@ class FileBuilder(
 
     private suspend fun build(videoId: String, format: String, startAt: Int, final: File): File {
         if (isFinished(final)) return final
-        val src = sourceFile(videoId)
+        // Pinned while ffmpeg reads it (Node `unpinSrc`); a prune of another build may have taken a source between
+        // its download and this pin, in which case it is downloaded again.
+        var src = sourceFile(videoId)
+        var unpinSrc = cache.pin(src)
+        if (!isFinished(src)) {
+            unpinSrc()
+            src = sourceFile(videoId)
+            unpinSrc = cache.pin(src)
+        }
         val part = File(final.path + ".part")
         val args = fileBuildArgs(format, flacBits, startAt, src, part, ffmpegLogLevel)
         var proc: Process? = null
@@ -187,9 +202,10 @@ class FileBuilder(
             throw e
         } finally {
             proc?.let { p -> withContext(NonCancellable + Dispatchers.IO) { if (p.isAlive) p.destroyForcibly() } }
+            unpinSrc()
         }
         // D-04: the file just built and its source are kept even when they alone exceed the cap.
-        cache.prune(keep = setOf(final.name, src.name))
+        cache.prune(keep = setOf(final.name, src.name), busy = ::isBusy)
         emit("built", videoId, format, startAt)
         return final
     }
@@ -246,7 +262,7 @@ class FileBuilder(
                 check(isFinished(part)) { "the download left no file" }
                 withContext(Dispatchers.IO) { Files.move(part.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING) }
                 // RESEARCH Pattern 5: sources downloaded for the pipe rung are bounded by the same cap.
-                cache.prune(keep = setOf(dest.name))
+                cache.prune(keep = setOf(dest.name), busy = ::isBusy)
                 emit("downloaded", videoId, "source", 0)
                 return dest
             } catch (e: CancellationException) {
