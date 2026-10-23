@@ -434,6 +434,8 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
                             put("port", r.port)
                             put("status", (r as? Player)?.status?.name)
                             put("lastError", (r as? Renderer)?.lastError)
+                            // The learned SetNextAVTransportURI support: true, false, or JSON null while unknown (D-15).
+                            put("gapless", (r as? Renderer)?.gaplessSupport)
                         }
                     },
                 ),
