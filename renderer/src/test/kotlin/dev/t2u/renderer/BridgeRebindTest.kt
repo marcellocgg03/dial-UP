@@ -138,6 +138,22 @@ class BridgeRebindTest {
     }
 
     @Test
+    @DisplayName("after a move the media base is the new address on the same media port and the old media address refuses")
+    fun mediaBaseFollowsTheMove() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        val before = Regex("mediaBase\":\"http://127\\.0\\.0\\.1:(\\d+)").find(bridge.state().toString())!!.groupValues[1].toInt()
+
+        bridge.rebindNetwork(h.network(other))
+
+        assertEquals("http://127.0.0.2:$before", bridge.state()["mediaBase"].toString().trim('"'))
+        // an unknown token answers 404 on the new address, and the old address refuses
+        assertEquals(404, statusOf("http://127.0.0.2:$before/stream/${"0".repeat(32)}.aac"))
+        refuses(h.loopback, before)
+    }
+
+    @Test
     @DisplayName("a bridge that was never started or is already stopped ignores a move")
     fun stoppedBridgeIgnoresAMove() = h.run<Unit> {
         val bridge = h.newBridge()
