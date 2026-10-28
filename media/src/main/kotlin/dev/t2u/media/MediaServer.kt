@@ -184,7 +184,7 @@ data class MediaRequest(
  * [stop] and on [start]. Node's `#pipe` ignores Range; this is a Kotlin-only addition (PARITY.md Adaptation 11).
  */
 class MediaServer(
-    private val host: String,
+    host: String,
     private val port: Int,
     private val launcher: PipeLauncher?,
     private val onRequest: (MediaRequest) -> Unit,
@@ -197,6 +197,9 @@ class MediaServer(
     private val mp3Bitrate: String = MP3_BITRATE,
     private val ffmpegLogLevel: String = "error",
 ) : MediaRegistrar {
+    /** The address the engine listens on now; [rebindHost] replaces it. */
+    @Volatile private var host: String = host
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var boundPort: Int = port
@@ -218,19 +221,39 @@ class MediaServer(
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
         files?.start() // keeps the finished files of an earlier run, drops half-written ones (D-12)
-        // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
+        startEngine(host, port)
+    }
+
+    // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
+    private fun startEngine(bindHost: String, bindPort: Int) {
         val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
             reuseAddress = true
             connectors.add(
                 EngineConnectorBuilder().apply {
-                    host = this@MediaServer.host
-                    port = this@MediaServer.port
+                    host = bindHost
+                    port = bindPort
                 },
             )
         }
         s.start(wait = false)
         boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
         server = s
+    }
+
+    /**
+     * Moves the listener to [newHost] on the port it already has (plan 05-07, SVC-04). Only the HTTP engine is restarted:
+     * the registered tokens, the pins on cached files, the range cache and the file builder are kept, so a stream URL a
+     * speaker was given before the move still answers after it. [stop] is never used to rebind, because it clears the range
+     * cache, releases every pin and closes the file builder, which would 404 the track that is playing. A bind failure
+     * propagates and leaves the server not listening ([isRunning] stays true, so the call can be repeated).
+     */
+    fun rebindHost(newHost: String) {
+        check(server != null) { "not started" }
+        val keepPort = boundPort
+        // [server] keeps pointing at the stopped engine until the new one is up, so a failed bind can be retried
+        server?.stop(200, 1000)
+        host = newHost
+        startEngine(newHost, keepPort)
     }
 
     fun stop() {

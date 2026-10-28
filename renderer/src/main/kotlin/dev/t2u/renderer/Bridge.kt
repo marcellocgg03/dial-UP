@@ -560,6 +560,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             val oldResponder = responder
             val oldClient = ssdp
 
+            // the media server first: URLs built after the move must point at a server that answers; tokens are kept
+            step("media", "rebind") { withContext(Dispatchers.IO) { mediaServer?.rebindHost(newIp) } }
             step("responder-stop", "rebind") { withContext(Dispatchers.IO) { oldResponder?.stop() } }
             // the old listeners are closed before the new ones open, so a same-address move never fights itself for the socket
             net = newNet
