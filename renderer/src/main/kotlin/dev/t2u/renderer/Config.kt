@@ -2,6 +2,8 @@ package dev.t2u.renderer
 
 // Port of tube2upnp src/config.js (Node defaults; config.json is SVC-07), GPL-3.0-only.
 
+import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.media.YTDLP_DEFAULT_CHANNEL
 import java.io.File
 
 /** Name shown in the YouTube cast menu (CAST-07). Placeholders: {name} {manufacturer} {model}. */
@@ -78,6 +80,8 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property mp3Bitrate ffmpeg bitrate for the mp3 format.
  * @property flacBits bit depth for the flac format.
  * @property ytdlpVerbose debug switch, consumed by the bridge (plan 03-10).
+ * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly"
+ *   (PLAY-02). Read by the app before every update attempt, so an edited config.json applies at the next one.
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
  * @property outputFormat "auto" (the Node default) walks the format chain direct, mp4, adts, flac, mp3 with the
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
@@ -114,6 +118,7 @@ data class Config(
     val mp3Bitrate: String = "192k",
     val flacBits: Int = 16,
     val ytdlpVerbose: Boolean = false,
+    val ytdlpChannel: String = YTDLP_DEFAULT_CHANNEL,
     val ffmpegLogLevel: String = "error",
     val queueSettleTimeoutMs: Long = 10_000,
     val cacheMb: Int = 256,
@@ -136,6 +141,7 @@ data class Config(
         require(startTimeoutMs > 0) { "startTimeoutMs must be positive" }
         require(queueSettleTimeoutMs >= 0) { "queueSettleTimeoutMs must not be negative" }
         require(playRetryDelaysMs.all { it >= 0 }) { "playRetryDelaysMs must not contain a negative delay" }
+        require(ytdlpChannel in YTDLP_CHANNELS) { "ytdlpChannel must be one of ${YTDLP_CHANNELS.joinToString(", ")}" }
         require(cacheMb in 0..32768) { "cacheMb must be a whole number from 0 to 32768" }
     }
 }

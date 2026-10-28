@@ -8,6 +8,7 @@ import java.io.File
 import kotlin.test.assertContains
 import kotlin.test.assertNotNull
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -179,6 +180,25 @@ class ConfigFileTest {
             assertFalse(r.config.ytdlpVerbose, bad)
             assertEquals(1, r.warnings.size, bad)
         }
+    }
+
+    @Test
+    fun ytdlpChannelIsStableOrNightlyOnly() {
+        assertEquals("stable", parse("{}").config.ytdlpChannel)
+        for (ok in listOf("stable", "nightly")) {
+            val r = parse("""{"ytdlpChannel":"$ok"}""")
+            assertEquals(ok, r.config.ytdlpChannel)
+            assertEquals(emptyList(), r.warnings, ok)
+        }
+        for (bad in listOf("\"beta\"", "\"\"", "1", "true")) {
+            val r = parse("""{"ytdlpChannel":$bad}""")
+            assertEquals("stable", r.config.ytdlpChannel, bad)
+            assertEquals(1, r.warnings.size, bad)
+            assertContains(r.warnings.single(), "ytdlpChannel")
+            assertFalse(r.warnings.single().contains("beta"), "the warning does not echo the value")
+        }
+        val e = assertFailsWith<IllegalArgumentException> { base.copy(ytdlpChannel = "beta").validate() }
+        assertContains(e.message.orEmpty(), "ytdlpChannel")
     }
 
     @Test

@@ -3,6 +3,7 @@ package dev.t2u.renderer
 // Kotlin original, GPL-3.0-only: the optional config.json (DISC-04 name filter, SVC-07 forced format
 // and debug switches). Pure JVM; reading the file from app storage is plan 03-11.
 
+import dev.t2u.media.YTDLP_CHANNELS
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -36,7 +37,7 @@ fun loadConfigFile(file: File, base: Config): ConfigFileResult {
 
 private val KNOWN_KEYS = setOf(
     "include", "exclude", "outputFormat", "startTimeoutMs", "pollIntervalMs",
-    "mp3Bitrate", "flacBits", "ytdlpVerbose", "ffmpegLogLevel",
+    "mp3Bitrate", "flacBits", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel",
     "prefetch", "gapless", "cacheMb",
 )
 
@@ -58,6 +59,7 @@ private val KNOWN_KEYS = setOf(
  *   "mp3Bitrate": "192k",               // "64k" .. "320k"
  *   "flacBits": 16,                     // 16 or 24
  *   "ytdlpVerbose": false,              // boolean
+ *   "ytdlpChannel": "stable",           // stable | nightly: the yt-dlp release the daily background update installs
  *   "ffmpegLogLevel": "error",          // quiet panic fatal error warning info verbose debug
  *   "prefetch": true,                   // boolean: prepare the next track while the current one plays
  *   "gapless": true,                    // boolean: queue the prepared track on the speaker; no effect when prefetch is false
@@ -99,6 +101,8 @@ fun parseConfigFile(text: String, base: Config): ConfigFileResult {
         val v = (el as? JsonPrimitive)?.takeIf { !it.isString && el !is JsonNull }?.booleanOrNull
         if (v != null) config = config.copy(ytdlpVerbose = v) else warnings += "ytdlpVerbose ignored: must be true or false"
     }
+    string(root, "ytdlpChannel", warnings, "must be stable or nightly") { it in YTDLP_CHANNELS }
+        ?.let { config = config.copy(ytdlpChannel = it) }
     string(root, "ffmpegLogLevel", warnings, "must be one of ${FFMPEG_LOG_LEVELS.joinToString(", ")}") { it in FFMPEG_LOG_LEVELS }
         ?.let { config = config.copy(ffmpegLogLevel = it) }
     root["prefetch"]?.let { el ->

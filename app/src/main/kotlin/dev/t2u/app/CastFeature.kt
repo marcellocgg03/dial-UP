@@ -8,6 +8,7 @@ import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CachingResolver
 import dev.t2u.media.MediaRequest
+import dev.t2u.media.YtDlpUpdater
 import dev.t2u.media.YtDlpSourceDownloader
 import dev.t2u.renderer.Bridge
 import dev.t2u.renderer.BridgeDeps
@@ -55,6 +56,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var monitor: NetworkMonitor? = null
     private var rebindJob: Job? = null
     private var countJob: Job? = null
+    private var updaterJob: Job? = null
     private var settings: Settings? = null
 
     @Volatile private var bridge: Bridge? = null
@@ -93,6 +95,14 @@ class CastFeature : SpikeFeature, CastCountSource {
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()
         host.scope.launch { lifecycle.withLock { startBridge(host) } }
+        // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
+        // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
+        val updater = YtDlpUpdater(
+            gateway = AndroidYtDlpGateway(host.context, host.evidence),
+            channel = { loadAppConfig(host.context.filesDir).config.ytdlpChannel },
+            onEvent = { host.evidence.event("ytdlp-update", it) },
+        )
+        updaterJob = host.scope.launch { updater.run() }
     }
 
     /**
@@ -101,6 +111,8 @@ class CastFeature : SpikeFeature, CastCountSource {
      * parallel across speakers, so the worst case stays inside the 10 s join below.
      */
     override fun stop() {
+        updaterJob?.cancel()
+        updaterJob = null
         runCatching { monitor?.stop() }
         monitor = null
         rebindJob?.cancel()
