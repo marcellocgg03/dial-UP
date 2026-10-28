@@ -245,4 +245,24 @@ class BridgeRebindTest {
         assertTrue(h.events.none { it.first == "renderer" && (it.second["message"] as? String)?.contains("taken over") == true }, "not released as another source")
         assertEquals("PLAYING", rendererStatus(bridge))
     }
+
+    @Test
+    @DisplayName("a track cast before the move is re-set on the speaker with a URL on the new address and the player is still PLAYING")
+    fun aCastTrackIsResetOnTheNewAddress() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        cast(bridge, "AAAAAAAAAAA")
+        assertEquals("127.0.0.1", hostOf(h.setAvTransportUris().first()))
+        h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(other))
+        h.awaitUntil("the track is re-set on the speaker") { h.setAvTransportUris().size >= 2 }
+
+        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris()[1]))
+        h.awaitUntil("Play after the re-set") { h.speakerCount("Play") >= 2 }
+        assertEquals("PLAYING", rendererStatus(bridge))
+    }
 }
