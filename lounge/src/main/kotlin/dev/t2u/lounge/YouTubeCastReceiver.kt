@@ -93,6 +93,7 @@ class YouTubeCastReceiver(
 
     /** Called after the receiver stopped itself because a lounge session failed for good. */
     @Volatile
+    @set:JvmName("assignOnTerminate") // the property setter would clash with setOnTerminate below
     var onTerminate: (Throwable) -> Unit = {}
 
     init {
@@ -121,6 +122,10 @@ class YouTubeCastReceiver(
 
     override fun enableAutoplayOnConnect(value: Boolean) {
         app.enableAutoplayOnConnect(value)
+    }
+
+    override fun setOnTerminate(callback: (Throwable) -> Unit) {
+        onTerminate = callback
     }
 
     /**

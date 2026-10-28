@@ -46,6 +46,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -81,6 +83,9 @@ private const val SUPERSEDED_SETTLE_MS = 10_000L
  * (Lamp session B, 19:47:43), so the Pause is held back until the speaker reports PLAYING.
  */
 private const val PAUSE_START_WAIT_MS = 3000L
+
+/** How long after a cast receiver stopped itself the first new one is started (plan 05-04); later attempts follow every 5 minutes. */
+const val REVIVE_FIRST_DELAY_MS = 10_000L
 
 /**
  * Upper bound on one speaker clear (CAST-06): the Stop, the emptied SetAVTransportURI and the read of the
@@ -469,6 +474,17 @@ class Renderer(
     /** This speaker's persistent store, created in [init] and shared with the cast receiver. */
     @Volatile private var store: RendererDataStore? = null
 
+    /** What [init] gave the cast receiver; a revived receiver is built from the same options (same DIAL port, name and store). */
+    @Volatile private var receiverOptions: ReceiverOptions? = null
+
+    /** When the cast receiver stopped itself (epoch ms of [RendererDeps.clock]); null while it runs or never did. */
+    @Volatile private var terminatedAt: Long? = null
+
+    /** The earliest [reviveIfDue] may start a new receiver: 10 s after the stop, then 5 minutes after each failed start. */
+    @Volatile private var nextReviveAt: Long = Long.MAX_VALUE
+
+    private val reviveLock = Mutex()
+
     init {
         events = deps.events
         deps.playlistRequestHandlerFactory?.let { queue.requestHandler = it() }
@@ -522,17 +538,17 @@ class Renderer(
         gaplessSupported = readGaplessMemory(storedGapless, model, deps.clock())
         val storedModel = gaplessMemoryModel(storedGapless)
         if (storedModel != null && storedModel != model) store.set(LEARNED_GAPLESS_KEY, null)
-        val rec = deps.createReceiver.create(
-            this,
-            ReceiverOptions(
-                dialPort = port,
-                name = displayName,
-                screenName = displayName,
-                brand = desc.manufacturer.ifEmpty { "Tube2U[PnP]" },
-                model = desc.modelName.ifEmpty { "UPnP Renderer" },
-                dataStore = store,
-            ),
+        val options = ReceiverOptions(
+            dialPort = port,
+            name = displayName,
+            screenName = displayName,
+            brand = desc.manufacturer.ifEmpty { "Tube2U[PnP]" },
+            model = desc.modelName.ifEmpty { "UPnP Renderer" },
+            dataStore = store,
         )
+        receiverOptions = options
+        val rec = deps.createReceiver.create(this, options)
+        rec.setOnTerminate { onReceiverTerminated(it) }
         receiver = rec
         rec.enableAutoplayOnConnect(config.autoplayOnConnect)
         rec.start()
@@ -551,9 +567,59 @@ class Renderer(
         return true
     }
 
+    /**
+     * The cast receiver stopped itself because a lounge session failed for good (renderer.js only records lastError;
+     * here the speaker must come back into the cast menu, plan 05-04). Schedules the first revival 10 s from now.
+     */
+    private fun onReceiverTerminated(error: Throwable) {
+        if (destroyed) return
+        val at = deps.clock()
+        terminatedAt = at
+        nextReviveAt = at + REVIVE_FIRST_DELAY_MS
+        note("warn", "Cast receiver stopped itself (${error.javaClass.simpleName}) - starting it again in ${REVIVE_FIRST_DELAY_MS / 1000} s")
+    }
+
+    /**
+     * Gives the speaker a new cast receiver once the old one stopped itself and its time has come (10 s after the stop,
+     * then every [RendererRegistry.RETRY_FAILED_MS] while a start fails). The new receiver is built from the options the
+     * first one had, so it listens on the same DIAL port with the same name and per-speaker store (same DIAL uuid and
+     * screen IDs). Returns null when nothing is due, true when a new receiver runs, false when the start failed.
+     */
+    override suspend fun reviveIfDue(now: Long): Boolean? {
+        if (destroyed || terminatedAt == null || now < nextReviveAt) return null
+        val options = receiverOptions ?: return null
+        return reviveLock.withLock {
+            if (destroyed || terminatedAt == null || now < nextReviveAt) return@withLock null
+            var rec: CastReceiver? = null
+            try {
+                rec = deps.createReceiver.create(this, options)
+                rec.setOnTerminate { onReceiverTerminated(it) }
+                rec.enableAutoplayOnConnect(config.autoplayOnConnect)
+                rec.start()
+                if (destroyed) {
+                    // Removed while the receiver was starting: do not leave it running.
+                    runCatching { rec.stop() }
+                    return@withLock null
+                }
+                receiver = rec
+                terminatedAt = null
+                nextReviveAt = Long.MAX_VALUE
+                note("info", "Cast receiver \"${options.name}\" started again on $ip:$port")
+                true
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                runCatching { rec?.stop() }
+                nextReviveAt = now + RendererRegistry.RETRY_FAILED_MS
+                note("warn", "Cast receiver could not start again (${e.javaClass.simpleName}) - trying again in ${RendererRegistry.RETRY_FAILED_MS / 60_000} minutes")
+                false
+            }
+        }
+    }
+
     override suspend fun destroy() {
         // A load or poll still in flight must not bring the speaker back to life afterwards.
         destroyed = true
+        terminatedAt = null
         loadSeq.incrementAndGet()
         releaseStream(current)
         dropQueued()

@@ -35,7 +35,7 @@ class ReceiverRevivalTest {
     /** A receiver that remembers the callback its owner registered and whether it was started. */
     private class RecordingReceiver(val options: ReceiverOptions, private val failStart: Boolean) : CastReceiver {
         @Volatile override var status: String = "stopped"
-        @Volatile var onTerminate: ((Throwable) -> Unit)? = null
+        @Volatile var terminate: ((Throwable) -> Unit)? = null
         @Volatile var autoplay: Boolean? = null
         @Volatile var started = false
         @Volatile var stopped = false
@@ -58,7 +58,7 @@ class ReceiverRevivalTest {
         }
 
         override fun setOnTerminate(callback: (Throwable) -> Unit) {
-            onTerminate = callback
+            terminate = callback
         }
     }
 
@@ -125,7 +125,7 @@ class ReceiverRevivalTest {
         assertTrue(rig.renderer.init())
         val first = rig.receivers.single()
         val t = rig.now.get()
-        first.onTerminate!!(IOException("lounge down"))
+        first.terminate!!(IOException("lounge down"))
 
         assertNull(rig.renderer.reviveIfDue(t + 5_000))
         assertEquals(1, rig.receivers.size)
@@ -150,7 +150,7 @@ class ReceiverRevivalTest {
     fun failedRevivalBacksOffFiveMinutes() = withRig { rig ->
         assertTrue(rig.renderer.init())
         val t = rig.now.get()
-        rig.receivers.single().onTerminate!!(IOException("lounge down"))
+        rig.receivers.single().terminate!!(IOException("lounge down"))
         rig.failStart = true
 
         val failedAt = t + 10_000
@@ -175,13 +175,13 @@ class ReceiverRevivalTest {
     fun revivedReceiverTerminatesAgain() = withRig { rig ->
         assertTrue(rig.renderer.init())
         val t = rig.now.get()
-        rig.receivers.single().onTerminate!!(IOException("one"))
+        rig.receivers.single().terminate!!(IOException("one"))
         assertEquals(true, rig.renderer.reviveIfDue(t + 10_000))
         val second = rig.receivers[1]
-        assertTrue(second.onTerminate != null)
+        assertTrue(second.terminate != null)
 
         rig.now.set(t + 60_000)
-        second.onTerminate!!(IOException("two"))
+        second.terminate!!(IOException("two"))
         assertNull(rig.renderer.reviveIfDue(t + 65_000))
         assertEquals(true, rig.renderer.reviveIfDue(t + 70_000))
         assertEquals(3, rig.receivers.size)
@@ -194,11 +194,11 @@ class ReceiverRevivalTest {
         assertTrue(rig.renderer.init())
         val first = rig.receivers.single()
         val t = rig.now.get()
-        first.onTerminate!!(IOException("lounge down"))
+        first.terminate!!(IOException("lounge down"))
         rig.renderer.destroy()
 
         assertNull(rig.renderer.reviveIfDue(t + 10_000))
-        first.onTerminate!!(IOException("late"))
+        first.terminate!!(IOException("late"))
         assertNull(rig.renderer.reviveIfDue(t + 3_600_000))
         assertEquals(1, rig.receivers.size)
     }

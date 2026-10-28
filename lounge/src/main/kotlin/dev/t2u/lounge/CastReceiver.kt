@@ -19,6 +19,13 @@ interface CastReceiver {
 
     /** Whether autoplay is switched on when a sender connects (src/renderer.js `autoplayOnConnect`). */
     fun enableAutoplayOnConnect(value: Boolean)
+
+    /**
+     * Registers the owner's callback. It is called once per receiver by its owner; the receiver calls it after it
+     * stopped itself because a lounge session failed for good, so the owner can give the speaker a new receiver
+     * (plan 05-04). The default does nothing, for receivers that never stop themselves.
+     */
+    fun setOnTerminate(callback: (Throwable) -> Unit) {}
 }
 
 /**
