@@ -188,4 +188,100 @@ class SsdpResponderTest {
             responder.stop()
         }
     }
+
+    // ------------------------------------------------------------------------------------------ self-probe (05-02)
+
+    private class ProbeEvents : SsdpEvents {
+        val received = CopyOnWriteArrayList<String>()
+        val replies = CopyOnWriteArrayList<String>()
+        val drops = CopyOnWriteArrayList<String>()
+
+        override fun onReceive(specId: String, src: InetSocketAddress, msg: SsdpMessage, raw: String) {
+            received.add(msg.headers["ST"].orEmpty())
+        }
+
+        override fun onReply(dest: InetSocketAddress, st: String, usn: String, deviceName: String) {
+            replies.add(st)
+        }
+
+        override fun onDrop(src: InetSocketAddress, reason: String) {
+            drops.add(reason)
+        }
+    }
+
+    private fun probeResponder(events: SsdpEvents = object : SsdpEvents {}) =
+        SsdpResponder(listOf(ListenSpec("loop", loopback, 0, null, false)), loopback, null, events)
+
+    @Test
+    fun selfProbeIsSeenByTheOwnListenerAndNeverAnswered() {
+        val events = ProbeEvents()
+        val responder = probeResponder(events)
+        responder.register(SsdpDevice("x", uuidA, "s", "http://127.0.0.1/"))
+        responder.start()
+        try {
+            assertTrue(responder.selfProbe(2000), "the listener sees the probe")
+            assertTrue(events.received.any { it.startsWith("urn:dev-t2u:probe:") }, "onReceive still fires: ${events.received}")
+            val nonce = events.received.first { it.startsWith("urn:dev-t2u:probe:") }.removePrefix("urn:dev-t2u:probe:")
+            assertTrue(Regex("[0-9a-f]{16}").matches(nonce), "16 lowercase hex characters: $nonce")
+            Thread.sleep(300)
+            assertTrue(events.replies.isEmpty(), "a probe is never answered: ${events.replies}")
+            assertTrue(events.drops.isEmpty(), "and never logged as a drop: ${events.drops}")
+        } finally {
+            responder.stop()
+        }
+    }
+
+    @Test
+    fun selfProbeDatagramCarriesNoDeviceNameUuidOrLocation() {
+        val sink = DatagramSocket(0, loopback).apply { soTimeout = 1000 }
+        val responder = SsdpResponder(
+            listOf(ListenSpec("loop", loopback, 0, null, false)),
+            loopback,
+            null,
+            object : SsdpEvents {},
+            probeTarget = InetSocketAddress(loopback, sink.localPort),
+        )
+        responder.register(SsdpDevice("Secret Speaker", uuidA, "s", "http://127.0.0.1:3000/desc.xml"))
+        responder.start()
+        try {
+            // nobody listens at the sink, so the probe times out, but the datagram is what the sink receives
+            assertEquals(false, responder.selfProbe(300))
+            val got = receiveAll(sink, 500).single()
+            assertEquals("M-SEARCH * HTTP/1.1", got.startLine)
+            assertTrue(got.headers.getValue("ST").startsWith("urn:dev-t2u:probe:"))
+            val text = got.headers.entries.joinToString { "${it.key}=${it.value}" }
+            assertTrue("Secret" !in text && uuidA !in text && "3000" !in text, "no identity in the probe: $text")
+        } finally {
+            responder.stop()
+            sink.close()
+        }
+    }
+
+    @Test
+    fun aDeafListenerFailsTheProbeAndRestartListenersRepairsIt() {
+        val responder = probeResponder()
+        responder.start()
+        try {
+            val before = responder.boundPorts().getValue("loop")
+            assertTrue(responder.selfProbe(2000))
+            responder.closeListenersForTest()
+            assertEquals(false, responder.selfProbe(300), "a closed listener hears nothing")
+            assertEquals(1, responder.restartListeners())
+            val after = responder.boundPorts().getValue("loop")
+            assertTrue(after > 0, "the reopened listener has a port (was $before, now $after)")
+            assertTrue(responder.selfProbe(2000), "the reopened listener hears the probe")
+        } finally {
+            responder.stop()
+        }
+    }
+
+    @Test
+    fun selfProbeOnAResponderThatIsNotRunningReturnsFalse() {
+        val responder = probeResponder()
+        assertEquals(false, responder.selfProbe(100), "never started")
+        responder.start()
+        responder.stop()
+        assertEquals(false, responder.selfProbe(100), "stopped")
+        assertEquals(0, responder.restartListeners(), "a stopped responder does not reopen anything")
+    }
 }
