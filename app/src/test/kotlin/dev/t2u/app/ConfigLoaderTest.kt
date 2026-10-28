@@ -152,6 +152,17 @@ class ConfigLoaderTest {
     }
 
     @Test
+    fun logLevelTravelsFromTheFileIntoTheSummaryAndTheEvidenceFields() {
+        assertEquals("info", configSummary(loadAppConfig(dir))["logLevel"]!!.jsonPrimitive.content)
+        write("""{"logLevel":"debug"}""")
+        val r = loadAppConfig(dir)
+        assertTrue(r.warnings.isEmpty(), r.warnings.toString())
+        assertEquals("debug", r.config.logLevel)
+        assertEquals("debug", configSummary(r)["logLevel"]!!.jsonPrimitive.content)
+        assertEquals("debug", configEvidenceFields(r)["logLevel"])
+    }
+
+    @Test
     fun aDirectoryNamedConfigJsonGivesTheDefaultsAndOneWarning() {
         File(dir, CONFIG_FILE).mkdirs()
         val r = loadAppConfig(dir)
