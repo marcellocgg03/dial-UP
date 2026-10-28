@@ -40,11 +40,16 @@ object ServiceHub {
 }
 
 /**
- * The spike's foreground service (type connectedDevice). Holds a MulticastLock, a WifiLock and a
- * partial WakeLock for its whole lifetime (SPK-02), writes a heartbeat every 30 s and a state.json
- * snapshot that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
- * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir. START_NOT_STICKY on purpose: a kill must show up
- * as a heartbeat gap plus an exit-info entry, not as a silent restart.
+ * The bridge's foreground service (type connectedDevice). Holds a MulticastLock, a WifiLock and a
+ * partial WakeLock for its whole lifetime, writes a heartbeat every 30 s and a state.json snapshot
+ * that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
+ * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir.
+ *
+ * Sticky on purpose since Phase 5 (D-01): a system kill shows as an exit-info entry followed by
+ * `service-start reason=sticky`. The notification Stop action and a denied start return
+ * START_NOT_STICKY, so they are not restarted. A denied start (no battery exemption, D-04 and D-12)
+ * shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
+ * from the first onStartCommand, which knows the start reason ([startReasonOf]).
  */
 class BridgeService : Service(), SpikeHost {
     override lateinit var scope: CoroutineScope
@@ -68,6 +73,9 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
     private val startedAtMs = SystemClock.elapsedRealtime()
+    private var bootstrapped = false
+    private var startForegroundFailed = false
+    private var logDirFact: Pair<File, String>? = null
 
     /** The cast count last seen by [castCountLoop]; the heartbeat carries it so a sleep window shows whether casting was on. */
     @Volatile
@@ -80,14 +88,20 @@ class BridgeService : Service(), SpikeHost {
         super.onCreate()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-        // Pitfall 12: channel first, startForeground before anything slow.
-        createChannel()
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(CastCount(0, 0)),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-        )
+        // Pitfall 12: channel first, startForeground before anything slow. A refusal (A9) is logged
+        // and stops the service instead of crashing it.
+        var foregroundError: Throwable? = null
+        try {
+            createChannel()
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(CastCount(0, 0)),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        } catch (t: Throwable) {
+            foregroundError = t
+        }
 
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
@@ -98,26 +112,61 @@ class BridgeService : Service(), SpikeHost {
         evidence = EvidenceLog(logDir)
         // D-11: the level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
         evidence.setLevel(logLevelOf(loadAppConfig(filesDir).config.logLevel))
-        ServiceHub.service = this
+        logDirFact = logDir to where
+        if (foregroundError != null) {
+            startForegroundFailed = true
+            evidence.event(
+                "feature-error",
+                mapOf("where" to "startForeground", "error" to foregroundError.javaClass.name, "message" to foregroundError.message),
+            )
+            stopSelf()
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (startForegroundFailed) return START_NOT_STICKY
+        if (intent?.action == ACTION_STOP) {
+            evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!bootstrapped) {
+            bootstrapped = true
+            val reason = startReasonOf(intent == null, intent?.action, intent?.getStringExtra(EXTRA_START_REASON))
+            if (!bootstrap(reason)) return START_NOT_STICKY
+        }
+        return START_STICKY
+    }
+
+    /**
+     * Everything slow, behind the battery gate (D-04, D-12: the same gate for open, boot and sticky
+     * starts). Returns false when the gate is shut; the service has then asked to stop and holds no lock.
+     */
+    private fun bootstrap(reason: StartReason): Boolean {
+        val exempt = BatteryGate.isOpen(this)
         evidence.event(
             "service-start",
-            mapOf("pid" to android.os.Process.myPid(), "sdk" to Build.VERSION.SDK_INT, "version" to BuildConfigFacts.versionName(this)),
+            mapOf(
+                "pid" to android.os.Process.myPid(),
+                "sdk" to Build.VERSION.SDK_INT,
+                "version" to BuildConfigFacts.versionName(this),
+                "reason" to reason.wire,
+                "exempt" to exempt,
+            ),
         )
-        evidence.event("logdir", mapOf("where" to where, "path" to logDir.absolutePath))
-
+        logDirFact?.let { (logDir, where) -> evidence.event("logdir", mapOf("where" to where, "path" to logDir.absolutePath)) }
+        if (!gateDecision(exempt, reason)) {
+            evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire))
+            stopSelf()
+            return false
+        }
+        ServiceHub.service = this
         acquireLocks()
         logExitInfo()
         startFeatures()
         scope.launch { castCountLoop() }
         scope.launch { heartbeatLoop() }
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
-            stopSelf()
-        }
-        return START_NOT_STICKY
+        return true
     }
 
     override fun onDestroy() {
@@ -193,9 +242,10 @@ class BridgeService : Service(), SpikeHost {
     }
 
     private fun releaseLocks() {
-        releaseOne("t2u:mcast", { mcastLock.isHeld }, { mcastLock.release() })
-        releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() })
-        releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
+        // a denied or failed start never created the locks
+        if (::mcastLock.isInitialized) releaseOne("t2u:mcast", { mcastLock.isHeld }, { mcastLock.release() })
+        if (::wifiLock.isInitialized) releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() })
+        if (::wakeLock.isInitialized) releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
     }
 
     private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit) {
