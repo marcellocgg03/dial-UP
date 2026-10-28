@@ -182,6 +182,19 @@ internal class BridgeHarness(
         prefetch = false,
     )
 
+    /**
+     * The BridgeNetwork newBridge builds, on [ip] (plan 05-07: a move to 127.0.0.2). The responder listens on [ip] only; the
+     * harness's speaker and notify sockets stay the search and notify targets, so a bridge moved to another loopback
+     * address still finds the speaker.
+     */
+    fun network(ip: InetAddress): BridgeNetwork = BridgeNetwork(
+        wifiIp = ip,
+        iface = null,
+        ssdpListen = listOf(ListenSpec("loop", ip, 0, null, false)),
+        ssdpSearchTarget = InetSocketAddress(loopback, speakerSocket.localPort),
+        notifyTarget = InetSocketAddress(loopback, notifySocket.localPort),
+    )
+
     fun newBridge(
         config: Config = testConfig(),
         launcher: PipeLauncher? = null,
@@ -191,13 +204,7 @@ internal class BridgeHarness(
         clock: (() -> Long)? = null,
         housekeepingIntervalMs: Long? = null,
     ): Bridge {
-        val network = BridgeNetwork(
-            wifiIp = loopback,
-            iface = null,
-            ssdpListen = listOf(ListenSpec("loop", loopback, 0, null, false)),
-            ssdpSearchTarget = InetSocketAddress(loopback, speakerSocket.localPort),
-            notifyTarget = InetSocketAddress(loopback, notifySocket.localPort),
-        )
+        val network = network(loopback)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
         val deps = BridgeDeps(
             config, resolver, launcher, lanHttpClient(), { accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
@@ -216,14 +223,17 @@ internal class BridgeHarness(
     }
 
     /** M-SEARCH for the DIAL service from 127.0.0.1 to the responder; the reply text or null. */
-    private fun dialSearch(bridge: Bridge): String? {
+    private fun dialSearch(bridge: Bridge): String? = dialSearchAt(bridge, loopback)
+
+    /** The same M-SEARCH, sent to the responder's listen socket on [ip] (it listens on one address only). */
+    fun dialSearchAt(bridge: Bridge, ip: InetAddress): String? {
         val port = bridge.ssdpPorts().getValue("loop")
         DatagramSocket(InetSocketAddress(loopback, 0)).use { s ->
             s.soTimeout = 1500
             val msg = (
                 "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: $DIAL_SEARCH_TARGET\r\n\r\n"
                 ).toByteArray(Charsets.UTF_8)
-            s.send(DatagramPacket(msg, msg.size, InetSocketAddress(loopback, port)))
+            s.send(DatagramPacket(msg, msg.size, InetSocketAddress(ip, port)))
             val buf = ByteArray(4096)
             val p = DatagramPacket(buf, buf.size)
             return try {
@@ -235,7 +245,7 @@ internal class BridgeHarness(
         }
     }
 
-    private fun header(reply: String, name: String): String? =
+    fun header(reply: String, name: String): String? =
         reply.lines().firstOrNull { it.startsWith("$name:", ignoreCase = true) }?.substringAfter(':')?.trim()
 
     /** Finds the receiver by M-SEARCH, reads its description and posts the DIAL launch (BridgeTest steps 2 and 3). */
