@@ -56,6 +56,7 @@ fun configSummary(result: ConfigFileResult): JsonObject {
             "flacBits" to JsonPrimitive(c.flacBits),
             "ytdlpVerbose" to JsonPrimitive(c.ytdlpVerbose),
             "ffmpegLogLevel" to JsonPrimitive(c.ffmpegLogLevel),
+            "logLevel" to JsonPrimitive(c.logLevel),
             "prefetch" to JsonPrimitive(c.prefetch),
             "gapless" to JsonPrimitive(c.gapless),
             "cacheMb" to JsonPrimitive(c.cacheMb),

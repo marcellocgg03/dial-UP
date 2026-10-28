@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
-    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config")
+    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "net-rebind")
 
     private val lifecycle = Mutex()
     private var host: SpikeHost? = null
@@ -58,6 +58,13 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var countJob: Job? = null
     private var updaterJob: Job? = null
     private var settings: Settings? = null
+
+    /**
+     * Carry-over (c) test switch: when false a Wi-Fi change no longer rebinds the bridge (`net-rebind mode=off`).
+     * In memory only, so every service start begins with it on; a switch left off across a restart would silently
+     * stop the bridge from following the Wi-Fi. `reload-config` ignores it.
+     */
+    @Volatile private var rebindEnabled = true
 
     @Volatile private var bridge: Bridge? = null
 
@@ -135,7 +142,23 @@ class CastFeature : SpikeFeature, CastCountSource {
             scheduleRebind("config")
             CommandReply(true, """{"ok":true,"note":"restarting the bridge; playback is interrupted"}""")
         }
+        "net-rebind" -> netRebindCommand(args["mode"])
         else -> CommandReply(false, """{"error":"unknown command"}""")
+    }
+
+    private fun netRebindCommand(mode: String?): CommandReply {
+        when (mode) {
+            null -> Unit
+            "on", "off" -> {
+                val on = mode == "on"
+                if (on != rebindEnabled) {
+                    rebindEnabled = on
+                    host?.evidence?.event("net", mapOf("rebindSwitch" to mode, "source" to "adb"))
+                }
+            }
+            else -> return CommandReply(false, """{"error":"mode must be on or off"}""")
+        }
+        return CommandReply(true, """{"ok":true,"netRebind":"${if (rebindEnabled) "on" else "off"}"}""")
     }
 
     override fun state(): JsonObject {
@@ -143,6 +166,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         val extra = mapOf(
             "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
             "denied" to JsonPrimitive(denied.get()),
+            "netRebind" to JsonPrimitive(if (rebindEnabled) "on" else "off"),
         )
         val config = configSummaryJson
         return JsonObject(if (config == null) base + extra else base + extra + ("config" to config))
@@ -164,6 +188,8 @@ class CastFeature : SpikeFeature, CastCountSource {
         val payloads = h.payloads()
         val cacheDir = File(h.context.cacheDir, "yt-dlp").also { it.mkdirs() }
         val loaded = loadAppConfig(h.context.filesDir)
+        // D-11: reload-config and every Wi-Fi rebind pass through here, so a changed logLevel applies before the config event
+        h.evidence.setLevel(logLevelOf(loaded.config.logLevel))
         configSummaryJson = configSummary(loaded)
         h.evidence.event("config", configEvidenceFields(loaded))
         loaded.warnings.take(MAX_CONFIG_WARNING_EVENTS).forEach { h.evidence.event("config-warning", mapOf("text" to it)) }
@@ -236,6 +262,10 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     private fun scheduleRebind(reason: String) {
         val h = host ?: return
+        if (!rebindEnabled && reason != "config") {
+            h.evidence.event("net", mapOf("rebind" to false, "reason" to reason, "skipped" to "disabled"))
+            return
+        }
         rebindJob?.cancel()
         rebindJob = h.scope.launch {
             delay(REBIND_DEBOUNCE_MS)
