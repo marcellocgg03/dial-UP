@@ -46,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -115,10 +116,21 @@ data class BridgeDeps(
     val innerTubeEndpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
     val sourceDownloader: SourceDownloader? = null,
     val upstreamPolicy: UpstreamPolicy = UpstreamPolicy.GOOGLEVIDEO,
+    /** Wall clock in ms: it keeps counting while the CPU sleeps, unlike delay and nanoTime (RESEARCH Pitfall 3). Tests inject one. */
+    val clock: () -> Long = System::currentTimeMillis,
+    /** How often the bridge runs [Bridge.housekeeping] by itself while the CPU is awake. */
+    val housekeepingIntervalMs: Long = HOUSEKEEPING_INTERVAL_MS,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
 private const val DROP_LOG_WINDOW_MS = 60_000L
+
+/**
+ * D-06: how often the bridge re-announces (LAN mode), probes its own SSDP listener and searches for speakers. Five minutes
+ * is six times inside the advertised max-age of 1800 s (SsdpMessage CACHE-CONTROL); there is no jitter because one host
+ * sends it.
+ */
+const val HOUSEKEEPING_INTERVAL_MS = 300_000L
 
 /** How long a housekeeping run waits for its own listener to hear the probe datagram. */
 private const val PROBE_TIMEOUT_MS = 2000L
@@ -147,6 +159,9 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /** Serialises the network housekeeping, so two triggers never probe and reopen sockets at the same time. */
     private val netLock = Mutex()
+
+    /** Wall-clock time the last run started; null before the first. Guards against a timer tick and an alarm tick doubling up. */
+    @Volatile private var lastHousekeepingAt: Long? = null
 
     private val dropLogged = ConcurrentHashMap<String, Long>()
 
@@ -286,7 +301,14 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             ssdp = client
 
             handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
-            reg.launchSchedules(handlerScope) { client.search(RENDERER_ST, 3) }
+            // reads the field, so a later replacement of the client is followed (plan 05-07)
+            reg.launchSchedules(handlerScope) { ssdp?.search(RENDERER_ST, 3) }
+            handlerScope.launch {
+                while (true) {
+                    delay(deps.housekeepingIntervalMs)
+                    housekeeping("timer")
+                }
+            }
             emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
         } catch (t: Throwable) {
             failure("start", t)
@@ -413,6 +435,14 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     suspend fun housekeeping(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
         return try {
+            // a timer tick and an alarm tick (plan 05-11) must not double up; the adb trigger is a person asking
+            val now = deps.clock()
+            val last = lastHousekeepingAt
+            if (trigger != "adb" && last != null && now - last < deps.housekeepingIntervalMs / 2) {
+                emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to now - last)
+                return false
+            }
+            lastHousekeepingAt = now
             netLock.withLock { runHousekeeping(trigger) }
         } catch (e: CancellationException) {
             throw e
@@ -425,6 +455,18 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     private suspend fun runHousekeeping(trigger: String): Boolean {
         if (stopped.get()) return false
         val resp = responder ?: return false
+        val t0 = System.nanoTime()
+        // refresh the speakers too: the in-process discovery timer may have slept through the last interval
+        val client = ssdp
+        val searched = client != null && try {
+            withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("housekeeping-search", t)
+            false
+        }
         if (accessPolicy?.announceAllowed() == true) {
             withContext(Dispatchers.IO) { resp.announce() }
             emit("reannounce", "mode" to "lan", "trigger" to trigger, "devices" to registry?.renderers().orEmpty().size)
@@ -438,6 +480,7 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             val again = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
             emit("ssdp-probe", "ok" to again, "restarted" to restarted, "trigger" to trigger)
         }
+        emit("housekeeping", "trigger" to trigger, "ran" to true, "searched" to searched, "ms" to (System.nanoTime() - t0) / 1_000_000)
         return true
     }
 
