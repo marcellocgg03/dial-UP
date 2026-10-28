@@ -6,6 +6,7 @@ package dev.t2u.renderer
 //
 // Every test is `= h.run<Unit> { ... }`: JUnit silently skips a test whose expression body returns a value.
 
+import kotlinx.coroutines.delay
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -165,5 +166,83 @@ class BridgeRebindTest {
         bridge.rebindNetwork(h.network(other))
         bridge.networkLost()
         assertTrue(h.events.drop(marker).none { it.first == "bridge" })
+    }
+
+    // ------------------------------------------------------------------------------------------ renderers follow the move (plan 05-08)
+
+    private fun hostOf(uri: String): String = URI(uri).host
+
+    private fun rendererStatus(bridge: Bridge): String =
+        Regex("\"status\":\"(\\w+)\"").find(bridge.state()["renderers"].toString())!!.groupValues[1]
+
+    /** Starts the bridge, pairs the sender and casts [video] alone; returns once the speaker was told to load something new. */
+    private suspend fun cast(bridge: Bridge, video: String) {
+        val before = h.setAvTransportUris().size
+        h.innerTube.scriptNext(video, previousId = null, nextId = null)
+        h.rpc("cl", "setPlaylist", h.playlist(video))
+        h.awaitUntil("SetAVTransportURI for $video") { h.setAvTransportUris().size > before }
+    }
+
+    @Test
+    @DisplayName("after a move a new cast streams from the new address")
+    fun aNewCastAfterAMoveUsesTheNewAddress() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(other))
+        cast(bridge, "AAAAAAAAAAA")
+
+        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris().last()))
+    }
+
+    @Test
+    @DisplayName("while the network is down no speaker poll runs and a stop on the speaker is not mirrored; after the move polling resumes")
+    fun pollsPauseWhileTheNetworkIsDown() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        cast(bridge, "AAAAAAAAAAA")
+        h.awaitUntil("a poll ran") { h.speakerCount("GetTransportInfo") > 0 }
+        h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
+
+        bridge.networkLost()
+        // the stream broke on the speaker: with polls running the renderer would mirror this stop to the phone
+        h.fakeRenderer.state.transport = "STOPPED"
+        delay(150) // a poll that was already sending finishes
+        val polled = h.speakerCount("GetTransportInfo")
+        delay(800) // eight poll intervals
+        assertEquals(polled, h.speakerCount("GetTransportInfo"), "no poll while the network is down")
+        assertEquals("PLAYING", rendererStatus(bridge), "the phone still sees the player playing")
+        assertTrue(h.events.none { it.first == "renderer" && (it.second["message"] as? String)?.contains("mirroring the stop") == true })
+
+        h.fakeRenderer.state.transport = "PLAYING"
+        bridge.rebindNetwork(h.network(other))
+        h.awaitUntil("polling resumes after the move") { h.speakerCount("GetTransportInfo") > polled }
+    }
+
+    @Test
+    @DisplayName("a track loaded before the move is not released as another source by the polls that follow the move")
+    fun anOldAddressTrackIsNotAnotherSource() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        h.connectSender()
+        cast(bridge, "AAAAAAAAAAA")
+        val old = h.setAvTransportUris().first()
+        assertEquals("127.0.0.1", hostOf(old))
+        h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
+        // the speaker keeps reporting the old-address URL, as one whose connection broke does
+        h.fakeRenderer.state.reportedUri = old
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(other))
+        delay(1000) // ten poll intervals, five times the foreign-poll debounce
+
+        assertTrue(h.events.none { it.first == "renderer" && (it.second["message"] as? String)?.contains("taken over") == true }, "not released as another source")
+        assertEquals("PLAYING", rendererStatus(bridge))
     }
 }
