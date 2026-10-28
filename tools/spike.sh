@@ -21,7 +21,7 @@ Subcommands:
   cmd NAME [key=value ...]   send a command to the running service and print its JSON reply
   dump-state                 one flat line: mcast=<bool> wifi=<bool> wake=<bool> ip=<ip> idle=<bool> interactive=<bool>
   wait FILE [timeoutSec]     poll (every 5 s, default 900 s) until files/evidence/FILE exists; exit 1 on timeout
-  pull DEST                  copy files/evidence/* and the T2U logcat into DEST
+  pull DEST                  copy files/evidence/*, the external logs directory (tools/pull-logs.sh) and the T2U logcat into DEST
   open                       start the app, which starts the foreground service
   ip                         print the phone's Wi-Fi IPv4 address
   facts                      print phone model, OS and YouTube app versions
@@ -180,6 +180,10 @@ cmd_pull() {
     adb_ exec-out run-as dev.t2u.spike cat "$EVIDENCE_REL/$name" >"$dest/$name"
   done <<<"$names"
   adb_ logcat -d -v threadtime -s 'T2U:*' >"$dest/logcat-T2U.txt"
+  # the event log moved to the external files dir (plan 05-01); bring it too so earlier pull habits keep working
+  if ! "$ROOT/tools/pull-logs.sh" "$dest" >/dev/null 2>&1; then
+    echo "spike: no external logs directory on the phone (the log may be in the internal evidence dir); skipped tools/pull-logs.sh" >&2
+  fi
   # Other LAN devices embed their MAC address in SSDP USN values (uuid:aa:bb:cc:dd:ee:ff::...); the
   # evidence is committed, so MAC-shaped strings are masked right after the pull (threat T-01-20).
   sed -i -E 's/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g' "$dest/logcat-T2U.txt" "$dest"/*.jsonl* "$dest"/*.json 2>/dev/null || true

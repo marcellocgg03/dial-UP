@@ -68,6 +68,10 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
     private val startedAtMs = SystemClock.elapsedRealtime()
+
+    /** The cast count last seen by [castCountLoop]; the heartbeat carries it so a sleep window shows whether casting was on. */
+    @Volatile
+    private var casting = 0
     private var lastNotifiedText: String = notificationText(CastCount(0, 0))
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -253,7 +257,19 @@ class BridgeService : Service(), SpikeHost {
             // difference between two heartbeats shows how long the CPU slept (Pitfall 3)
             "elapsedRealtimeMs" to SystemClock.elapsedRealtime(),
             "uptimeMillis" to SystemClock.uptimeMillis(),
+            "standbyBucket" to standbyBucket(),
+            "casting" to casting,
         )
+    }
+
+    /** The app's own standby bucket (API 28+, no permission needed for one's own package), else null. */
+    private fun standbyBucket(): Int? {
+        if (Build.VERSION.SDK_INT < 28) return null
+        return try {
+            getSystemService(android.app.usage.UsageStatsManager::class.java)?.appStandbyBucket
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /** Live state snapshot; also the content of evidence/state.json and the dump-state reply. */
@@ -340,6 +356,7 @@ class BridgeService : Service(), SpikeHost {
      */
     private suspend fun castCountLoop() {
         sumCastCounts(features.filterIsInstance<CastCountSource>()).collect { count ->
+            casting = count.casting
             evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             val text = notificationText(count)
             if (text != lastNotifiedText) {
