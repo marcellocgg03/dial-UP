@@ -56,6 +56,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -118,6 +120,9 @@ data class BridgeDeps(
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
 private const val DROP_LOG_WINDOW_MS = 60_000L
 
+/** How long a housekeeping run waits for its own listener to hear the probe datagram. */
+private const val PROBE_TIMEOUT_MS = 2000L
+
 class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     private val started = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
@@ -136,6 +141,12 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     @Volatile private var registry: RendererRegistry? = null
 
     @Volatile private var effective: Config? = null
+
+    /** The access policy the responder and the receivers share; housekeeping reads it to decide whether to announce. */
+    @Volatile private var accessPolicy: DialAccessPolicy? = null
+
+    /** Serialises the network housekeeping, so two triggers never probe and reopen sockets at the same time. */
+    private val netLock = Mutex()
 
     private val dropLogged = ConcurrentHashMap<String, Long>()
 
@@ -204,6 +215,7 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             effective = config
 
             val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(wifi, "127.0.0.1", "::1") })
+            accessPolicy = policy
 
             val resp = SsdpResponder(
                 net.ssdpListen,
@@ -389,6 +401,44 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     /** Sends ssdp:alive for every receiver again (a no-op in phone mode, where announcing is not allowed). */
     fun reannounce() {
         responder?.announce()
+    }
+
+    /**
+     * The periodic safety net for discovery (D-06, Phase 1 carry-over d). In LAN mode it sends ssdp:alive for every
+     * receiver again; in phone-only mode it sends nothing (the receivers must stay invisible to the LAN) and logs why.
+     * In both modes it proves that the responder's own listener still receives, by sending itself one probe, and on
+     * silence it reopens the listen sockets (a socket-level repair, never a bridge rebind) and probes once more.
+     * Returns true when the run happened; false when the bridge is not running or the run failed (also logged).
+     */
+    suspend fun housekeeping(trigger: String): Boolean {
+        if (!started.get() || stopped.get()) return false
+        return try {
+            netLock.withLock { runHousekeeping(trigger) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("housekeeping", t)
+            false
+        }
+    }
+
+    private suspend fun runHousekeeping(trigger: String): Boolean {
+        if (stopped.get()) return false
+        val resp = responder ?: return false
+        if (accessPolicy?.announceAllowed() == true) {
+            withContext(Dispatchers.IO) { resp.announce() }
+            emit("reannounce", "mode" to "lan", "trigger" to trigger, "devices" to registry?.renderers().orEmpty().size)
+        } else {
+            emit("reannounce", "mode" to "phone", "skipped" to "phone-only", "trigger" to trigger)
+        }
+        val ok = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
+        emit("ssdp-probe", "ok" to ok, "trigger" to trigger)
+        if (!ok) {
+            val restarted = withContext(Dispatchers.IO) { resp.restartListeners() }
+            val again = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
+            emit("ssdp-probe", "ok" to again, "restarted" to restarted, "trigger" to trigger)
+        }
+        return true
     }
 
     /** The port each responder listen socket bound, by spec id. */

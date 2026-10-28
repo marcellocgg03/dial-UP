@@ -7,7 +7,10 @@ import java.net.MulticastSocket
 import java.net.NetworkInterface
 import java.net.SocketAddress
 import java.net.SocketTimeoutException
+import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * One multicast listen socket. [bindAddress] null means the wildcard. When [joinInterface] is set the
@@ -57,6 +60,8 @@ class SsdpResponder(
     private val announcePolicy: () -> Boolean = { true },
     /** Where NOTIFY goes; null means the SSDP group on [groupPort]. Tests point it at a unicast socket. */
     private val notifyTarget: InetSocketAddress? = null,
+    /** Where [selfProbe] sends its datagram; null means the first listener on loopback, else the SSDP group on [groupPort]. */
+    private val probeTarget: InetSocketAddress? = null,
 ) {
     private class Listener(val spec: ListenSpec, val socket: MulticastSocket) {
         lateinit var thread: Thread
@@ -73,6 +78,14 @@ class SsdpResponder(
 
     @Volatile private var running = false
 
+    /** Serialises start, stop and [restartListeners], so a reopen never races a stop. */
+    private val lifecycle = Any()
+
+    /** Probes in flight: nonce -> latch counted down when our own listener hears that probe. */
+    private val pendingProbes = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+
+    private val random = SecureRandom()
+
     fun register(device: SsdpDevice) {
         devices.removeIf { it.uuid == device.uuid }
         devices.add(device)
@@ -84,10 +97,9 @@ class SsdpResponder(
 
     fun boundPorts(): Map<String, Int> = bound.toMap()
 
-    fun start() {
+    fun start() = synchronized(lifecycle) {
         check(!running) { "already started" }
         running = true
-        val group = InetAddress.getByName(SsdpConstants.GROUP)
 
         replySocket = try {
             MulticastSocket(InetSocketAddress(replyBind, 0)).apply {
@@ -99,6 +111,12 @@ class SsdpResponder(
             null
         }
 
+        openListeners()
+    }
+
+    /** Opens one multicast listen socket per [ListenSpec] and starts its receive thread. A failed bind is reported through onBind. */
+    private fun openListeners() {
+        val group = InetAddress.getByName(SsdpConstants.GROUP)
         for (spec in listen) {
             try {
                 val sock = MulticastSocket(null as SocketAddress?)
@@ -163,16 +181,70 @@ class SsdpResponder(
         }
     }
 
-    fun stop() {
-        if (!running) return
+    fun stop() = synchronized(lifecycle) {
+        if (!running) return@synchronized
         sendNotifies("ssdp:byebye", devices)
         running = false
+        closeListeners()
+        runCatching { replySocket?.close() }
+        replySocket = null
+    }
+
+    private fun closeListeners() {
         for (l in listeners) runCatching { l.socket.close() }
         for (l in listeners) runCatching { l.thread.join(3000) }
         listeners.clear()
         bound.clear()
-        runCatching { replySocket?.close() }
-        replySocket = null
+    }
+
+    /**
+     * Closes every listen socket and opens them again, on the same specs (D-06, Phase 1 carry-over d). The reply socket,
+     * the registered devices and the bridge are untouched: this is a socket-level repair for a listener that went deaf
+     * (a multicast membership the OS dropped), never a rebind. Returns how many listeners are bound now; 0 when the
+     * responder is not running.
+     */
+    fun restartListeners(): Int = synchronized(lifecycle) {
+        if (!running) return@synchronized 0
+        closeListeners()
+        openListeners()
+        listeners.size
+    }
+
+    /** Closes the listen sockets only, leaving the responder "running" but deaf, so tests can exercise [restartListeners]. */
+    internal fun closeListenersForTest() = synchronized(lifecycle) { closeListeners() }
+
+    /**
+     * Proves this responder's own listener still receives: sends one M-SEARCH whose ST is a random nonce
+     * ([PROBE_ST_PREFIX] + 16 hex characters) and waits up to [timeoutMs] for the listener to see it. The probe carries
+     * no device name, UUID or location, is never answered and never reaches the SSDP client (handled first in [handle]).
+     * False when the responder is not running, has no reply socket, or heard nothing in time.
+     */
+    fun selfProbe(timeoutMs: Long = 2000): Boolean {
+        val sock = replySocket
+        if (!running || sock == null) return false
+        val target: InetSocketAddress = if (probeTarget != null) {
+            probeTarget
+        } else if (replyBind.isLoopbackAddress) {
+            // JVM tests: never multicast; aim at our own first listener
+            val l = listeners.firstOrNull() ?: return false
+            InetSocketAddress(l.spec.bindAddress ?: replyBind, l.socket.localPort)
+        } else {
+            InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), groupPort)
+        }
+        val nonce = ByteArray(8).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        val latch = CountDownLatch(1)
+        pendingProbes[nonce] = latch
+        try {
+            val msg = "M-SEARCH * HTTP/1.1\r\nHOST: ${SsdpConstants.GROUP}:${SsdpConstants.PORT}\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\n" +
+                "ST: $PROBE_ST_PREFIX$nonce\r\n\r\n"
+            val bytes = msg.toByteArray(Charsets.UTF_8)
+            sock.send(DatagramPacket(bytes, bytes.size, target))
+            return latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: java.io.IOException) {
+            return false
+        } finally {
+            pendingProbes.remove(nonce)
+        }
     }
 
     private fun receiveLoop(l: Listener) {
@@ -204,6 +276,11 @@ class SsdpResponder(
         if (!msg.startLine.uppercase().startsWith("M-SEARCH")) return
         if (!msg.headers["MAN"].orEmpty().lowercase().contains("ssdp:discover")) return
         val st = msg.headers["ST"] ?: return
+        // our own liveness probe: counted, then dropped before any device match, rate limit or drop log
+        if (st.startsWith(PROBE_ST_PREFIX)) {
+            pendingProbes[st.removePrefix(PROBE_ST_PREFIX)]?.countDown()
+            return
+        }
         // searches for types none of our devices answers are not ours to refuse or log
         if (devices.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return
         if (!replyPolicy(src.address)) {
@@ -248,6 +325,7 @@ class SsdpResponder(
     }
 
     private companion object {
+        const val PROBE_ST_PREFIX = "urn:dev-t2u:probe:"
         const val MAX_REPLIES_PER_SECOND = 32
         const val WINDOW_NANOS = 1_000_000_000L
     }
