@@ -467,6 +467,8 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             failure("housekeeping-search", t)
             false
         }
+        // the registry defers its first prune after a long sleep until a search ran (plan 05-04)
+        if (searched) registry?.searched()
         if (accessPolicy?.announceAllowed() == true) {
             withContext(Dispatchers.IO) { resp.announce() }
             emit("reannounce", "mode" to "lan", "trigger" to trigger, "devices" to registry?.renderers().orEmpty().size)

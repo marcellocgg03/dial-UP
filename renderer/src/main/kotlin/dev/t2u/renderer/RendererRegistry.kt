@@ -82,6 +82,9 @@ class RendererRegistry(
     private val pending = HashSet<String>()
     private val guardLogged = HashSet<String>()
 
+    /** Epoch ms (of [clock]) of the last MediaRenderer search, from the schedule or from Bridge.housekeeping. */
+    @Volatile private var lastSearchAt: Long = clock()
+
     private val _renderersFlow = MutableStateFlow<List<ManagedRenderer>>(emptyList())
     private val _count = MutableStateFlow(0)
 
@@ -332,6 +335,14 @@ class RendererRegistry(
         removeRenderer(udn)
     }
 
+    /**
+     * Records that a MediaRenderer search just ran, so the next prune knows the speakers had a chance to answer.
+     * The schedule calls it after each of its searches; Bridge.housekeeping calls it after its own.
+     */
+    fun searched() {
+        lastSearchAt = clock()
+    }
+
     /** index.js prune: removes every renderer that has not been seen for maxAge x 1.5. */
     suspend fun prune() {
         val now = clock()
@@ -387,15 +398,20 @@ class RendererRegistry(
                 log("failed", "-", reason = "schedule: ${e.message ?: e.javaClass.simpleName}")
             }
         }
-        safe { search() }
+        // every search the schedule starts counts as a fresh chance for the speakers to answer
+        suspend fun searchNow() {
+            safe { search() }
+            searched()
+        }
+        searchNow()
         launch {
             delay(5_000)
-            safe { search() }
+            searchNow()
         }
         launch {
             while (true) {
                 delay(config.discoveryIntervalS * 1000L)
-                safe { search() }
+                searchNow()
             }
         }
         launch {
@@ -407,7 +423,15 @@ class RendererRegistry(
         launch {
             while (true) {
                 delay(config.pruneIntervalS * 1000L)
-                safe { prune() }
+                // After a sleep the phone's timers fire at once and every speaker looks stale although it simply could
+                // not announce itself (RESEARCH: wall-clock deltas after sleep). Search first, prune on the next round.
+                val sinceSearch = clock() - lastSearchAt
+                if (sinceSearch > config.discoveryIntervalS * 1000L * 2) {
+                    log("prune-deferred", "-", reason = "last search ${sinceSearch / 1000} s ago")
+                    searchNow()
+                } else {
+                    safe { prune() }
+                }
             }
         }
     }
