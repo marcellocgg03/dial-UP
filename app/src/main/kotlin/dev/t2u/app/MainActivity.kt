@@ -8,71 +8,79 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import java.io.File
 
 /**
- * No GUI (decisions D-02, D-05). First launch: ask for POST_NOTIFICATIONS, then the
- * battery-optimisation exemption, start the foreground service and finish. A marker file in
- * filesDir records that the flow ran; later launches only start the service when it is not running.
- * Each step continues whatever the user answered, so a refusal never blocks the service.
+ * No GUI (decisions D-02, D-05). Opening the app asks for POST_NOTIFICATIONS once (first launch,
+ * marker file in filesDir) and for the battery-optimisation exemption on every open until it is
+ * granted (D-13). The bridge needs the exemption (D-12): after the dialog the exemption is read
+ * again and the service is started only when it is held; a refusal shows nothing else and starts
+ * nothing. Once the exemption is granted, later opens start the service when it is not running and
+ * close at once. The steps come from the pure [launchSteps] and [afterExemptionDialog].
  */
 class MainActivity : Activity() {
     private val marker: File get() = File(filesDir, FIRST_LAUNCH_MARKER)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (marker.exists()) {
-            Log.i(TAG, "later launch: no prompts")
-            startServiceIfNeeded()
-            finish()
-            return
-        }
-        Log.i(TAG, "first launch: running the permission flow")
-        stepNotifications()
+        val steps = launchSteps(
+            markerExists = marker.exists(),
+            sdk = Build.VERSION.SDK_INT,
+            notificationsGranted = notificationsGranted(),
+            exempt = BatteryGate.isOpen(this),
+        )
+        Log.i(TAG, "open: steps=$steps")
+        run(steps.first())
     }
 
-    /** Step 1: POST_NOTIFICATIONS on API 33+. */
-    private fun stepNotifications() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.i(TAG, "step 1: requesting POST_NOTIFICATIONS")
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
-            return
+    private fun run(step: LaunchStep) {
+        when (step) {
+            LaunchStep.ASK_NOTIFICATIONS -> {
+                Log.i(TAG, "requesting POST_NOTIFICATIONS")
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
+            }
+            LaunchStep.ASK_EXEMPTION -> askExemption()
+            LaunchStep.START_SERVICE -> {
+                writeMarker()
+                startServiceIfNeeded()
+                finish()
+            }
+            LaunchStep.FINISH_WITHOUT_SERVICE -> {
+                // the marker is written so notifications are not asked again (D-12)
+                writeMarker()
+                Log.i(TAG, "battery exemption missing: the bridge was not started")
+                finish()
+            }
         }
-        Log.i(TAG, "step 1: POST_NOTIFICATIONS already granted or not needed")
-        stepBatteryExemption()
     }
+
+    private fun notificationsGranted(): Boolean =
+        Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQ_NOTIFICATIONS) return
-        Log.i(TAG, "step 1: POST_NOTIFICATIONS answered granted=${grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED}")
-        stepBatteryExemption()
+        Log.i(TAG, "POST_NOTIFICATIONS answered granted=${grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED}")
+        // the answer never blocks the next step: ask for the exemption, or start if it is already held
+        run(if (BatteryGate.isOpen(this)) LaunchStep.START_SERVICE else LaunchStep.ASK_EXEMPTION)
     }
 
-    /** Step 2: the battery-optimisation exemption through the system dialog. */
+    /** The battery-optimisation exemption through the system dialog. */
     @android.annotation.SuppressLint("BatteryLife")
-    private fun stepBatteryExemption() {
-        val power = getSystemService(PowerManager::class.java)
-        if (power.isIgnoringBatteryOptimizations(packageName)) {
-            Log.i(TAG, "step 2: battery exemption already granted")
-            stepFinish()
-            return
-        }
-        Log.i(TAG, "step 2: requesting the battery-optimisation exemption")
+    private fun askExemption() {
+        Log.i(TAG, "requesting the battery-optimisation exemption")
         try {
             startActivityForResult(
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
                 REQ_BATTERY,
             )
         } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "step 2: no activity for the battery exemption intent, continuing", e)
-            stepFinish()
+            Log.w(TAG, "no activity for the battery exemption intent, not starting the bridge", e)
+            run(LaunchStep.FINISH_WITHOUT_SERVICE)
         }
     }
 
@@ -80,20 +88,16 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQ_BATTERY) return
-        Log.i(TAG, "step 2: battery exemption dialog closed, resultCode=$resultCode")
-        stepFinish()
+        Log.i(TAG, "battery exemption dialog closed, resultCode=$resultCode")
+        run(afterExemptionDialog(BatteryGate.isOpen(this)))
     }
 
-    /** Step 3: write the marker, start the service, finish. */
-    private fun stepFinish() {
+    private fun writeMarker() {
         try {
             marker.writeText("done\n")
         } catch (t: Throwable) {
-            Log.w(TAG, "step 3: could not write the first-launch marker", t)
+            Log.w(TAG, "could not write the first-launch marker", t)
         }
-        startServiceIfNeeded()
-        Log.i(TAG, "step 3: first-launch flow done")
-        finish()
     }
 
     private fun startServiceIfNeeded() {
