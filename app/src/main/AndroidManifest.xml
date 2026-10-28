@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Sonos SOAP and device descriptions are plain HTTP to private LAN IPs. -->
     <!-- Do not set the native-library extraction attribute here: AGP injects it from
@@ -44,6 +45,16 @@
             android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="dev.t2u.spike.CMD" />
+            </intent-filter>
+        </receiver>
+
+        <!-- BOOT_COMPLETED is a protected broadcast, so only the system can send it. Not exported (least
+             privilege); plan 05-12 checks on the phone that a non-exported receiver still gets it (RESEARCH A1). -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 
