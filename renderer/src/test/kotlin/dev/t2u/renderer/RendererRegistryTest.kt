@@ -48,6 +48,13 @@ private class FakeManagedRenderer(
     val initCalls = java.util.concurrent.atomic.AtomicInteger()
     val destroyCalls = java.util.concurrent.atomic.AtomicInteger()
     val refreshCalls = java.util.concurrent.atomic.AtomicInteger()
+    val reviveCalls = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile var reviveResult: suspend (Long) -> Boolean? = { null }
+
+    override suspend fun reviveIfDue(now: Long): Boolean? {
+        reviveCalls.incrementAndGet()
+        return reviveResult(now)
+    }
 
     override fun refresh(maxAge: Int) {
         refreshCalls.incrementAndGet()
@@ -76,9 +83,11 @@ class RendererRegistryTest {
 
     private class Events : EventSink {
         val list = CopyOnWriteArrayList<Map<String, Any?>>()
+        val retries = CopyOnWriteArrayList<Map<String, Any?>>()
 
         override fun event(kind: String, fields: Map<String, Any?>) {
             if (kind == "discovery") list.add(fields)
+            if (kind == "retry") retries.add(fields)
         }
 
         fun named(event: String) = list.filter { it["event"] == event }
@@ -442,5 +451,178 @@ class RendererRegistryTest {
         assertEquals(listOf(0L, 5L, 300L, 600L), searchTimes.toList())
         assertEquals(10, renderer.staleChecks.get())
         job.cancel()
+    }
+
+    // ---- Plan 05-04 Task 1: the 5-minute retry of a failed setup (D-05) ----
+
+    @Test
+    @DisplayName("a setup that failed is retried by the timer every 5 minutes without a new alive until it works")
+    fun retryTimerRetriesFailedSetupForever() = runBlocking {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(initBehaviour = { if (failures.incrementAndGet() <= 3) throw java.io.IOException("boom") else true })
+        h.alive()
+        assertEquals(1, failures.get())
+        assertEquals(0, h.registry.count.value)
+
+        h.now.addAndGet(4 * 60_000L)
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(1, h.created.size)
+        assertTrue(h.events.retries.isEmpty())
+
+        h.now.addAndGet(60_000L)
+        assertEquals(1, h.registry.retryDue())
+        assertEquals(2, h.created.size)
+        assertEquals(1, h.events.retries.size)
+        val first = h.events.retries[0]
+        assertEquals("failed", first["reason"])
+        assertEquals("Kitchen".lowercase(), (first["udn"] as String).lowercase())
+        assertEquals(kitchenLocation, first["location"])
+        assertEquals(1, first["attempt"])
+        assertEquals("failed", first["outcome"])
+        assertEquals("boom", first["error"])
+
+        // not due again until 5 more minutes have passed
+        h.now.addAndGet(4 * 60_000L)
+        assertEquals(0, h.registry.retryDue())
+        h.now.addAndGet(60_000L)
+        assertEquals(1, h.registry.retryDue())
+        assertEquals(2, h.events.retries[1]["attempt"])
+        assertEquals("failed", h.events.retries[1]["outcome"])
+
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        assertEquals(1, h.registry.retryDue())
+        assertEquals(3, h.events.retries[2]["attempt"])
+        assertEquals("added", h.events.retries[2]["outcome"])
+        assertEquals(1, h.registry.count.value)
+        // remembered port is claimed again and the skip is gone
+        assertEquals(3000, h.created.last().port)
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS * 3)
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(4, h.created.size)
+        assertEquals(1, h.events.named("added").size)
+        assertEquals(3, h.events.named("failed").size)
+    }
+
+    @Test
+    @DisplayName("a device whose setup returned false is never attempted by the retry timer")
+    fun retryNeverTouchesRejectedDevice() = runBlocking {
+        val h = Harness(initBehaviour = { false })
+        h.alive()
+        assertEquals(1, h.created.size)
+        repeat(5) {
+            h.now.addAndGet(60L * 60 * 1000)
+            assertEquals(0, h.registry.retryDue())
+        }
+        assertEquals(1, h.created.size)
+        assertTrue(h.events.retries.isEmpty())
+    }
+
+    @Test
+    @DisplayName("the retry timer never attempts a UDN that an alive is setting up right now or that already runs")
+    fun retrySkipsPendingAndRunning() = runBlocking {
+        val gate = CompletableDeferred<Boolean>()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(initBehaviour = {
+            when (calls.incrementAndGet()) {
+                1 -> throw java.io.IOException("first")
+                else -> gate.await()
+            }
+        })
+        h.alive()
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        coroutineScope {
+            // a new alive after the skip ran out starts a setup that waits on the gate
+            val pendingAlive = async(Dispatchers.Default) { h.alive() }
+            val end = System.currentTimeMillis() + 3000
+            while (calls.get() < 2 && System.currentTimeMillis() < end) delay(5)
+            assertEquals(2, calls.get())
+            assertEquals(0, h.registry.retryDue())
+            assertEquals(2, h.created.size)
+            gate.complete(true)
+            pendingAlive.await()
+        }
+        assertEquals(1, h.registry.count.value)
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS * 2)
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(2, h.created.size)
+        assertTrue(h.events.retries.isEmpty())
+    }
+
+    @Test
+    @DisplayName("retryDue asks every running renderer to revive and logs a retry event only when one answered")
+    fun retryDueRevivesRunningRenderers() = runBlocking {
+        val h = Harness()
+        h.alive(udn = "A")
+        h.alive(udn = "B", location = "http://192.168.50.43:1400/d.xml", src = "192.168.50.43")
+        h.alive(udn = "C", location = "http://192.168.50.44:1400/d.xml", src = "192.168.50.44")
+        h.created[0].reviveResult = { true }
+        h.created[1].reviveResult = { false }
+        // created[2] answers null: nothing due
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(listOf(1, 1, 1), h.created.map { it.reviveCalls.get() })
+        assertEquals(2, h.events.retries.size)
+        val ok = h.events.retries.single { it["outcome"] == "running" }
+        assertEquals("terminated", ok["reason"])
+        assertEquals(h.created[0].udn, ok["udn"])
+        assertEquals(3000, ok["port"])
+        val bad = h.events.retries.single { it["outcome"] == "failed" }
+        assertEquals("terminated", bad["reason"])
+        assertEquals(h.created[1].udn, bad["udn"])
+    }
+
+    @Test
+    @DisplayName("a revive that throws is logged as a failed retry and does not stop the others")
+    fun reviveThrowIsLogged() = runBlocking {
+        val h = Harness()
+        h.alive(udn = "A")
+        h.alive(udn = "B", location = "http://192.168.50.43:1400/d.xml", src = "192.168.50.43")
+        h.created[0].reviveResult = { throw java.io.IOException("socket closed") }
+        h.created[1].reviveResult = { true }
+        h.registry.retryDue()
+        assertEquals(2, h.events.retries.size)
+        assertEquals("failed", h.events.retries.single { it["udn"] == h.created[0].udn }["outcome"])
+        assertEquals("socket closed", h.events.retries.single { it["udn"] == h.created[0].udn }["error"])
+        assertEquals("running", h.events.retries.single { it["udn"] == h.created[1].udn }["outcome"])
+    }
+
+    @Test
+    @DisplayName("launchSchedules checks for due retries every 10 s")
+    fun schedulesRunRetryDueEveryTenSeconds() = runTest {
+        val h = Harness(initBehaviour = { throw java.io.IOException("down") })
+        h.alive()
+        val job = h.registry.launchSchedules(this) { }
+        runCurrent()
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        advanceTimeBy(RendererRegistry.RETRY_CHECK_MS - 1)
+        assertEquals(1, h.created.size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, h.created.size)
+        assertEquals(1, h.events.retries.size)
+        // the next attempt is 5 minutes after the failed one on the fake clock
+        advanceTimeBy(60_000)
+        assertEquals(2, h.created.size)
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        advanceTimeBy(RendererRegistry.RETRY_CHECK_MS)
+        runCurrent()
+        assertEquals(3, h.created.size)
+        job.cancel()
+    }
+
+    @Test
+    @DisplayName("at most 256 failed speakers are remembered and the earliest retry time goes first")
+    fun skippedMemoryIsCapped() = runBlocking {
+        val h = Harness(initBehaviour = { throw java.io.IOException("down") })
+        repeat(RendererRegistry.MAX_SKIPPED + 1) { i ->
+            h.now.addAndGet(1)
+            h.alive(udn = "U$i")
+        }
+        h.initBehaviour = { true }
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS + 1000)
+        val attempted = h.registry.retryDue()
+        assertEquals(RendererRegistry.MAX_SKIPPED, attempted)
+        assertEquals(RendererRegistry.MAX_SKIPPED, h.registry.count.value)
+        assertFalse(h.registry.renderers().any { it.udn == "u0" })
+        assertTrue(h.registry.renderers().any { it.udn == "u${RendererRegistry.MAX_SKIPPED}" })
     }
 }
