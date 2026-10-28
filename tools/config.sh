@@ -38,7 +38,7 @@ Subcommands:
   --help         show this list
 
 The keys: include, exclude, outputFormat, startTimeoutMs, pollIntervalMs, mp3Bitrate, flacBits,
-ytdlpVerbose, ytdlpChannel, ffmpegLogLevel, prefetch, gapless, cacheMb. The schema is documented in renderer/.../ConfigFile.kt.
+ytdlpVerbose, ytdlpChannel, ffmpegLogLevel, logLevel, prefetch, gapless, cacheMb. The schema is documented in renderer/.../ConfigFile.kt.
 The device is T2U_SERIAL (set by tools/env.sh from .t2u/device) or the only attached adb device.
 EOF
 }
@@ -91,7 +91,7 @@ cmd_check() {
 import json, sys
 path, limit = sys.argv[1], int(sys.argv[2])
 READ = ["include", "exclude", "outputFormat", "startTimeoutMs", "pollIntervalMs",
-        "mp3Bitrate", "flacBits", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel",
+        "mp3Bitrate", "flacBits", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel", "logLevel",
         "prefetch", "gapless", "cacheMb"]
 ON_PURPOSE = ["nameSuffix", "nameTemplate"]
 

@@ -92,6 +92,8 @@ class BridgeService : Service(), SpikeHost {
         val (logDir, where) = logDirFor(getExternalFilesDir(null), filesDir)
         logDir.mkdirs()
         evidence = EvidenceLog(logDir)
+        // D-11: the level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
+        evidence.setLevel(logLevelOf(loadAppConfig(filesDir).config.logLevel))
         ServiceHub.service = this
         evidence.event(
             "service-start",

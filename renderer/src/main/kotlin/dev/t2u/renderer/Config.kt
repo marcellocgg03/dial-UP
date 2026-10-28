@@ -23,6 +23,9 @@ val OUTPUT_FORMATS = setOf("auto", "direct", "mp4", "adts", "flac", "mp3")
 /** The ffmpeg `-loglevel` names a config may select (T-03-09: a whitelist, never free text in an argument list). */
 val FFMPEG_LOG_LEVELS = setOf("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug")
 
+/** The values `logLevel` may take (D-11): what the evidence log and logcat get. Exact lowercase strings. */
+val LOG_LEVELS: Set<String> = setOf("off", "info", "debug")
+
 /** `mp3Bitrate` shape: a number then `k`, 64..320 (checked by [isValidMp3Bitrate]). */
 private val MP3_BITRATE = Regex("""^(\d{2,3})k$""")
 
@@ -83,6 +86,8 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly"
  *   (PLAY-02). Read by the app before every update attempt, so an edited config.json applies at the next one.
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
+ * @property logLevel "off", "info" (the default) or "debug" (SVC-06, D-11): what the app's event log file and logcat get;
+ *   debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs. Applied at service start and at every bridge start.
  * @property outputFormat "auto" (the Node default) walks the format chain direct, mp4, adts, flac, mp3 with the
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
@@ -120,6 +125,7 @@ data class Config(
     val ytdlpVerbose: Boolean = false,
     val ytdlpChannel: String = YTDLP_DEFAULT_CHANNEL,
     val ffmpegLogLevel: String = "error",
+    val logLevel: String = "info",
     val queueSettleTimeoutMs: Long = 10_000,
     val cacheMb: Int = 256,
     val prefetch: Boolean = true,
@@ -134,6 +140,7 @@ data class Config(
         require(isValidMp3Bitrate(mp3Bitrate)) { "mp3Bitrate must be a number from 64 to 320 followed by k" }
         require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
         require(ffmpegLogLevel in FFMPEG_LOG_LEVELS) { "ffmpegLogLevel must be one of ${FFMPEG_LOG_LEVELS.joinToString(", ")}" }
+        require(logLevel in LOG_LEVELS) { "logLevel must be one of ${LOG_LEVELS.joinToString(", ")}" }
         require(nameFilter.problems().isEmpty()) { nameFilter.problems().joinToString("; ") }
         require(receiverBasePort in 1..65535) { "receiverBasePort $receiverBasePort is not a port" }
         require(mediaPort in 1..65535) { "mediaPort $mediaPort is not a port" }

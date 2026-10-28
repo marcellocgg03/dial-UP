@@ -38,7 +38,7 @@ fun loadConfigFile(file: File, base: Config): ConfigFileResult {
 private val KNOWN_KEYS = setOf(
     "include", "exclude", "outputFormat", "startTimeoutMs", "pollIntervalMs",
     "mp3Bitrate", "flacBits", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel",
-    "prefetch", "gapless", "cacheMb",
+    "logLevel", "prefetch", "gapless", "cacheMb",
 )
 
 /**
@@ -61,6 +61,7 @@ private val KNOWN_KEYS = setOf(
  *   "ytdlpVerbose": false,              // boolean
  *   "ytdlpChannel": "stable",           // stable | nightly: the yt-dlp release the daily background update installs
  *   "ffmpegLogLevel": "error",          // quiet panic fatal error warning info verbose debug
+ *   "logLevel": "info",                 // off | info | debug: what the log file and logcat get (debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs)
  *   "prefetch": true,                   // boolean: prepare the next track while the current one plays
  *   "gapless": true,                    // boolean: queue the prepared track on the speaker; no effect when prefetch is false
  *   "cacheMb": 256                      // integer 0..32768: size cap of the converted and downloaded track cache
@@ -105,6 +106,8 @@ fun parseConfigFile(text: String, base: Config): ConfigFileResult {
         ?.let { config = config.copy(ytdlpChannel = it) }
     string(root, "ffmpegLogLevel", warnings, "must be one of ${FFMPEG_LOG_LEVELS.joinToString(", ")}") { it in FFMPEG_LOG_LEVELS }
         ?.let { config = config.copy(ffmpegLogLevel = it) }
+    string(root, "logLevel", warnings, "must be off, info or debug") { it in LOG_LEVELS }
+        ?.let { config = config.copy(logLevel = it) }
     root["prefetch"]?.let { el ->
         val v = (el as? JsonPrimitive)?.takeIf { !it.isString && el !is JsonNull }?.booleanOrNull
         if (v != null) config = config.copy(prefetch = v) else warnings += "prefetch ignored: must be true or false"
