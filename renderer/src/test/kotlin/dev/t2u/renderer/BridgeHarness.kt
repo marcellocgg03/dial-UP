@@ -87,6 +87,9 @@ internal class BridgeHarness(
     val bridges = CopyOnWriteArrayList<Bridge>()
     private val aids = AtomicInteger(100)
 
+    /** How many M-SEARCH datagrams the fake speaker's socket has received (plan 05-02: housekeeping searches). */
+    val searchesSeen = AtomicInteger(0)
+
     /** Answers every M-SEARCH with a MediaRenderer reply whose LOCATION is the fake speaker. */
     private val speakerSocket = DatagramSocket(InetSocketAddress(loopback, 0)).also { it.soTimeout = 200 }
 
@@ -103,6 +106,7 @@ internal class BridgeHarness(
                 break
             }
             if (!String(packet.data, 0, packet.length, Charsets.UTF_8).startsWith("M-SEARCH")) continue
+            searchesSeen.incrementAndGet()
             val reply = (
                 "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
                     "USN: uuid:$HARNESS_RENDERER_UDN::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
@@ -184,6 +188,8 @@ internal class BridgeHarness(
         bufferDir: File? = null,
         sourceDownloader: SourceDownloader? = null,
         upstreamPolicy: UpstreamPolicy? = null,
+        clock: (() -> Long)? = null,
+        housekeepingIntervalMs: Long? = null,
     ): Bridge {
         val network = BridgeNetwork(
             wifiIp = loopback,
@@ -200,6 +206,9 @@ internal class BridgeHarness(
             sourceDownloader = sourceDownloader,
             // null: leave BridgeDeps' own default (googlevideo over https only) in place
             upstreamPolicy = upstreamPolicy ?: UpstreamPolicy.GOOGLEVIDEO,
+            // null: leave BridgeDeps' own defaults (wall clock, 5 minutes) in place
+            clock = clock ?: System::currentTimeMillis,
+            housekeepingIntervalMs = housekeepingIntervalMs ?: HOUSEKEEPING_INTERVAL_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)
