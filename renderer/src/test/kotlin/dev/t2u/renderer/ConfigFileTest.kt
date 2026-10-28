@@ -202,6 +202,26 @@ class ConfigFileTest {
     }
 
     @Test
+    fun logLevelIsOffInfoOrDebugInExactLowercase() {
+        assertEquals("info", parse("{}").config.logLevel)
+        for (ok in listOf("off", "info", "debug")) {
+            val r = parse("""{"logLevel":"$ok"}""")
+            assertEquals(ok, r.config.logLevel)
+            assertEquals(emptyList(), r.warnings, ok)
+        }
+        for (bad in listOf("\"verbose\"", "\"OFF\"", "1", "null", "true", "\"SECRETVALUE\"")) {
+            val r = parse("""{"logLevel":$bad}""")
+            assertEquals("info", r.config.logLevel, bad)
+            assertEquals(1, r.warnings.size, bad)
+            assertContains(r.warnings.single(), "logLevel")
+            assertFalse("verbose" in r.warnings.single() || "OFF" in r.warnings.single() || "SECRETVALUE" in r.warnings.single(), "the warning does not echo the value")
+        }
+        for (ok in listOf("off", "info", "debug")) base.copy(logLevel = ok).validate()
+        val e = assertFailsWith<IllegalArgumentException> { base.copy(logLevel = "loud").validate() }
+        assertContains(e.message.orEmpty(), "logLevel")
+    }
+
+    @Test
     fun prefetchAndGaplessAreStrictBooleans() {
         val defaults = parse("{}").config
         assertTrue(defaults.prefetch)
