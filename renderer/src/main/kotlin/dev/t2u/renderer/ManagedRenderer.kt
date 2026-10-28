@@ -45,6 +45,13 @@ interface ManagedRenderer {
      * on an explicit service Stop, before [destroy].
      */
     suspend fun clearSpeaker() {}
+
+    /**
+     * Brings the speaker's cast receiver back when it stopped itself (a lounge session failed for good) and its
+     * time has come. Returns null when nothing is due, true when a new receiver is running and false when an attempt
+     * failed. The registry calls it for every running speaker on its retry schedule. The default does nothing.
+     */
+    suspend fun reviveIfDue(now: Long): Boolean? = null
 }
 
 /** Creates the renderer for a newly seen speaker; the registry owns the port claim. */

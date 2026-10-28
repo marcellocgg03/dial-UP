@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -50,9 +52,29 @@ class RendererRegistry(
     companion object {
         /** index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. */
         const val RETRY_FAILED_MS = 5 * 60 * 1000L
+
+        /** How often the schedule looks for retries that are due (D-05: an attempt is at most about this late). */
+        const val RETRY_CHECK_MS = 10_000L
+
+        /** The skipped-speaker memory never holds more than this many entries (T-05-10); the earliest retry time goes first. */
+        const val MAX_SKIPPED = 256
+
+        /** How many due setups [retryDue] runs at once. */
+        private const val RETRY_PARALLEL = 8
     }
 
-    private class Skip(val location: String, val until: Long)
+    /**
+     * A device that is not set up. [until] is the epoch ms of its next retry, or Long.MAX_VALUE for a device that
+     * is not a usable renderer (never retried by the timer). [src], [maxAge] and [attempts] let [retryDue] set a
+     * failed device up again without a new alive; [attempts] counts the timer retries already made.
+     */
+    private class Skip(
+        val location: String,
+        val until: Long,
+        val src: InetSocketAddress? = null,
+        val maxAge: Int = 0,
+        val attempts: Int = 0,
+    )
 
     private val lock = Mutex()
     private val running = LinkedHashMap<String, ManagedRenderer>()
@@ -88,6 +110,42 @@ class RendererRegistry(
         } catch (_: Exception) {
             // an event sink must not throw; if it does, discovery goes on
         }
+    }
+
+    /** One `retry` event per attempt (D-05): [reason] failed (a setup) or terminated (a receiver), [outcome] added, failed, skipped or running. */
+    private fun logRetry(
+        reason: String,
+        udn: String,
+        name: String?,
+        location: String?,
+        port: Int?,
+        attempt: Int?,
+        outcome: String,
+        error: String? = null,
+    ) {
+        val fields = LinkedHashMap<String, Any?>()
+        fields["reason"] = reason
+        fields["udn"] = udn
+        fields["name"] = name
+        fields["location"] = location
+        fields["port"] = port
+        if (attempt != null) fields["attempt"] = attempt
+        fields["outcome"] = outcome
+        if (error != null) fields["error"] = error
+        try {
+            events.event("retry", fields)
+        } catch (_: Exception) {
+            // an event sink must not throw
+        }
+    }
+
+    /** Call with [lock] held. Keeps [skipped] within [MAX_SKIPPED]: when a new UDN would exceed it, the earliest retry goes. */
+    private fun putSkip(udn: String, skip: Skip) {
+        if (skipped.size >= MAX_SKIPPED && !skipped.containsKey(udn)) {
+            val oldest = skipped.minByOrNull { it.value.until }?.key
+            if (oldest != null) skipped.remove(oldest)
+        }
+        skipped[udn] = skip
     }
 
     /** One `skipped` event per UDN and reason, however many datagrams repeat it. */
@@ -165,6 +223,15 @@ class RendererRegistry(
         }
         if (!go) return
 
+        setUp(udn, location, src, age, null)
+    }
+
+    /**
+     * The setup of one speaker, with [udn] already in [pending] (the caller added it under the lock); it is removed
+     * here. [retryAttempt] is null for an alive-driven setup and the attempt number for a timer retry, which also
+     * writes one `retry` event next to the usual discovery event.
+     */
+    private suspend fun setUp(udn: String, location: String, src: InetSocketAddress, age: Int, retryAttempt: Int?) {
         var port: Int? = null
         var renderer: ManagedRenderer? = null
         try {
@@ -178,21 +245,70 @@ class RendererRegistry(
                 }
                 ports.remember(udn, port)
                 log("added", udn, renderer.name, location, port)
+                if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, port, retryAttempt, "added")
             } else {
                 ports.release(port)
-                lock.withLock { skipped[udn] = Skip(location, Long.MAX_VALUE) }
+                lock.withLock { putSkip(udn, Skip(location, Long.MAX_VALUE)) }
                 log("skipped", udn, renderer.name, location, reason = "not a usable renderer")
+                if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             withContext(NonCancellable) {
                 runCatching { renderer?.destroy() }
                 if (port != null) ports.release(port)
-                lock.withLock { skipped[udn] = Skip(location, clock() + RETRY_FAILED_MS) }
+                lock.withLock { putSkip(udn, Skip(location, clock() + RETRY_FAILED_MS, src, age, retryAttempt ?: 0)) }
             }
-            log("failed", udn, renderer?.name, location, port, reason = e.message ?: e.javaClass.simpleName)
+            val message = e.message ?: e.javaClass.simpleName
+            log("failed", udn, renderer?.name, location, port, reason = message)
+            if (retryAttempt != null) logRetry("failed", udn, renderer?.name, location, port, retryAttempt, "failed", message)
         } finally {
             withContext(NonCancellable) { lock.withLock { pending.remove(udn) } }
+        }
+    }
+
+    /**
+     * D-05: sets up again every speaker whose setup threw and whose 5 minutes are over, without waiting for a new
+     * alive, and asks every running speaker to revive a receiver that stopped itself ([ManagedRenderer.reviveIfDue]).
+     * A device that was refused (not a usable renderer), one an alive is setting up right now and one that already
+     * runs are left alone. Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
+     * number of setup attempts made; receiver revivals are logged but not counted.
+     */
+    suspend fun retryDue(): Int {
+        val due = lock.withLock {
+            val now = clock()
+            val picked = skipped.entries
+                .filter { (udn, skip) ->
+                    skip.until != Long.MAX_VALUE && skip.until <= now && skip.src != null &&
+                        udn !in pending && udn !in running
+                }
+                .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
+            picked.forEach { pending.add(it.first) }
+            picked
+        }
+        if (due.isNotEmpty()) {
+            val gate = Semaphore(RETRY_PARALLEL)
+            coroutineScope {
+                due.map { (udn, skip, attempt) ->
+                    async { gate.withPermit { setUp(udn, skip.location, skip.src!!, skip.maxAge, attempt) } }
+                }.awaitAll()
+            }
+        }
+        reviveReceivers()
+        return due.size
+    }
+
+    private suspend fun reviveReceivers() {
+        val live = lock.withLock { running.values.toList() }
+        for (r in live) {
+            val outcome: Boolean? = try {
+                r.reviveIfDue(clock())
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                logRetry("terminated", r.udn, r.name, r.location, r.port, null, "failed", e.message ?: e.javaClass.simpleName)
+                continue
+            }
+            if (outcome != null) logRetry("terminated", r.udn, r.name, r.location, r.port, null, if (outcome) "running" else "failed")
         }
     }
 
@@ -280,6 +396,12 @@ class RendererRegistry(
             while (true) {
                 delay(config.discoveryIntervalS * 1000L)
                 safe { search() }
+            }
+        }
+        launch {
+            while (true) {
+                delay(RETRY_CHECK_MS)
+                safe { retryDue() }
             }
         }
         launch {

@@ -473,6 +473,15 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
         } else {
             emit("reannounce", "mode" to "phone", "skipped" to "phone-only", "trigger" to trigger)
         }
+        // speakers whose setup failed or whose receiver stopped itself: the timer may have slept through their time (D-05)
+        val retried = try {
+            registry?.retryDue() ?: 0
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("housekeeping-retry", t)
+            0
+        }
         val ok = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
         emit("ssdp-probe", "ok" to ok, "trigger" to trigger)
         if (!ok) {
@@ -480,7 +489,7 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             val again = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
             emit("ssdp-probe", "ok" to again, "restarted" to restarted, "trigger" to trigger)
         }
-        emit("housekeeping", "trigger" to trigger, "ran" to true, "searched" to searched, "ms" to (System.nanoTime() - t0) / 1_000_000)
+        emit("housekeeping", "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "ms" to (System.nanoTime() - t0) / 1_000_000)
         return true
     }
 
