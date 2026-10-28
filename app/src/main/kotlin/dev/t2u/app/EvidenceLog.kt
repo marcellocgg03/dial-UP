@@ -145,26 +145,46 @@ object EvidenceLine {
  * Rotation (current -> .1 -> .2, old .2 deleted at [ROTATE_BYTES]) lives in [RotatingFile]; every
  * file operation runs on the single writer thread.
  */
-class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
+class EvidenceLog(
+    private val dir: File,
+    private val tag: String = "T2U",
+    private val monoNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
+    private val logcat: (String) -> Unit = { Log.i(tag, it) },
+) {
+    @Volatile
+    private var level: LogLevel = LogLevel.INFO
+
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
     private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = 2)
 
+    fun setLevel(value: LogLevel) {
+        level = value
+    }
+
+    fun level(): LogLevel = level
+
     fun event(kind: String, fields: Map<String, Any?> = emptyMap()) {
+        // D-08: one filter governs both the file and the logcat mirror; checked before any work
+        if (!shouldWrite(level, kind, fields)) return
         val ts = OffsetDateTime.now().format(tsFormat)
-        val mono = SystemClock.elapsedRealtimeNanos()
+        val mono = monoNanos()
         val line = try {
             EvidenceLine.format(ts, mono, kind, fields)
         } catch (t: Throwable) {
-            Log.w(tag, "evidence format failed for $kind", t)
+            warn("evidence format failed for $kind", t)
             return
         }
-        Log.i(tag, line.take(4000))
+        logcat(line.take(4000))
         try {
             executor.execute { append(line) }
         } catch (t: Throwable) {
-            Log.w(tag, "evidence executor rejected $kind", t)
+            warn("evidence executor rejected $kind", t)
         }
+    }
+
+    private fun warn(message: String, t: Throwable) {
+        runCatching { Log.w(tag, message, t) }
     }
 
     /** The file that new events are appended to. */
@@ -175,7 +195,7 @@ class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
         try {
             executor.submit { rotating.clear() }.get(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (t: Throwable) {
-            Log.w(tag, "evidence clear failed", t)
+            warn("evidence clear failed", t)
         }
     }
 
@@ -184,7 +204,7 @@ class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
         try {
             executor.submit {}.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (t: Throwable) {
-            Log.w(tag, "evidence flush failed", t)
+            warn("evidence flush failed", t)
         }
     }
 
@@ -192,7 +212,7 @@ class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
         try {
             rotating.append((line + "\n").toByteArray(Charsets.UTF_8))
         } catch (t: Throwable) {
-            Log.w(tag, "evidence write failed", t)
+            warn("evidence write failed", t)
         }
     }
 
