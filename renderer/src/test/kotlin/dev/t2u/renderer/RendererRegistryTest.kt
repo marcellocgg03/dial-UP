@@ -625,4 +625,54 @@ class RendererRegistryTest {
         assertFalse(h.registry.renderers().any { it.udn == "u0" })
         assertTrue(h.registry.renderers().any { it.udn == "u${RendererRegistry.MAX_SKIPPED}" })
     }
+
+    // ---- Plan 05-04 Task 3: the first prune after a long sleep waits for a fresh search ----
+
+    @Test
+    @DisplayName("after a sleep longer than twice the discovery interval the first prune is deferred behind a search")
+    fun pruneIsDeferredAfterLongSleep() = runTest {
+        val h = Harness()
+        h.alive()
+        val searchTimes = CopyOnWriteArrayList<Long>()
+        val job = h.registry.launchSchedules(this) { searchTimes.add(testScheduler.currentTime / 1000) }
+        runCurrent()
+        advanceTimeBy(6_000)
+        assertEquals(listOf(0L, 5L), searchTimes.toList())
+
+        // the phone slept for two hours: the wall clock moved, the timers did not
+        h.now.addAndGet(2L * 60 * 60 * 1000)
+        advanceTimeBy(54_000)
+        runCurrent()
+        assertEquals(1, h.registry.count.value)
+        assertEquals(1, h.events.named("prune-deferred").size)
+        assertEquals(0, h.events.named("stale").size)
+        assertEquals(listOf(0L, 5L, 60L), searchTimes.toList())
+
+        // nothing refreshed the renderer in that minute, so the next round prunes it as before
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, h.events.named("stale").size)
+        assertEquals(1, h.events.named("prune-deferred").size)
+        job.cancel()
+    }
+
+    @Test
+    @DisplayName("a search reported through searched() counts as fresh, so the prune right after it is not deferred")
+    fun searchedMakesPruneNormal() = runTest {
+        val h = Harness()
+        h.alive()
+        val job = h.registry.launchSchedules(this) { }
+        runCurrent()
+        advanceTimeBy(6_000)
+        h.now.addAndGet(2L * 60 * 60 * 1000)
+        // what Bridge.housekeeping does after its own search
+        h.registry.searched()
+        advanceTimeBy(54_000)
+        runCurrent()
+        assertEquals(0, h.events.named("prune-deferred").size)
+        assertEquals(1, h.events.named("stale").size)
+        assertEquals(0, h.registry.count.value)
+        job.cancel()
+    }
 }
