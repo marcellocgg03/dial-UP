@@ -38,4 +38,50 @@ class BatteryGateTest {
     fun `the gate is shut for every reason when the app is not exempt`() {
         for (reason in StartReason.entries) assertFalse(gateDecision(exempt = false, reason = reason), reason.name)
     }
+
+    @Test
+    fun `first launch without the exemption asks notifications then the exemption`() {
+        assertEquals(
+            listOf(LaunchStep.ASK_NOTIFICATIONS, LaunchStep.ASK_EXEMPTION),
+            launchSteps(markerExists = false, sdk = 36, notificationsGranted = false, exempt = false),
+        )
+    }
+
+    @Test
+    fun `first launch with the exemption asks notifications then starts the service`() {
+        assertEquals(
+            listOf(LaunchStep.ASK_NOTIFICATIONS, LaunchStep.START_SERVICE),
+            launchSteps(markerExists = false, sdk = 36, notificationsGranted = false, exempt = true),
+        )
+    }
+
+    @Test
+    fun `notifications are never asked twice`() {
+        assertEquals(
+            listOf(LaunchStep.ASK_EXEMPTION),
+            launchSteps(markerExists = true, sdk = 36, notificationsGranted = false, exempt = false),
+        )
+        assertEquals(
+            listOf(LaunchStep.START_SERVICE),
+            launchSteps(markerExists = true, sdk = 36, notificationsGranted = false, exempt = true),
+        )
+    }
+
+    @Test
+    fun `below API 33 or with notifications granted the notification step is skipped`() {
+        assertEquals(
+            listOf(LaunchStep.ASK_EXEMPTION),
+            launchSteps(markerExists = false, sdk = 32, notificationsGranted = false, exempt = false),
+        )
+        assertEquals(
+            listOf(LaunchStep.ASK_EXEMPTION),
+            launchSteps(markerExists = false, sdk = 36, notificationsGranted = true, exempt = false),
+        )
+    }
+
+    @Test
+    fun `after the exemption dialog only the exemption decides`() {
+        assertEquals(LaunchStep.START_SERVICE, afterExemptionDialog(exempt = true))
+        assertEquals(LaunchStep.FINISH_WITHOUT_SERVICE, afterExemptionDialog(exempt = false))
+    }
 }
