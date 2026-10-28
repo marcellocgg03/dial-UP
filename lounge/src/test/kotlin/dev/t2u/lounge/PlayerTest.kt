@@ -745,4 +745,54 @@ class PlayerTest {
             assertEquals(100.0, player.senderPosition(), "no counting on while the sender shows loading")
         }
     }
+
+    // ---- playback failure (quick 261028-ago)
+
+    @Test
+    fun aReportedFailureTellsTheSendersStateFourBeforeTheFailureListenerRuns() {
+        runBlocking {
+            val (player, events) = playing()
+            val order = CopyOnWriteArrayList<String>()
+            player.addStateListener { order += "state:${it.current.senderCode}" }
+            val reasons = CopyOnWriteArrayList<String>()
+            player.addFailureListener {
+                order += "failure"
+                reasons += it
+            }
+            player.reportPlaybackFailure("boom")
+            assertEquals(PlayerStatus.STOPPED, player.status)
+            assertEquals(4, events.last().current.senderCode)
+            assertEquals(listOf("state:4", "failure"), order.toList())
+            assertEquals(listOf("boom"), reasons.toList())
+        }
+    }
+
+    @Test
+    fun aThrowingFailureListenerDoesNotStopTheNextOne() {
+        runBlocking {
+            val (player, _) = playing()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            val reached = CopyOnWriteArrayList<String>()
+            player.addFailureListener { throw IllegalStateException("listener boom") }
+            player.addFailureListener { reached += it }
+            player.reportPlaybackFailure("why")
+            assertEquals(listOf("why"), reached.toList())
+            assertTrue(logged.any { it["type"] == "listenerError" })
+            assertTrue(logged.any { it["type"] == "playbackFailed" && it["reason"] == "why" })
+        }
+    }
+
+    @Test
+    fun aRemovedFailureListenerIsNotCalled() {
+        runBlocking {
+            val (player, _) = playing()
+            val reasons = CopyOnWriteArrayList<String>()
+            val listener = PlaybackFailureListener { reasons += it }
+            player.addFailureListener(listener)
+            player.removeFailureListener(listener)
+            player.reportPlaybackFailure("x")
+            assertTrue(reasons.isEmpty())
+        }
+    }
 }

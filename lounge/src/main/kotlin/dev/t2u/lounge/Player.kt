@@ -44,6 +44,14 @@ fun interface PlayerStateListener {
 }
 
 /**
+ * Called by [Player.reportPlaybackFailure] after the senders were told the player stopped. Exceptions are caught and
+ * reported to [Player.events] like those of a [PlayerStateListener].
+ */
+fun interface PlaybackFailureListener {
+    suspend fun onPlaybackFailure(reason: String)
+}
+
+/**
  * The player state machine the lounge session drives. It leaves the actual playback to the do*
  * hooks (the renderer implements them against the UPnP speaker) and tells the sender about every
  * state change through [PlayerStateListener]s, and through [statusFlow] for the notification (D-06).
@@ -77,6 +85,8 @@ abstract class Player {
     val autoplayMode: AutoplayMode get() = queue.autoplayMode
 
     private val listeners = CopyOnWriteArrayList<PlayerStateListener>()
+
+    private val failureListeners = CopyOnWriteArrayList<PlaybackFailureListener>()
 
     @Volatile
     private var previousState: PlayerState? = null
@@ -114,6 +124,14 @@ abstract class Player {
 
     fun removeStateListener(listener: PlayerStateListener) {
         listeners.remove(listener)
+    }
+
+    fun addFailureListener(listener: PlaybackFailureListener) {
+        failureListeners.add(listener)
+    }
+
+    fun removeFailureListener(listener: PlaybackFailureListener) {
+        failureListeners.remove(listener)
     }
 
     // Playback hooks the renderer implements.
@@ -354,6 +372,27 @@ abstract class Player {
      */
     suspend fun notifyExternalStateChange(newStatus: PlayerStatus?) {
         setStatusAndEmit(newStatus)
+    }
+
+    /**
+     * For the case where the player was told to play and the speaker cannot: logs it, tells the senders STOPPED (state 4)
+     * and then calls the failure listeners in registration order, so the receiver can end the cast visibly. Not for a Stop
+     * the sender asked for and not for a track end ([notifyExternalStateChange] covers those).
+     *
+     * [reason] is a fixed phrase chosen by the caller, never exception text, because exception text can carry a signed URL.
+     */
+    suspend fun reportPlaybackFailure(reason: String) {
+        log("playbackFailed", "reason" to reason)
+        setStatusAndEmit(PlayerStatus.STOPPED)
+        for (listener in failureListeners) {
+            try {
+                listener.onPlaybackFailure(reason)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("listenerError", "error" to (e.message ?: e::class.simpleName))
+            }
+        }
     }
 
     /**

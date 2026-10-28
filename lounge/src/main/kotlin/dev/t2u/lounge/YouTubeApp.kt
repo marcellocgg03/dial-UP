@@ -120,6 +120,12 @@ class YouTubeApp(
         }
     }
 
+    private val failureListener = object : PlaybackFailureListener {
+        override suspend fun onPlaybackFailure(reason: String) {
+            handlePlaybackFailure(reason)
+        }
+    }
+
     init {
         if (player.events === NoEvents) player.events = sink
     }
@@ -139,6 +145,7 @@ class YouTubeApp(
         note("starting")
         state = AppState.STARTING
         player.addStateListener(stateListener)
+        player.addFailureListener(failureListener)
         val failures = coroutineScope {
             sessions.values.map { session ->
                 session.onMessages = { batch, from -> handleBatch(batch, from) }
@@ -158,6 +165,7 @@ class YouTubeApp(
         val failure = failures.firstOrNull { it != null }
         if (failure != null) {
             player.removeStateListener(stateListener)
+            player.removeFailureListener(failureListener)
             withContext(NonCancellable) {
                 for (session in sessions.values) {
                     session.onMessages = { _, _ -> }
@@ -209,6 +217,7 @@ class YouTubeApp(
         connected.clear()
         implicitlyDisconnected.clear()
         player.removeStateListener(stateListener)
+        player.removeFailureListener(failureListener)
         lastNav = null
         try {
             player.reset()
@@ -294,6 +303,38 @@ class YouTubeApp(
                 for (sender in dropped) safely { onSenderDisconnect(sender, false) }
             }
             note("activeSession", "client" to target.client.displayName)
+        }
+    }
+
+    /**
+     * The speaker cannot play what the sender cast (the player already told the senders state 4): tells the sender the
+     * screen is gone, drops the senders and resets the player, which also clears the speaker (CAST-06). The reset policy is
+     * not consulted: no sender of this receiver can be served by this speaker now. Protocol-risk: every sender-facing
+     * message name stays in this file.
+     */
+    private suspend fun handlePlaybackFailure(reason: String) {
+        switchLock.withLock {
+            val session = activeSession
+            if (state != AppState.RUNNING || session == null) return
+            if (connected.isEmpty()) {
+                note("playbackFailed", "reason" to reason, "senders" to 0)
+                return
+            }
+            val dropped = connected.toList()
+            note("playbackFailed", "reason" to reason, "senders" to dropped.size)
+            connected.clear()
+            implicitlyDisconnected.clear()
+            lastNav = null
+            // Before the reset: the speaker clear can take its whole budget, the phone is told at once.
+            post(session, listOf(OutgoingMessage.loungeScreenDisconnected()))
+            try {
+                player.reset()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                problem("reset", e)
+            }
+            for (sender in dropped) safely { onSenderDisconnect(sender, false) }
         }
     }
 

@@ -360,6 +360,58 @@ class YouTubeAppTest {
         assertNotNull(store.text(StoreKeys.APP_PID))
     }
 
+    // ---- playback failure ends the cast visibly (quick 261028-ago)
+
+    @Test
+    fun aPlaybackFailureTellsStateFourThenDisconnectsAndResets() = run<Unit> {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+
+        player.reportPlaybackFailure("the speaker never started playing")
+
+        awaitUntil(what = "screen disconnected") { count("cl", "loungeScreenDisconnected") == 1 && disconnects.isNotEmpty() }
+        val names = messages("cl")
+        val four = names.indexOfLast { it.first == "onStateChange" && it.second["state"] == "4" }
+        val gone = names.indexOfFirst { it.first == "loungeScreenDisconnected" }
+        assertTrue(four >= 0 && four < gone, "state 4 comes before the disconnect: $names")
+        assertTrue(a.connectedSenders.isEmpty())
+        assertEquals(listOf("dev-1" to false), disconnects.toList())
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertEquals(1, clearCount())
+        assertTrue(
+            names.drop(gone + 1).none { it.first == "onStateChange" },
+            "the reset's IDLE is not sent after the disconnect: ${names.map { it.first + ":" + it.second["state"] }}",
+        )
+    }
+
+    @Test
+    fun aPlaybackFailureWithoutASenderPostsNothing() = run<Unit> {
+        startedApp()
+        player.reportPlaybackFailure("the speaker never started playing")
+        barrier("cl")
+        assertEquals(0, count("cl", "loungeScreenDisconnected"))
+        assertEquals(0, clearCount())
+    }
+
+    @Test
+    fun theSameSenderCanCastAgainAfterAFailure() = run<Unit> {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        player.reportPlaybackFailure("the speaker never started playing")
+        awaitUntil(what = "first disconnect") { disconnects.isNotEmpty() && player.status == PlayerStatus.IDLE }
+
+        connect()
+        val before = messages("cl").count { it.first == "onStateChange" && it.second["state"] == "1" }
+        rpc("cl", "setPlaylist", playlist("VID00000002", "LIST2"))
+        awaitUntil(what = "second video playing") { "play:VID00000002" in player.calls && player.status == PlayerStatus.PLAYING }
+        awaitUntil(what = "second playing state") {
+            messages("cl").count { it.first == "onStateChange" && it.second["state"] == "1" } > before
+        }
+        assertEquals(1, count("cl", "loungeScreenDisconnected"))
+    }
+
     // ---- previous/next availability follows the queue (plan 03-04)
 
     private fun vid(id: String, index: Int? = null) =

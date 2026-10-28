@@ -2060,7 +2060,11 @@ class Renderer(
             lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
         )
         stopPolling()
-        scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
+        // Nothing is left to try: the cast ends visibly. A Stop, a newer play or removal in between wins.
+        val seq = loadSeq.get()
+        scope.launch {
+            if (!superseded(seq)) reportPlaybackFailure("the speaker never started playing")
+        }
     }
 
     /** Reports through the evidence sink (kind "renderer"); never carries signed URLs, and never throws. */
