@@ -52,6 +52,19 @@ interface ManagedRenderer {
      * failed. The registry calls it for every running speaker on its retry schedule. The default does nothing.
      */
     suspend fun reviveIfDue(now: Long): Boolean? = null
+
+    /**
+     * The phone moved to [host] (plan 05-08, SVC-04, D-07): the renderer builds stream URLs with it from now on, still
+     * recognises URLs with its earlier addresses as its own, and re-sets the loaded track on the speaker from the new
+     * address. Returns without waiting for the re-set. Called by the bridge after its listeners moved. The default does nothing.
+     */
+    suspend fun onNetworkChanged(host: String) {}
+
+    /**
+     * The phone lost its network: no speaker poll runs until [onNetworkChanged] (what the speaker does with a broken
+     * stream must not be mirrored to the phone). The default does nothing.
+     */
+    suspend fun onNetworkLost() {}
 }
 
 /** Creates the renderer for a newly seen speaker; the registry owns the port claim. */

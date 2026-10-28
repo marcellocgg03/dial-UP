@@ -540,6 +540,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             if (!started.get() || stopped.get()) return
             networkDown = true
             emit("bridge", "event" to "network-lost")
+            // polls pause on every renderer: what a broken stream does on the speaker is not mirrored to the phone (plan 05-08)
+            for (r in registry?.renderers().orEmpty()) step("renderer", "network-lost") { r.onNetworkLost() }
         }
     }
 
@@ -587,6 +589,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 step("dial", "rebind") { receiver.rebindDial(newIp) }
                 if (running) moved++
             }
+            // the renderers learn the new address (they re-set the loaded track in their own scopes, one slow speaker holds up no other)
+            for (r in registry?.renderers().orEmpty()) step("renderer", "rebind") { r.onNetworkChanged(newIp) }
             step("search", "rebind") {
                 withContext(Dispatchers.IO) { ssdp?.search(RENDERER_ST, 3) }
                 registry?.searched()

@@ -146,6 +146,9 @@ internal const val START_HARD_CAP_FACTOR = 4
 /** Consecutive polls that must read another source's URI before the speaker counts as taken over (plan 03-25, T-03-61). */
 internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
 
+/** How many earlier own addresses a renderer still counts as its own after the phone moved (plan 05-08). */
+internal const val OWN_HOSTS_KEPT = 4
+
 /**
  * Polls a STOPPED reading at the end of a track is waited out while the speaker already holds the queued stream, before the
  * queue advances the normal way (plan 04-06, RESEARCH Pitfall 10): a Sonos may report STOPPED for a moment as it switches.
@@ -368,6 +371,17 @@ class Renderer(
     private val playedFormats: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     @Volatile private var ip: String? = null
+
+    /**
+     * The addresses this renderer served streams from before the phone moved, at most [OWN_HOSTS_KEPT], newest last, never the
+     * current one (plan 05-08). A speaker that still holds a URL with one of them has one of our streams, not another source's
+     * (plan 03-25 rule). The token path still has to match, so a stranger's URL is not made ours by this list.
+     */
+    @Volatile var ownHosts: List<String> = emptyList()
+        private set
+
+    /** True from [onNetworkLost] until the next [onNetworkChanged]: no poll runs while the phone has no network. */
+    @Volatile private var networkDown = false
 
     @Volatile private var receiver: CastReceiver? = null
 
@@ -1389,7 +1403,8 @@ class Renderer(
     }
 
     /** True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches (T-03-26). */
-    private fun isOurStream(uri: String): Boolean = uri.contains("$ip:${config.mediaPort}/stream/")
+    private fun isOurStream(uri: String): Boolean =
+        uri.contains("$ip:${config.mediaPort}/stream/") || ownHosts.any { uri.contains("$it:${config.mediaPort}/stream/") }
 
     /**
      * After an accepted empty URI: reads what the speaker holds (one GetMediaInfo) and writes the outcome as one evidence line.
@@ -1748,7 +1763,8 @@ class Renderer(
 
     private fun startPolling() {
         stopPolling()
-        if (destroyed) return
+        // no poll while the phone has no network: a stream broken by the move must not be mirrored to the phone (plan 05-08)
+        if (destroyed || networkDown) return
         synchronized(pollLock) {
             val gen = ++pollGen
             pollJob = scope.launch {
@@ -1775,6 +1791,27 @@ class Renderer(
             pollJob?.cancel()
             pollJob = null
         }
+    }
+
+    /** Plan 05-08: the polls stop until the phone has a network again. */
+    override suspend fun onNetworkLost() {
+        if (destroyed) return
+        networkDown = true
+        stopPolling()
+    }
+
+    /**
+     * Plan 05-08: the phone is on [host] now. Streams are built with it from here on, the old address is remembered as ours, and
+     * polling resumes.
+     */
+    override suspend fun onNetworkChanged(host: String) {
+        if (destroyed) return
+        val old = ip
+        val fresh = config.advertiseIp ?: host
+        ip = fresh
+        ownHosts = (ownHosts.filter { it != fresh && it != old } + listOfNotNull(old?.takeIf { it != fresh })).takeLast(OWN_HOSTS_KEPT)
+        networkDown = false
+        if (current != null) startPolling()
     }
 
     private suspend fun poll() {
