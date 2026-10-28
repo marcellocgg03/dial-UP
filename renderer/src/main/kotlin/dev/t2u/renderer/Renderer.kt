@@ -2049,7 +2049,7 @@ class Renderer(
             scope.launch {
                 val started = load(c.video, resumeAt, next, startPlaying = true)
                 // Only a failure of this reload counts; a newer play, a stop or removal has moved loadSeq on.
-                if (!started && !destroyed && loadSeq.get() == before + 1) notifyExternalStateChange(PlayerStatus.STOPPED)
+                if (!started && !destroyed && loadSeq.get() == before + 1) reportPlaybackFailure("no format could be loaded on the speaker")
             }
             return
         }
