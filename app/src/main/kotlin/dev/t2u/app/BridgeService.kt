@@ -42,7 +42,8 @@ object ServiceHub {
 /**
  * The spike's foreground service (type connectedDevice). Holds a MulticastLock, a WifiLock and a
  * partial WakeLock for its whole lifetime (SPK-02), writes a heartbeat every 30 s and a state.json
- * snapshot that `tools/spike.sh dump-state` reads. START_NOT_STICKY on purpose: a kill must show up
+ * snapshot that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
+ * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir. START_NOT_STICKY on purpose: a kill must show up
  * as a heartbeat gap plus an exit-info entry, not as a silent restart.
  */
 class BridgeService : Service(), SpikeHost {
@@ -86,12 +87,17 @@ class BridgeService : Service(), SpikeHost {
 
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
-        evidence = EvidenceLog(evidenceDir)
+        // D-08: the rotating event log goes to the app external files dir so `adb pull` reads it
+        // without run-as; state.json and payloads.json stay in the internal evidence dir.
+        val (logDir, where) = logDirFor(getExternalFilesDir(null), filesDir)
+        logDir.mkdirs()
+        evidence = EvidenceLog(logDir)
         ServiceHub.service = this
         evidence.event(
             "service-start",
             mapOf("pid" to android.os.Process.myPid(), "sdk" to Build.VERSION.SDK_INT, "version" to BuildConfigFacts.versionName(this)),
         )
+        evidence.event("logdir", mapOf("where" to where, "path" to logDir.absolutePath))
 
         acquireLocks()
         logExitInfo()
@@ -241,6 +247,10 @@ class BridgeService : Service(), SpikeHost {
             "interactive" to power.isInteractive,
             "ignoringBatteryOpt" to power.isIgnoringBatteryOptimizations(packageName),
             "uptimeMs" to (SystemClock.elapsedRealtime() - startedAtMs),
+            // absolute clocks: elapsedRealtime counts deep sleep, uptimeMillis does not, so the
+            // difference between two heartbeats shows how long the CPU slept (Pitfall 3)
+            "elapsedRealtimeMs" to SystemClock.elapsedRealtime(),
+            "uptimeMillis" to SystemClock.uptimeMillis(),
         )
     }
 

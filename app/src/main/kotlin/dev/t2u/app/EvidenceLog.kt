@@ -3,7 +3,6 @@ package dev.t2u.app
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
@@ -143,14 +142,13 @@ object EvidenceLine {
 
 /**
  * Append-only JSONL evidence file, mirrored to logcat. Never throws to callers.
- * Rotates at [ROTATE_BYTES]: current -> .1 -> .2 (old .2 deleted).
+ * Rotation (current -> .1 -> .2, old .2 deleted at [ROTATE_BYTES]) lives in [RotatingFile]; every
+ * file operation runs on the single writer thread.
  */
 class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
-    private val file = File(dir, FILE_NAME)
-    private var stream: FileOutputStream? = null
-    private var size = 0L
+    private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = 2)
 
     fun event(kind: String, fields: Map<String, Any?> = emptyMap()) {
         val ts = OffsetDateTime.now().format(tsFormat)
@@ -169,6 +167,18 @@ class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
         }
     }
 
+    /** The file that new events are appended to. */
+    fun currentFile(): File = rotating.current
+
+    /** Deletes the log files on the writer thread, so a clear never races a write. */
+    fun clear() {
+        try {
+            executor.submit { rotating.clear() }.get(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (t: Throwable) {
+            Log.w(tag, "evidence clear failed", t)
+        }
+    }
+
     /** Drains queued writes (used before the service stops). */
     fun flush(timeoutMs: Long = 2000) {
         try {
@@ -180,42 +190,10 @@ class EvidenceLog(private val dir: File, private val tag: String = "T2U") {
 
     private fun append(line: String) {
         try {
-            val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
-            var out = stream
-            if (out == null) {
-                dir.mkdirs()
-                out = FileOutputStream(file, true)
-                stream = out
-                size = file.length()
-            }
-            if (size + bytes.size > ROTATE_BYTES) {
-                out.close()
-                stream = null
-                rotate()
-                dir.mkdirs()
-                out = FileOutputStream(file, true)
-                stream = out
-                size = 0
-            }
-            out.write(bytes)
-            out.flush()
-            size += bytes.size
+            rotating.append((line + "\n").toByteArray(Charsets.UTF_8))
         } catch (t: Throwable) {
             Log.w(tag, "evidence write failed", t)
-            try {
-                stream?.close()
-            } catch (_: Throwable) {
-            }
-            stream = null
         }
-    }
-
-    private fun rotate() {
-        val one = File(dir, "$FILE_NAME.1")
-        val two = File(dir, "$FILE_NAME.2")
-        two.delete()
-        if (one.exists()) one.renameTo(two)
-        file.renameTo(one)
     }
 
     companion object {
