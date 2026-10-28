@@ -77,6 +77,12 @@ class YouTubeCastReceiver(
     private var dial: DialServer? = null
     private var uuid: String? = null
 
+    /** The address the DIAL server listens on and the LOCATION names; [rebindDial] moves it (plan 05-07). */
+    @Volatile private var bindHost: String = deps.bindHost
+
+    /** The config the running DIAL server was built from; the port in it is the one a rebind keeps. */
+    private var dialConfig: DialConfig? = null
+
     /** Called when a sender connects. */
     var onSenderConnect: (Sender) -> Unit
         get() = app.onSenderConnect
@@ -149,7 +155,7 @@ class YouTubeCastReceiver(
                 val config = DialConfig(
                     friendlyName = options.name,
                     uuid = id,
-                    bindHost = deps.bindHost,
+                    bindHost = bindHost,
                     port = options.dialPort,
                     manufacturer = options.brand,
                     modelName = options.model,
@@ -159,10 +165,11 @@ class YouTubeCastReceiver(
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
                 withContext(Dispatchers.IO) { created.start() }
                 server = created
-                val location = "http://${deps.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
+                val location = "http://${config.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
                 deps.advertiser.advertise(SsdpDevice(options.name, id, deps.serverHeader, location))
                 advertisedUuid = id
                 dial = created
+                dialConfig = config
                 uuid = id
                 status = "running"
                 note("started", "port" to created.resolvedPort())
@@ -173,6 +180,7 @@ class YouTubeCastReceiver(
                     if (appStarted) runQuietly { app.stop() }
                 }
                 dial = null
+                dialConfig = null
                 uuid = null
                 status = "stopped"
                 note("startFailed", "error" to (e::class.simpleName ?: "Throwable"))
@@ -212,10 +220,50 @@ class YouTubeCastReceiver(
                 }
             }
             dial = null
+            dialConfig = null
             uuid = null
             status = "stopped"
             note("stopped")
             failure?.let { throw it }
+        }
+    }
+
+    /**
+     * Moves the DIAL server to [newHost] on the port it already has (plan 05-07, SVC-04) and advertises the new LOCATION.
+     * Only the HTTP listener is replaced: the uuid, the app pid and the lounge sessions are untouched, so the sender stays
+     * connected and the phone's cast menu keeps the same entry. A receiver that is not running only remembers [newHost]
+     * for its next start. A failure leaves no DIAL server, is noted as rebindFailed and rethrown.
+     */
+    suspend fun rebindDial(newHost: String) {
+        lifecycle.withLock {
+            val old = dial
+            val config = dialConfig
+            val id = uuid
+            if (status != "running" || config == null || id == null) {
+                bindHost = newHost
+                note("rebindIgnored", "status" to status)
+                return
+            }
+            // a server a failed earlier move left behind is gone (old == null): start again on the port the config names
+            val port = old?.resolvedPort() ?: config.port
+            try {
+                withContext(Dispatchers.IO) { old?.stop() }
+                dial = null
+                val moved = config.copy(bindHost = newHost, port = port)
+                val created = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
+                withContext(Dispatchers.IO) { created.start() }
+                dial = created
+                dialConfig = moved
+                bindHost = newHost
+                deps.advertiser.advertise(SsdpDevice(options.name, id, deps.serverHeader, "http://$newHost:$port${moved.prefix}/ssdp/device-desc.xml"))
+                note("rebound", "port" to port)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                dial = null
+                note("rebindFailed", "error" to (e::class.simpleName ?: "Throwable"))
+                throw e
+            }
         }
     }
 

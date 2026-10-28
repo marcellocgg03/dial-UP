@@ -132,10 +132,24 @@ private const val DROP_LOG_WINDOW_MS = 60_000L
  */
 const val HOUSEKEEPING_INTERVAL_MS = 300_000L
 
+/** A receiver younger than this is kept in the move list even while it is still "stopped" (its start has not run yet). */
+private const val TRACK_GRACE_MS = 120_000L
+
 /** How long a housekeeping run waits for its own listener to hear the probe datagram. */
 private const val PROBE_TIMEOUT_MS = 2000L
 
-class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
+class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
+    /** Where the bridge listens now; [rebindNetwork] replaces it, so every reader takes the current value (plan 05-07). */
+    @Volatile private var net: BridgeNetwork = net
+
+    /** Set by [networkLost], cleared by [rebindNetwork]: housekeeping has nothing to do on a dead network. */
+    @Volatile private var networkDown = false
+
+    /** Every receiver this bridge built, so a move can reach them; stopped ones are dropped when a new one is built. */
+    private val receiverList = java.util.concurrent.CopyOnWriteArrayList<TrackedReceiver>()
+
+    private class TrackedReceiver(val receiver: YouTubeCastReceiver, val createdAt: Long = System.currentTimeMillis())
+
     private val started = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
 
@@ -229,39 +243,33 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
             val config = base.copy(mediaPort = media.resolvedPort())
             effective = config
 
-            val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(wifi, "127.0.0.1", "::1") })
+            val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
             accessPolicy = policy
 
-            val resp = SsdpResponder(
-                net.ssdpListen,
-                net.wifiIp,
-                net.iface,
-                responderEvents(),
-                replyPolicy = policy::allowsSsdp,
-                announcePolicy = policy::announceAllowed,
-                notifyTarget = net.notifyTarget,
-            )
+            val resp = newResponder(net, policy)
             resp.start()
             responder = resp
 
+            // reads the field, so a receiver that outlives a move advertises on the responder of the new address
             val advertiser = object : DialAdvertiser {
                 override fun advertise(device: SsdpDevice) {
-                    resp.register(device)
-                    resp.announce()
+                    responder?.register(device)
+                    responder?.announce()
                 }
 
                 override fun withdraw(uuid: String) {
-                    resp.withdraw(uuid)
+                    responder?.withdraw(uuid)
                 }
             }
 
             val ports = PortRegistry(config.dataDir, config.receiverBasePort) { line -> emit("ports", "warn" to line) }.load()
             val receivers = ReceiverFactory { player, options ->
-                YouTubeCastReceiver(
+                // a receiver built after a move binds the current address
+                val receiver = YouTubeCastReceiver(
                     player,
                     options,
                     ReceiverDeps(
-                        bindHost = wifi,
+                        bindHost = net.wifiIp.hostAddress.orEmpty(),
                         accessPolicy = policy::allowsHttp,
                         advertiser = advertiser,
                         serverHeader = deps.serverHeader,
@@ -272,6 +280,8 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
                         onDialRequest = deps.onDialRequest,
                     ),
                 )
+                track(receiver)
+                receiver
             }
             val factory = RendererFactory { udn, location, address, maxAge, port ->
                 Renderer(
@@ -318,6 +328,26 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     // ------------------------------------------------------------------------------------------ SSDP wiring
+
+    private fun newResponder(network: BridgeNetwork, policy: DialAccessPolicy) = SsdpResponder(
+        network.ssdpListen,
+        network.wifiIp,
+        network.iface,
+        responderEvents(),
+        replyPolicy = policy::allowsSsdp,
+        announcePolicy = policy::announceAllowed,
+        notifyTarget = network.notifyTarget,
+    )
+
+    /**
+     * Remembers a receiver so [rebindNetwork] can move it. A stopped receiver is forgotten when the next one is built, unless
+     * it is young: a receiver that was just built is "stopped" too until its start runs.
+     */
+    private fun track(receiver: YouTubeCastReceiver) {
+        val now = System.currentTimeMillis()
+        receiverList.removeIf { it.receiver.status == "stopped" && now - it.createdAt > TRACK_GRACE_MS }
+        receiverList.add(TrackedReceiver(receiver))
+    }
 
     /** The SSDP client's alive and byebye go to the registry on the bridge's own scope (index.js ssdp.on). */
     private fun clientEvents(reg: RendererRegistry) = object : SsdpClientEvents {
@@ -434,6 +464,10 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     suspend fun housekeeping(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
+        if (networkDown) {
+            emit("housekeeping", "trigger" to trigger, "skipped" to "network-down")
+            return false
+        }
         return try {
             // a timer tick and an alarm tick (plan 05-11) must not double up; the adb trigger is a person asking
             val now = deps.clock()
@@ -493,6 +527,71 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         emit("housekeeping", "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "ms" to (System.nanoTime() - t0) / 1_000_000)
         return true
+    }
+
+    // ------------------------------------------------------------------------------------------ network move
+
+    /**
+     * The phone lost its Wi-Fi: marks the network down and stops nothing. Housekeeping skips (network-down) until the next
+     * [rebindNetwork]. Ignored unless the bridge is running.
+     */
+    suspend fun networkLost() {
+        netLock.withLock {
+            if (!started.get() || stopped.get()) return
+            networkDown = true
+            emit("bridge", "event" to "network-lost")
+        }
+    }
+
+    /**
+     * Moves the running bridge to [newNet] in place (SVC-04, RESEARCH Pattern 3): a new SSDP responder and client on the new
+     * address, every running receiver's DIAL server moved by [YouTubeCastReceiver.rebindDial]. Renderers, players and lounge
+     * sessions stay, so the phone's cast session survives, and nothing is cleared on any speaker. Each step is isolated, so
+     * one failure leaves the rest moved and logged. A move onto the same address runs the same path. Does nothing unless
+     * the bridge is running; never retries (D-05) and is only called on network events (D-06).
+     */
+    suspend fun rebindNetwork(newNet: BridgeNetwork) {
+        netLock.withLock {
+            if (!started.get() || stopped.get()) return
+            val oldIp = net.wifiIp.hostAddress.orEmpty()
+            val newIp = newNet.wifiIp.hostAddress.orEmpty()
+            val policy = accessPolicy
+            val reg = registry
+            val oldResponder = responder
+            val oldClient = ssdp
+
+            step("responder-stop", "rebind") { withContext(Dispatchers.IO) { oldResponder?.stop() } }
+            // the old listeners are closed before the new ones open, so a same-address move never fights itself for the socket
+            net = newNet
+            if (policy != null) {
+                step("responder-start", "rebind") {
+                    val fresh = newResponder(newNet, policy)
+                    withContext(Dispatchers.IO) { fresh.start() }
+                    responder = fresh
+                }
+            }
+            step("ssdp-client", "rebind") {
+                withContext(Dispatchers.IO) { oldClient?.stop() }
+                if (reg != null) {
+                    val fresh = Ssdp(listOf(newNet.wifiIp), clientEvents(reg), newNet.ssdpSearchTarget)
+                    withContext(Dispatchers.IO) { fresh.start() }
+                    ssdp = fresh
+                }
+            }
+            var moved = 0
+            for (tracked in receiverList.toList()) {
+                val receiver = tracked.receiver
+                val running = receiver.status == "running"
+                step("dial", "rebind") { receiver.rebindDial(newIp) }
+                if (running) moved++
+            }
+            step("search", "rebind") {
+                withContext(Dispatchers.IO) { ssdp?.search(RENDERER_ST, 3) }
+                registry?.searched()
+            }
+            networkDown = false
+            emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
+        }
     }
 
     /** The port each responder listen socket bound, by spec id. */
@@ -583,11 +682,15 @@ class Bridge(private val net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
-    private suspend fun step(name: String, block: suspend () -> Unit) {
+    private suspend fun step(name: String, phase: String = "stop", block: suspend () -> Unit) {
         try {
             block()
+        } catch (e: CancellationException) {
+            // a cancelled move is not a failed step; stop() keeps its old behaviour (every step is tried, then the next)
+            if (phase != "stop") throw e
+            failure("$phase:$name", e)
         } catch (t: Throwable) {
-            failure("stop:$name", t)
+            failure("$phase:$name", t)
         }
     }
 }
