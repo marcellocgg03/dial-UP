@@ -5,6 +5,8 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
@@ -283,5 +285,106 @@ class SsdpResponderTest {
         responder.stop()
         assertEquals(false, responder.selfProbe(100), "stopped")
         assertEquals(0, responder.restartListeners(), "a stopped responder does not reopen anything")
+    }
+
+    // ------------------------------------------------------------------------------------------ reply socket repair (05-15)
+
+    private fun realReplySocket(bind: InetAddress, iface: NetworkInterface?): MulticastSocket =
+        MulticastSocket(InetSocketAddress(bind, 0)).apply {
+            timeToLive = 4
+            if (iface != null) networkInterface = iface
+        }
+
+    private class ErrorEvents : SsdpEvents {
+        val errors = CopyOnWriteArrayList<String>()
+
+        override fun onError(where: String, t: Throwable) {
+            errors.add(where)
+        }
+    }
+
+    private fun responderWith(events: SsdpEvents, factory: (InetAddress, NetworkInterface?) -> MulticastSocket) =
+        SsdpResponder(
+            listOf(ListenSpec("loop", loopback, 0, null, false)),
+            loopback,
+            null,
+            events,
+            openReplySocket = factory,
+        )
+
+    @Test
+    fun aReplySocketThatFailedAtStartIsCreatedByRestartListeners() {
+        val events = ErrorEvents()
+        var calls = 0
+        val responder = responderWith(events) { b, i ->
+            if (calls++ == 0) throw java.io.IOException("no socket for you") else realReplySocket(b, i)
+        }
+        responder.register(SsdpDevice("x", uuidA, "s", "http://127.0.0.1/"))
+        responder.start()
+        try {
+            assertEquals(listOf("reply-socket"), events.errors.toList(), "start() reports the failure once and keeps running")
+            assertEquals(false, responder.selfProbe(300), "no reply socket, no probe")
+            assertEquals(1, responder.restartListeners())
+            assertTrue(responder.selfProbe(2000), "the recreated reply socket can probe")
+
+            val port = responder.boundPorts().getValue("loop")
+            DatagramSocket(0, loopback).use { client ->
+                val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $dialSt\r\n\r\n"
+                val bytes = msg.toByteArray()
+                client.send(DatagramPacket(bytes, bytes.size, loopback, port))
+                val replies = receiveAll(client, 1000)
+                assertEquals(1, replies.size, "the device is answered again: $replies")
+                assertEquals(dialSt, replies.single().headers["ST"])
+            }
+            assertEquals(listOf("reply-socket"), events.errors.toList(), "no further error")
+        } finally {
+            responder.stop()
+        }
+    }
+
+    @Test
+    fun restartListenersReplacesTheReplySocketEvenWhenOneExists() {
+        val made = CopyOnWriteArrayList<MulticastSocket>()
+        val responder = responderWith(ErrorEvents()) { b, i -> realReplySocket(b, i).also { made.add(it) } }
+        responder.start()
+        try {
+            assertEquals(1, made.size)
+            assertEquals(1, responder.restartListeners())
+            assertEquals(2, made.size)
+            assertTrue(made[0].isClosed, "the old reply socket is closed")
+            assertEquals(false, made[1].isClosed, "the new one is open")
+            assertTrue(responder.selfProbe(2000))
+        } finally {
+            responder.stop()
+        }
+    }
+
+    @Test
+    fun restartListenersOnAStoppedResponderOpensNothing() {
+        var calls = 0
+        val responder = responderWith(ErrorEvents()) { b, i -> calls++; realReplySocket(b, i) }
+        responder.start()
+        responder.stop()
+        assertEquals(1, calls)
+        assertEquals(0, responder.restartListeners())
+        assertEquals(1, calls, "the factory is not called for a stopped responder")
+    }
+
+    @Test
+    fun aFactoryThatFailsOnRestartLeavesTheResponderRunningWithoutAReplySocket() {
+        val events = ErrorEvents()
+        var calls = 0
+        val responder = responderWith(events) { b, i ->
+            if (calls++ == 0) realReplySocket(b, i) else throw java.io.IOException("still no socket")
+        }
+        responder.start()
+        try {
+            assertEquals(emptyList(), events.errors.toList())
+            assertEquals(1, responder.restartListeners(), "the listeners are reopened regardless")
+            assertEquals(listOf("reply-socket"), events.errors.toList())
+            assertEquals(false, responder.selfProbe(300))
+        } finally {
+            responder.stop()
+        }
     }
 }

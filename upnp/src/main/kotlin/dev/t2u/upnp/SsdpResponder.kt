@@ -25,6 +25,13 @@ data class ListenSpec(
     val joinWithoutInterface: Boolean,
 )
 
+/** The production reply socket: bound to [bind] on an ephemeral port, TTL 4, the interface set when there is one. */
+private fun defaultReplySocket(bind: InetAddress, iface: NetworkInterface?): MulticastSocket =
+    MulticastSocket(InetSocketAddress(bind, 0)).apply {
+        timeToLive = 4
+        if (iface != null) networkInterface = iface
+    }
+
 /** A DIAL device advertised through the responder. [location] is the full device-description URL. */
 data class SsdpDevice(val name: String, val uuid: String, val serverHeader: String, val location: String)
 
@@ -62,6 +69,8 @@ class SsdpResponder(
     private val notifyTarget: InetSocketAddress? = null,
     /** Where [selfProbe] sends its datagram; null means the first listener on loopback, else the SSDP group on [groupPort]. */
     private val probeTarget: InetSocketAddress? = null,
+    /** Creates the reply socket (bound to the address, ephemeral port, interface set when given). Tests inject failing or breakable sockets. */
+    private val openReplySocket: (InetAddress, NetworkInterface?) -> MulticastSocket = ::defaultReplySocket,
 ) {
     private class Listener(val spec: ListenSpec, val socket: MulticastSocket) {
         lateinit var thread: Thread
