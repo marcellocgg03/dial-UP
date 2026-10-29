@@ -149,6 +149,10 @@ internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
 /** How many earlier own addresses a renderer still counts as its own after the phone moved (plan 05-08). */
 internal const val OWN_HOSTS_KEPT = 4
 
+/** How long the re-set after an address change waits for a load that was in flight, and the step of that wait (plan 05-08, D-07). */
+internal const val NETWORK_RESET_WAIT_MS = 20_000L
+internal const val NETWORK_RESET_STEP_MS = 100L
+
 /**
  * Polls a STOPPED reading at the end of a track is waited out while the speaker already holds the queued stream, before the
  * queue advances the normal way (plan 04-06, RESEARCH Pitfall 10): a Sonos may report STOPPED for a moment as it switches.
@@ -167,7 +171,10 @@ internal const val PREFETCH_RETRY_MAX_MS = 600_000L
 /** How many video ids the prefetch remembers a failure for; the oldest are dropped first. */
 internal const val PREFETCH_FAILURES_KEPT = 50
 
-private val HTTP_URL = Regex("^https?:", RegexOption.IGNORE_CASE)
+/** The player states in which an address change re-sets the loaded track (plan 05-08, D-07); a stopped or idle player gets nothing. */
+private val RESET_STATUSES = setOf(PlayerStatus.PLAYING, PlayerStatus.PAUSED, PlayerStatus.LOADING)
+
+private val HTTP_URL =Regex("^https?:", RegexOption.IGNORE_CASE)
 
 /**
  * Per-video back-off for the prefetch (renderer.js `#prefetchFailures`, D-06): a video that could not be prepared is not tried
@@ -1797,12 +1804,16 @@ class Renderer(
     override suspend fun onNetworkLost() {
         if (destroyed) return
         networkDown = true
+        resetJob?.cancel() // a re-set under way belongs to an address that is gone again
         stopPolling()
     }
 
+    @Volatile private var resetJob: Job? = null
+
     /**
-     * Plan 05-08: the phone is on [host] now. Streams are built with it from here on, the old address is remembered as ours, and
-     * polling resumes.
+     * Plan 05-08 (D-07): the phone is on [host] now. Streams are built with it from here on, the old address is remembered as
+     * ours, polling resumes, and the loaded track is re-set on the speaker from the new address at the speaker's position
+     * (a short gap is accepted). The re-set runs in this renderer's own scope: one slow speaker holds up no other.
      */
     override suspend fun onNetworkChanged(host: String) {
         if (destroyed) return
@@ -1812,6 +1823,58 @@ class Renderer(
         ownHosts = (ownHosts.filter { it != fresh && it != old } + listOfNotNull(old?.takeIf { it != fresh })).takeLast(OWN_HOSTS_KEPT)
         networkDown = false
         if (current != null) startPolling()
+        resetJob?.cancel() // a newer change replaces an older re-set that is still waiting or loading
+        resetJob = scope.launch { resetAfterAddressChange() }
+    }
+
+    /** A load that has started and not finished: it may still land with a URL on the old address. */
+    private fun loadInFlight(): Boolean = loadsBeforeUri.get() > 0 || uriInFlight.isNotEmpty() ||
+        (status == PlayerStatus.LOADING && queue.current?.id != current?.video?.id)
+
+    /**
+     * Sends the loaded track to the speaker again from the new address (D-07). Waits for a load in flight first (bounded by
+     * [NETWORK_RESET_WAIT_MS]) and re-sets what it delivered. Only a playing, paused or loading player is re-set; a stopped or
+     * idle one, and one without a track, get nothing. The position is read once from the speaker; when it cannot be read the
+     * last polled one is used, never an extrapolation over the outage. A playing track is re-set playing, a paused one paused
+     * (a paused `direct` stream owes its Seek until the phone resumes). Nothing here touches the volume.
+     */
+    private suspend fun resetAfterAddressChange() {
+        val deadline = deps.clock() + NETWORK_RESET_WAIT_MS
+        while (!destroyed && loadInFlight() && deps.clock() < deadline) delay(NETWORK_RESET_STEP_MS)
+        if (destroyed) return
+        if (loadInFlight()) {
+            note("warn", "A load was still under way ${NETWORK_RESET_WAIT_MS / 1000}s after the address change - the track is not re-set")
+            return
+        }
+        val c = current ?: return
+        if (status !in RESET_STATUSES) return
+        val duration = nowPlaying?.duration ?: 0.0
+        var pos = speakerPosition() ?: position?.rel ?: c.startAt.toDouble()
+        if (duration > 1) pos = minOf(pos, duration - 1)
+        pos = maxOf(0.0, pos)
+        // the player may have been stopped, or another track loaded, while the position was read
+        val now = status
+        if (destroyed || current !== c || now !in RESET_STATUSES) return
+        val paused = now == PlayerStatus.PAUSED
+        val started = load(c.video, pos, c.format, startPlaying = !paused, forceOffset = paused && c.format in FILE_FORMATS)
+        if (!started) {
+            note("warn", "Re-setting \"${c.video.id}\" after the address change failed")
+            if (!destroyed && current != null) startPolling() // the load stopped the polls; the mirror needs them
+            return
+        }
+        // A stream that starts at 0 (direct) cannot be sought while paused: the speaker has no Play yet, so the Seek is owed.
+        val fresh = current
+        if (paused && fresh != null && fresh !== c && fresh.startAt == 0 && pos > 1 && FORMATS[fresh.format]?.seekable == true) {
+            fresh.owedSeek = pos
+        }
+        val title = nowPlaying?.title ?: c.video.id
+        note(
+            "info",
+            "Re-set \"$title\" after the address change at ${Math.floor(pos).toInt()}s",
+            "videoId" to c.video.id,
+            "format" to c.format,
+            "paused" to paused,
+        )
     }
 
     private suspend fun poll() {

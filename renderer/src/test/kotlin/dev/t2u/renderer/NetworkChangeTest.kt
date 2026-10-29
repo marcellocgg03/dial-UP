@@ -15,7 +15,6 @@ import dev.t2u.lounge.PreviousNextVideos
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.VideoContext
 import dev.t2u.upnp.FakeRenderer
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -243,7 +242,7 @@ internal class NetworkChangeTest {
         withFake { fake ->
             RendererHarness(fake, config = pinned("adts"), prepareDelayMs = 800).use { h ->
                 h.renderer.init()
-                val play = async(Dispatchers.Default) { h.renderer.play(Video(A), 0.0) }
+                val play = h.scope.async { h.renderer.play(Video(A), 0.0) }
                 waitUntil { h.prepared.isNotEmpty() }
                 move(h)
                 assertTrue(play.await())
