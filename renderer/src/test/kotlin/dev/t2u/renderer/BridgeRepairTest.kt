@@ -11,6 +11,9 @@ import dev.t2u.dial.DialAccessMode
 import dev.t2u.dial.DialAccessPolicy
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpResponder
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.io.IOException
@@ -23,7 +26,10 @@ import java.net.NetworkInterface
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -282,5 +288,91 @@ class BridgeRepairTest {
         val probe = after(marker, "ssdp-probe").single()
         assertEquals(setOf("ok", "trigger"), probe.keys)
         assertTrue(after(marker, "ssdp-repair").isEmpty())
+    }
+
+    // ------------------------------------------------------------------------------------------ lock scope and clock (task 3)
+
+    @Test
+    fun networkLostIsNotQueuedBehindARunningPass() = h.run<Unit> {
+        val armed = AtomicBoolean(false)
+        val calls = AtomicInteger(0)
+        val blocked = AtomicBoolean(false)
+        val release = CountDownLatch(1)
+        val bridge = h.newBridge(
+            currentNetwork = {
+                // the second call of a pass is the check it makes just before its probe step
+                if (armed.get() && calls.incrementAndGet() == 2) {
+                    blocked.set(true)
+                    release.await(10, TimeUnit.SECONDS)
+                }
+                h.network(h.loopback)
+            },
+        )
+        bridge.start()
+        h.launch(bridge)
+
+        val marker = h.events.size
+        armed.set(true)
+        val pass = h.scope.async { bridge.housekeeping("adb") }
+        h.awaitUntil("the pass reaches the check before its probe") { blocked.get() }
+        try {
+            withTimeout(3000) { bridge.networkLost() }
+        } finally {
+            release.countDown()
+        }
+        assertTrue(h.events.drop(marker).any { it.first == "bridge" && it.second["event"] == "network-lost" })
+        assertTrue(pass.await(), "the pass still returns true")
+        val probe = after(marker, "ssdp-probe").single()
+        assertEquals("network-down", probe["skipped"])
+        assertTrue(after(marker, "ssdp-repair").isEmpty())
+    }
+
+    @Test
+    fun aRebindWaitsForTheRepairStepNotForTheWholePass() = h.run<Unit> {
+        val broken = AtomicBoolean(false)
+        val calls = AtomicInteger(0)
+        val inner = factory(broken, calls)
+        val entered = AtomicBoolean(false)
+        val release = CountDownLatch(1)
+        val bridge = h.newBridge(
+            responderFactory = { net, ev, policy ->
+                val r = inner(net, ev, policy)
+                // the second build is the repair's: hold it inside the repair step, which runs under the network lock
+                if (calls.get() == 2 && entered.compareAndSet(false, true)) release.await(10, TimeUnit.SECONDS)
+                r
+            },
+        )
+        bridge.start()
+        h.launch(bridge)
+        broken.set(true)
+
+        val pass = h.scope.async { bridge.housekeeping("adb") }
+        h.awaitUntil("the repair is under way") { entered.get() }
+        val rebind = h.scope.async { bridge.rebindNetwork(h.network(h.loopback)) }
+        delay(500)
+        assertTrue(
+            h.events.none { it.first == "bridge" && it.second["event"] == "rebound" },
+            "the rebind waits for the repair step: ${h.events.takeLast(10)}",
+        )
+        release.countDown()
+        assertTrue(pass.await())
+        rebind.await()
+        val repairAt = h.events.indexOfFirst { it.first == "ssdp-repair" }
+        val reboundAt = h.events.indexOfFirst { it.first == "bridge" && it.second["event"] == "rebound" }
+        assertTrue(repairAt in 0 until reboundAt, "the repair finished before the rebind ran: $repairAt, $reboundAt")
+        assertTrue(h.events.none { it.first == "bridge-error" && it.second["where"].toString().startsWith("rebind") }, "${h.events.takeLast(10)}")
+        assertNotNull(h.dialSearchAt(bridge, h.loopback), "and the bridge answers afterwards")
+    }
+
+    @Test
+    fun aBackwardsClockStillRunsAnAlarmTick() = h.run<Unit> {
+        val now = AtomicLong(10_000_000L)
+        val bridge = h.newBridge(clock = { now.get() })
+        bridge.start()
+        assertTrue(bridge.housekeeping("alarm"))
+        now.addAndGet(-3_600_000L)
+        val marker = h.events.size
+        assertTrue(bridge.housekeeping("alarm"), "a clock that moved back is not 'recent'")
+        assertTrue(after(marker, "housekeeping").none { it["skipped"] == "recent" })
     }
 }
