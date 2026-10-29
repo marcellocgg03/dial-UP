@@ -31,6 +31,26 @@
             </intent-filter>
         </activity>
 
+        <!-- Share log: started only by the notification's PendingIntent; hands the current log file to the
+             system share sheet (D-11). -->
+        <activity
+            android:name=".ShareLogActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Not exported; access is granted per URI to the one log file ShareLogActivity shares (T-05-22). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".BridgeService"
             android:exported="false"

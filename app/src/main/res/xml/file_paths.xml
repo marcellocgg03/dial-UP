@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the two possible log directories (logDirFor): external files dir logs/ and the internal fallback
+     evidence/. Nothing else is ever shareable (T-05-22). -->
+<paths>
+    <external-files-path name="logs" path="logs/" />
+    <files-path name="logs_internal" path="evidence/" />
+</paths>

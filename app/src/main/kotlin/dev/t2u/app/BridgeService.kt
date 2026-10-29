@@ -130,6 +130,12 @@ class BridgeService : Service(), SpikeHost {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_CLEAR_LOG) {
+            // D-11: empties the current log and its rotated files; the first line of the new log says so
+            evidence.clear()
+            evidence.event("log-cleared", mapOf("source" to "notification"))
+            if (bootstrapped) return START_STICKY
+        }
         if (!bootstrapped) {
             bootstrapped = true
             val reason = startReasonOf(intent == null, intent?.action, intent?.getStringExtra(EXTRA_START_REASON))
@@ -416,12 +422,28 @@ class BridgeService : Service(), SpikeHost {
             Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        // D-11, Open Question 6: three actions is Android's limit. Share log opens a tiny non-exported
+        // activity (a PendingIntent that opens an Activity is not a trampoline).
+        val clearLog = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BridgeService::class.java).setAction(ACTION_CLEAR_LOG),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val shareLog = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(this, ShareLogActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Tube2U (app)")
             .setContentText(notificationText(count))
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
+            .addAction(0, "Clear log", clearLog)
+            .addAction(0, "Share log", shareLog)
             .build()
     }
 
@@ -444,6 +466,7 @@ class BridgeService : Service(), SpikeHost {
 
     companion object {
         const val ACTION_STOP = "dev.t2u.spike.STOP"
+        const val ACTION_CLEAR_LOG = "dev.t2u.spike.CLEAR_LOG"
         const val CHANNEL_ID = "t2u-spike"
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
