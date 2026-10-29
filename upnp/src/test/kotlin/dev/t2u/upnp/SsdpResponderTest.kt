@@ -387,4 +387,61 @@ class SsdpResponderTest {
             responder.stop()
         }
     }
+
+    // ------------------------------------------------------------------------------------------ probe reasons (05-15)
+
+    private fun closedReplySocket(b: InetAddress, i: NetworkInterface?): MulticastSocket =
+        realReplySocket(b, i).also { it.close() }
+
+    /** One responder per situation; each runs [check] with the probe function under test, then is stopped. */
+    private fun forEachProbeSituation(check: (situation: String, expected: ProbeResult, run: (SsdpResponder) -> Unit) -> Unit) {
+        // the five situations of probeSaysWhyItFailed, as (name, expected, body that returns when the responder is set up)
+        check("before start", ProbeResult.NOT_RUNNING) { }
+        check("after stop", ProbeResult.NOT_RUNNING) { it.start(); it.stop() }
+        check("no reply socket", ProbeResult.NO_REPLY_SOCKET) { it.start() }
+        check("send failed", ProbeResult.SEND_FAILED) { it.start() }
+        check("deaf listener", ProbeResult.NOT_HEARD) { it.start(); it.closeListenersForTest() }
+        check("healthy", ProbeResult.OK) { it.start() }
+    }
+
+    private fun situationResponder(situation: String): SsdpResponder = when (situation) {
+        "no reply socket" -> responderWith(ErrorEvents()) { _, _ -> throw java.io.IOException("none") }
+        "send failed" -> responderWith(ErrorEvents(), ::closedReplySocket)
+        else -> responderWith(ErrorEvents(), ::realReplySocket)
+    }
+
+    @Test
+    fun probeSaysWhyItFailed() {
+        forEachProbeSituation { situation, expected, setup ->
+            val responder = situationResponder(situation)
+            try {
+                setup(responder)
+                assertEquals(expected, responder.probe(300), situation)
+            } finally {
+                responder.stop()
+            }
+        }
+    }
+
+    @Test
+    fun selfProbeIsProbeEqualsOk() {
+        forEachProbeSituation { situation, expected, setup ->
+            val responder = situationResponder(situation)
+            try {
+                setup(responder)
+                assertEquals(expected == ProbeResult.OK, responder.selfProbe(300), situation)
+            } finally {
+                responder.stop()
+            }
+        }
+    }
+
+    @Test
+    fun probeResultWireNamesAreFixedStrings() {
+        assertEquals(
+            listOf("ok", "not-running", "no-reply-socket", "send-failed", "not-heard"),
+            listOf(ProbeResult.OK, ProbeResult.NOT_RUNNING, ProbeResult.NO_REPLY_SOCKET, ProbeResult.SEND_FAILED, ProbeResult.NOT_HEARD).map { it.wire },
+        )
+        assertEquals(5, ProbeResult.values().size, "no entry outside the five codes")
+    }
 }

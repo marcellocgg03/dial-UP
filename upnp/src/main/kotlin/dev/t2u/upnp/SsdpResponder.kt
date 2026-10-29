@@ -25,6 +25,24 @@ data class ListenSpec(
     val joinWithoutInterface: Boolean,
 )
 
+/** Why a self-probe passed or failed. [wire] is the short code the log carries: no address, name or message. */
+enum class ProbeResult(val wire: String) {
+    /** The responder's own listener heard the probe. */
+    OK("ok"),
+
+    /** The responder was never started or has been stopped. */
+    NOT_RUNNING("not-running"),
+
+    /** The responder runs but has no reply socket, so it can neither probe, answer nor announce. */
+    NO_REPLY_SOCKET("no-reply-socket"),
+
+    /** The reply socket threw when sending the probe: the send side is dead. */
+    SEND_FAILED("send-failed"),
+
+    /** The probe was sent but the own listener did not hear it in time: the receive side is deaf. */
+    NOT_HEARD("not-heard"),
+}
+
 /** The production reply socket: bound to [bind] on an ephemeral port, TTL 4, the interface set when there is one. */
 private fun defaultReplySocket(bind: InetAddress, iface: NetworkInterface?): MulticastSocket =
     MulticastSocket(InetSocketAddress(bind, 0)).apply {
@@ -224,6 +242,9 @@ class SsdpResponder(
 
     /** Closes the listen sockets only, leaving the responder "running" but deaf, so tests can exercise [restartListeners]. */
     internal fun closeListenersForTest() = synchronized(lifecycle) { closeListeners() }
+
+    /** Placeholder until the probe logic moves here (05-15 task 2). */
+    fun probe(timeoutMs: Long = 2000): ProbeResult = ProbeResult.NOT_RUNNING
 
     /**
      * Proves this responder's own listener still receives: sends one M-SEARCH whose ST is a random nonce
