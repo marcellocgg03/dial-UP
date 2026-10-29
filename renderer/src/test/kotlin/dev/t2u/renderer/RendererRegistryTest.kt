@@ -750,4 +750,65 @@ class RendererRegistryTest {
         c.h.registry.retryDue()
         assertEquals((3000..3009).toList(), c.h.registry.renderers().map { it.port }.sorted())
     }
+
+    // ---- Plan 05-14: a clock that moved backwards (WR-07) ----
+
+    private val oneHour = 60L * 60 * 1000
+
+    @Test
+    @DisplayName("a retry that was due is not delayed by a wall clock that moved back one hour")
+    fun aBackwardsClockJumpDoesNotDelayTheRetry() = runBlocking {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(initBehaviour = { if (failures.incrementAndGet() <= 1) throw java.io.IOException("boom") else true })
+        h.alive()
+        h.now.addAndGet(-oneHour)
+        assertEquals(1, h.registry.retryDue())
+        assertEquals(1, h.events.retries.size)
+        assertEquals(1, h.events.retries[0]["attempt"])
+        assertEquals("added", h.events.retries[0]["outcome"])
+    }
+
+    @Test
+    @DisplayName("a speaker 4 minutes into its wait is still not retried early")
+    fun aWaitingSpeakerIsStillNotRetriedEarly() = runBlocking {
+        val h = Harness(initBehaviour = { throw java.io.IOException("boom") })
+        h.alive()
+        h.now.addAndGet(4 * 60_000L)
+        assertEquals(0, h.registry.retryDue())
+        h.now.addAndGet(-3 * 60_000L)
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(1, h.created.size)
+        h.alive()
+        assertEquals(1, h.created.size)
+    }
+
+    @Test
+    @DisplayName("an alive after the clock moved back one hour sets the failed speaker up again")
+    fun anAliveAfterABackwardsClockJumpSetsTheSpeakerUp() = runBlocking {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(initBehaviour = { if (failures.incrementAndGet() <= 1) throw java.io.IOException("boom") else true })
+        h.alive()
+        assertEquals(1, h.created.size)
+        h.now.addAndGet(-oneHour)
+        h.alive()
+        assertEquals(2, h.created.size)
+        assertEquals(1, h.registry.count.value)
+    }
+
+    @Test
+    @DisplayName("a refused device is neither retried nor set up by an alive, after a backward or a forward clock jump")
+    fun aRefusedDeviceStaysRefusedWhateverTheClockDoes() = runBlocking {
+        val h = Harness(initBehaviour = { false })
+        h.alive()
+        assertEquals(1, h.created.size)
+        h.now.addAndGet(-oneHour)
+        assertEquals(0, h.registry.retryDue())
+        h.alive()
+        assertEquals(1, h.created.size)
+        h.now.addAndGet(oneHour + 24 * oneHour)
+        assertEquals(0, h.registry.retryDue())
+        h.alive()
+        assertEquals(1, h.created.size)
+        assertTrue(h.events.retries.isEmpty())
+    }
 }
