@@ -2,23 +2,44 @@
 """Soak verdict of the app's JSONL event log (plan 05-03: how long did the phone sleep, did the playlist advance).
 
 Run as:  python3 -I tools/soak-report.py FILE... [--since T] [--until T] [--min-hours H]
+                                          [--min-casting-hours H] [--min-tracks N] [--allow-idle]
                                           [--max-track-gap-s S] [--max-idle-housekeeping-gap-s S]
          python3 -I tools/soak-report.py --self-test
 
 Files are given oldest first (spike-events.jsonl.2 .1 and the current file); events are sorted by ts anyway.
-Prints one line per topic, in this order: SPAN, SERVICE, HEARTBEAT, SLEEP, IDLE, CASTING, TRACKS, NET (plus one
-IP line per newly seen Wi-Fi address), LOUNGE, RETRY, PROBE, HOUSEKEEPING, LOCK, UPDATE, EXIT, and a final line:
+Prints one line per topic, in this order: WINDOW (only with --since/--until), SPAN, SERVICE, RUN, HEARTBEAT, SLEEP,
+IDLE, CASTING, TRACKS, NET (plus one IP line per newly seen Wi-Fi address), LOUNGE, RETRY, PROBE, REPAIR,
+HOUSEKEEPING, LOCK, UPDATE, EXIT, and a final line:
 
-  SOAK OK <hours> h          exit 0: at least 2 heartbeats, hours >= --min-hours (default 0), the largest gap
-                             between track starts while casting <= --max-track-gap-s (default 900), and no
-                             lounge-receiver "terminated" event
-  SOAK FAIL <checks>         exit 1: comma list of hours, track-gap, lounge
+  SOAK OK <hours> h          exit 0: every check below passed; <hours> is the longest uninterrupted service run
+  SOAK FAIL <checks>         exit 1: comma list, in this order, of
+                               hours     fewer than 2 heartbeats, or the longest run is under --min-hours (default 0)
+                               casting   no heartbeat with casting above 0 (waived by --allow-idle), or the casting
+                                         hours are under --min-casting-hours (default 0)
+                               tracks    fewer track starts than --min-tracks (default 1, or 0 with --allow-idle)
+                               track-gap the largest gap between track starts while casting is above
+                                         --max-track-gap-s (default 900)
+                               lounge    a lounge-receiver "terminated" event
   SOAK NONE                  exit 1: no heartbeat in range
+
+Hours: the longest uninterrupted service run, from the first to the last heartbeat between two service-start events
+(a log that begins mid-run counts from its first heartbeat). SPAN still shows the whole log span. RUN shows the
+longest run and the number of runs. CASTING hours is the time covered by consecutive heartbeats of one run, the
+earlier one with casting above 0, at most 300 s apart. --allow-idle waives only "some casting happened" and the
+default one-track minimum; an explicit --min-tracks or --min-casting-hours still applies. When casting heartbeats
+exist but no track start matched, a NOTE line says the detector may not match the renderer's wording (is_track_start
+reads the message of a renderer event) and the tracks check fails.
+
+Suggested invocation for the overnight acceptance run (D-17):
+  python3 -I tools/soak-report.py spike-events.jsonl* --since 2026-10-29T22:00:00 --until 2026-10-30T08:00:00 \\
+      --min-hours 3 --min-casting-hours 3 --min-tracks 2 --max-idle-housekeeping-gap-s 540
 
 HOUSEKEEPING compares the largest gap between SSDP housekeeping runs while the phone was idle (Doze) with
 --max-idle-housekeeping-gap-s (default 540, the Doze bound stated by plan 05-11). It is reported as within_bound
 for plans 05-12 and 05-13 to judge; it does not change the SOAK verdict. RETRY and PROBE read events of plans
-05-04 and 05-02 and show zeros on a log from a build without them.
+05-04 and 05-02 and show zeros on a log from a build without them. PROBE restarts counts ssdp-probe events whose
+restarted field is true or an integer above 0 (the app logs the number of listeners bound). REPAIR counts
+ssdp-repair events: responder and client count what was repaired with ok true, failed counts ok false.
 
 --since/--until take a time of day (HH:MM:SS) or a full moment (YYYY-MM-DDTHH:MM:SS, optional fraction, optional Z or
 +-HH:MM offset; a space may replace the T). Both bounds must be the same kind.
@@ -48,6 +69,7 @@ from datetime import datetime, timedelta, timezone
 DEFAULT_TRACK_GAP_S = 900
 DEFAULT_HOUSEKEEPING_BOUND_S = 540
 HEARTBEAT_GAP_S = 90
+CASTING_GAP_S = 300       # consecutive heartbeats further apart than this do not count as casting time
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?(Z|[+-]\d\d:\d\d)?$")
@@ -224,7 +246,9 @@ def analyse(events, max_track_gap_s, bound_s):
         "hb": 0, "hb_prev": None, "hb_max_gap": 0.0, "hb_gaps": 0,
         "elapsed_s": 0.0, "awake_s": 0.0,
         "idle_hb": 0, "idle_windows": 0, "idle_longest": 0.0, "idle_run_start": None, "idle_run_last": None,
-        "casting_hb": 0, "min_total": None,
+        "casting_hb": 0, "min_total": None, "casting_s": 0.0,
+        "longest_run_s": 0.0, "runs": 0,
+        "repair_responder": 0, "repair_client": 0, "repair_failed": 0,
         "tracks": 0, "track_max_gap": 0.0,
         "net": 0, "rebinds": 0, "skipped": 0, "ips": [], "ip_lines": [], "ip_unknown": set(),
         "reconnects": 0, "refreshes": 0, "ends": 0, "terminated": 0,
@@ -240,6 +264,14 @@ def analyse(events, max_track_gap_s, bound_s):
     min_casting_since = None  # lowest casting count seen since the previous track start
     prev_track = None
     prev_hk = None
+    run_first = run_last = None   # first and last heartbeat of the current service run
+    run_prev = None               # (dt, casting above 0) of the previous heartbeat in this run
+
+    def close_run():
+        if run_first is not None:
+            r["runs"] += 1
+            r["longest_run_s"] = max(r["longest_run_s"], (run_last - run_first).total_seconds())
+
     for dt, _clock, ts, ev in events:
         kind = ev["kind"]
         if r["first"] is None:
@@ -247,9 +279,20 @@ def analyse(events, max_track_gap_s, bound_s):
         r["last"] = (dt, ts)
         if kind == "service-start":
             r["starts"] += 1
+            close_run()
+            run_first = run_last = run_prev = None
             r["reasons"][code(ev["reason"]) if "reason" in ev else "unknown"] += 1
         elif kind == "heartbeat":
             r["hb"] += 1
+            c_now = ev.get("casting")
+            if run_first is None:
+                run_first = dt
+            run_last = dt
+            if run_prev is not None and run_prev[1]:
+                gap_c = (dt - run_prev[0]).total_seconds()
+                if 0 <= gap_c <= CASTING_GAP_S:
+                    r["casting_s"] += gap_c
+            run_prev = (dt, is_int(c_now) and c_now > 0)
             if r["hb_prev"] is not None:
                 gap = (dt - r["hb_prev"]).total_seconds()
                 r["hb_max_gap"] = max(r["hb_max_gap"], gap)
@@ -331,8 +374,17 @@ def analyse(events, max_track_gap_s, bound_s):
                 r["probe_ok"] += 1
             elif ev.get("ok") is False:
                 r["probe_failed"] += 1
-            if ev.get("restarted") is True:
+            restarted = ev.get("restarted")
+            if restarted is True or (is_int(restarted) and restarted > 0):
                 r["probe_restarts"] += 1
+        elif kind == "ssdp-repair":
+            ok, what = ev.get("ok"), ev.get("what")
+            if ok is True and what == "responder":
+                r["repair_responder"] += 1
+            elif ok is True and what == "client":
+                r["repair_client"] += 1
+            elif ok is False:
+                r["repair_failed"] += 1
         elif kind == "housekeeping":
             if ev.get("ran") is True:
                 r["hk_runs"] += 1
@@ -360,18 +412,22 @@ def analyse(events, max_track_gap_s, bound_s):
         elif kind == "exit-info":
             r["exits"] += 1
             r["exit_reasons"].append(code(ev.get("reason")))
+    close_run()
     return r
 
 
-def report(r, min_hours, max_track_gap_s, bound_s):
+def report(r, min_hours, max_track_gap_s, bound_s, min_casting_hours=0.0, min_tracks=None, allow_idle=False):
     """(lines, exit code) for an analysed log."""
     if r["hb"] == 0:
         return ["SOAK NONE"], 1
     lines = []
-    hours = (r["last"][0] - r["first"][0]).total_seconds() / 3600.0
-    lines.append("SPAN first=%s last=%s hours=%.2f" % (esc(r["first"][1]), esc(r["last"][1]), hours))
+    span_hours = (r["last"][0] - r["first"][0]).total_seconds() / 3600.0
+    hours = r["longest_run_s"] / 3600.0
+    casting_hours = r["casting_s"] / 3600.0
+    lines.append("SPAN first=%s last=%s hours=%.2f" % (esc(r["first"][1]), esc(r["last"][1]), span_hours))
     reasons = ",".join("%s:%d" % (k, v) for k, v in sorted(r["reasons"].items())) or "-"
     lines.append("SERVICE starts=%d reasons=%s" % (r["starts"], reasons))
+    lines.append("RUN longest_h=%.2f runs=%d" % (hours, r["runs"]))
     lines.append("HEARTBEAT count=%d max_gap_s=%.0f gaps_over_90s=%d" % (r["hb"], r["hb_max_gap"], r["hb_gaps"]))
     if r["elapsed_s"] > 0:
         asleep = (r["elapsed_s"] - r["awake_s"]) / r["elapsed_s"] * 100.0
@@ -379,7 +435,8 @@ def report(r, min_hours, max_track_gap_s, bound_s):
     else:
         lines.append("SLEEP elapsed_s=0 awake_s=0 asleep_pct=-")
     lines.append("IDLE heartbeats=%d windows=%d longest_s=%.0f" % (r["idle_hb"], r["idle_windows"], r["idle_longest"]))
-    lines.append("CASTING heartbeats=%d min_total=%s" % (r["casting_hb"], "-" if r["min_total"] is None else r["min_total"]))
+    lines.append("CASTING heartbeats=%d min_total=%s hours=%.2f"
+                 % (r["casting_hb"], "-" if r["min_total"] is None else r["min_total"], casting_hours))
     lines.append("TRACKS starts=%d max_gap_s=%.0f" % (r["tracks"], r["track_max_gap"]))
     lines.append("NET events=%d rebinds=%d skipped=%d ips=%d" % (r["net"], r["rebinds"], r["skipped"], len(r["ips"])))
     for ts, address in r["ip_lines"]:
@@ -388,15 +445,23 @@ def report(r, min_hours, max_track_gap_s, bound_s):
                  % (r["reconnects"], r["refreshes"], r["ends"], r["terminated"]))
     lines.append("RETRY attempts=%d ok=%d" % (r["retry"], r["retry_ok"]))
     lines.append("PROBE ok=%d failed=%d restarts=%d" % (r["probe_ok"], r["probe_failed"], r["probe_restarts"]))
+    lines.append("REPAIR responder=%d client=%d failed=%d" % (r["repair_responder"], r["repair_client"], r["repair_failed"]))
     within = "yes" if r["hk_idle_max_gap"] <= bound_s else "no"
     lines.append("HOUSEKEEPING runs=%d max_gap_s=%.0f idle_max_gap_s=%.0f alarm_late_max_s=%.0f bound_s=%s within_bound=%s"
                  % (r["hk_runs"], r["hk_max_gap"], r["hk_idle_max_gap"], r["alarm_late_s"], fmt_num(bound_s), within))
     lines.append("LOCK events=%d acquired=%d released=%d" % (r["lock"], r["acquired"], r["released"]))
     lines.append("UPDATE attempts=%d ok=%d" % (r["upd"], r["upd_ok"]))
     lines.append("EXIT entries=%d reasons=%s" % (r["exits"], ",".join(r["exit_reasons"]) or "-"))
+    if r["casting_hb"] > 0 and r["tracks"] == 0:
+        lines.append("NOTE casting seen but no track start matched; the detector may not match the renderer's wording")
     failed = []
     if r["hb"] < 2 or hours < min_hours:
         failed.append("hours")
+    if (r["casting_hb"] == 0 and not allow_idle) or casting_hours < min_casting_hours:
+        failed.append("casting")
+    needed = min_tracks if min_tracks is not None else (0 if allow_idle else 1)
+    if r["tracks"] < needed:
+        failed.append("tracks")
     if r["tracks"] and r["track_max_gap"] > max_track_gap_s:
         failed.append("track-gap")
     if r["terminated"]:
@@ -412,7 +477,7 @@ def fmt_num(value):
     return "%d" % value if float(value).is_integer() else "%g" % value
 
 
-def run(paths, since, until, min_hours, max_track_gap_s, bound_s, out):
+def run(paths, since, until, min_hours, max_track_gap_s, bound_s, min_casting_hours, min_tracks, allow_idle, out):
     events, bad, unreadable = read_events(paths)
     window = parse_window(since, until)
     window_line = None
@@ -424,7 +489,8 @@ def run(paths, since, until, min_hours, max_track_gap_s, bound_s, out):
         print(window_line, file=out)
     for u in unreadable:
         print("UNREADABLE %s" % esc(u), file=out)
-    lines, rc = report(analyse(events, max_track_gap_s, bound_s), min_hours, max_track_gap_s, bound_s)
+    lines, rc = report(analyse(events, max_track_gap_s, bound_s), min_hours, max_track_gap_s, bound_s,
+                       min_casting_hours, min_tracks, allow_idle)
     # SOAK NONE stands alone; any other verdict is the last line
     if bad:
         print("skipped %d unparsable lines" % bad, file=out)
@@ -469,7 +535,8 @@ def self_test():
                 for junk in extra:
                     fh.write(junk + "\n")
             buf = io.StringIO()
-            rc = run([path], since, until, min_hours, DEFAULT_TRACK_GAP_S, DEFAULT_HOUSEKEEPING_BOUND_S, buf)
+            rc = run([path], since, until, min_hours, DEFAULT_TRACK_GAP_S, DEFAULT_HOUSEKEEPING_BOUND_S,
+                     min_casting_hours, min_tracks, allow_idle, buf)
             text = buf.getvalue()
         last = text.strip().splitlines()[-1]
         assert rc == expect_rc and last.startswith(expect_last), (rc, last, text)
@@ -499,21 +566,22 @@ def self_test():
     verdict([ev(0, "service-start"), sent(5)], expect_rc=1, expect_last="SOAK NONE")
 
     # two heartbeats 600 s apart in elapsed time and 60 s apart in uptime sleep 90 percent
-    text = verdict([hb(0, 1_000_000, 100_000), hb(600, 1_600_000, 160_000)], expect_rc=0, expect_last="SOAK OK")
+    text = verdict([hb(0, 1_000_000, 100_000), hb(600, 1_600_000, 160_000)], expect_rc=0, expect_last="SOAK OK",
+                   allow_idle=True)
     assert "SLEEP elapsed_s=600 awake_s=60 asleep_pct=90.0" in text, text
 
     # housekeeping 300 s apart is within the bound; a 700 s gap during idle is not, and the verdict is unchanged
     rows = [hb(0, idle=True), hb(2000, idle=True)] + [ev(s, "housekeeping", trigger="timer", ran=True) for s in (10, 310, 610)]
-    text = verdict(rows, expect_rc=0, expect_last="SOAK OK")
+    text = verdict(rows, expect_rc=0, expect_last="SOAK OK", allow_idle=True)
     assert "idle_max_gap_s=300" in text and "within_bound=yes" in text, text
     rows = [hb(0, idle=True), hb(2000, idle=True)] + [ev(s, "housekeeping", trigger="timer", ran=True) for s in (10, 710)]
-    text = verdict(rows, expect_rc=0, expect_last="SOAK OK")
+    text = verdict(rows, expect_rc=0, expect_last="SOAK OK", allow_idle=True)
     assert "idle_max_gap_s=700" in text and "within_bound=no" in text, text
 
     # a new address prints one IP line; a hostile reason or address never reaches the output
     rows = [hb(0, ip="192.168.0.20"), hb(30, ip="192.168.0.21"), hb(60, ip="192.168.0.21"),
             ev(61, "service-start", reason="http://evil/?token=SECRET"), hb(90, ip="evil\x1b[31mSECRET")]
-    text = verdict(rows, expect_rc=0, expect_last="SOAK OK")
+    text = verdict(rows, expect_rc=0, expect_last="SOAK OK", allow_idle=True)
     assert "NET events=0 rebinds=0 skipped=0 ips=2" in text and text.count("\nIP ") == 3, text
     assert "SECRET" not in text and "evil" not in text and "\x1b" not in text, text
     assert "\\x1b" in esc("a\x1bb")
@@ -561,6 +629,73 @@ def self_test():
                 assert exc.code == 2, (bad, exc.code)
             else:
                 raise AssertionError("no usage error for %r" % bad)
+
+    # --- verdict (WR-09, IN-06): casting and tracks are required, hours are the longest service run
+    def cast_log(hours, track_every=240, casting=1, step=30):
+        rows = [ev(0, "service-start", reason="boot")]
+        rows += [hb(i, casting=casting) for i in range(0, int(hours * 3600) + 1, step)]
+        if track_every:
+            rows += [sent(i) for i in range(10, int(hours * 3600), track_every)]
+        return rows
+
+    # nothing cast: no casting heartbeat and no track start
+    rows = cast_log(1, track_every=0, casting=0)
+    verdict(rows, expect_rc=1, expect_last="SOAK FAIL casting,tracks")
+    verdict(rows, expect_rc=0, expect_last="SOAK OK 1.00 h", allow_idle=True)
+    # --allow-idle waives only the defaults: an explicit minimum still applies
+    verdict(rows, expect_rc=1, expect_last="SOAK FAIL tracks", allow_idle=True, min_tracks=1)
+    verdict(rows, expect_rc=1, expect_last="SOAK FAIL casting", allow_idle=True, min_casting_hours=0.5)
+    # casting heartbeats but the detector found no track start
+    text = verdict(cast_log(1, track_every=0), expect_rc=1, expect_last="SOAK FAIL tracks")
+    assert "NOTE casting seen but no track start matched; the detector may not match the renderer's wording" in text, text
+    # casting hours
+    verdict(cast_log(1), expect_rc=1, expect_last="SOAK FAIL casting", min_casting_hours=3)
+    text = verdict(cast_log(4), expect_rc=0, expect_last="SOAK OK 4.00 h", min_casting_hours=3)
+    assert "CASTING heartbeats=481 min_total=- hours=4.00" in text, text
+    # track starts
+    one = [e for e in cast_log(1, track_every=0)] + [sent(100)]
+    verdict(one, expect_rc=1, expect_last="SOAK FAIL tracks", min_tracks=2)
+    verdict(one + [sent(200)], expect_rc=0, expect_last="SOAK OK", min_tracks=2)
+    # service restarts split the runs: hours are the longest uninterrupted run, SPAN stays the whole log
+    def two_runs(restarts):
+        rows = []
+        edges = [0] + restarts + [25200]
+        for n, (a, b) in enumerate(zip(edges, edges[1:])):
+            rows.append(ev(a, "service-start", reason="boot"))
+            rows += [hb(i) for i in range(a, b if b != 25200 else b + 1, 60)]
+        rows += [sent(i) for i in range(10, 25200, 240)]
+        return rows
+    text = verdict(two_runs([18000]), expect_rc=0, expect_last="SOAK OK 4.98 h", min_hours=3)
+    assert "RUN longest_h=4.98 runs=2" in text and "hours=7.00" in text.splitlines()[0], text
+    text = verdict(two_runs([9000, 18000]), expect_rc=1, expect_last="SOAK FAIL hours", min_hours=3)
+    assert "RUN longest_h=2.48 runs=3" in text and "SPAN" in text and "hours=7.00" in text, text
+    # a log that begins mid-run counts from its first heartbeat
+    text = verdict([hb(i) for i in range(100, 7301, 60)] + [sent(120)], expect_rc=0, expect_last="SOAK OK 2.00 h")
+    assert "RUN longest_h=2.00 runs=1" in text, text
+    # casting time: a 600 s gap is not casting, nor is the gap before the first casting heartbeat or across a restart
+    text = verdict([hb(0), hb(600)], expect_rc=0, expect_last="SOAK OK", allow_idle=True)
+    assert "hours=0.00" in text.split("CASTING")[1].splitlines()[0], text
+    text = verdict([hb(0), hb(200), hb(400)], expect_rc=0, expect_last="SOAK OK", allow_idle=True)
+    assert "CASTING heartbeats=3 min_total=- hours=0.11" in text, text
+    text = verdict([hb(0, casting=0), hb(100), hb(200, casting=0)], expect_rc=0, expect_last="SOAK OK", allow_idle=True)
+    assert "hours=0.03" in text.split("CASTING")[1].splitlines()[0], text
+    text = verdict([hb(0), hb(100), ev(150, "service-start"), hb(200), hb(300)], expect_rc=0, expect_last="SOAK OK",
+                   allow_idle=True)
+    assert "hours=0.06" in text.split("CASTING")[1].splitlines()[0], text
+    # probe restarts: the app logs the number of listeners bound
+    rows = [hb(0), hb(60)] + [ev(10 + n, "ssdp-probe", ok=True, restarted=v) for n, v in enumerate((False, 1, True, 0, 2.5, "x"))]
+    text = verdict(rows, expect_rc=0, expect_last="SOAK OK", allow_idle=True)
+    assert "PROBE ok=6 failed=0 restarts=2" in text, text
+    # repairs
+    rows = [hb(0), hb(60), ev(10, "ssdp-repair", what="responder", ok=True, trigger="x"),
+            ev(11, "ssdp-repair", what="client", ok=False, trigger="x"), ev(12, "ssdp-repair", what="client", ok="yes")]
+    text = verdict(rows, expect_rc=0, expect_last="SOAK OK", allow_idle=True)
+    assert "REPAIR responder=1 client=0 failed=1" in text, text
+    # the check order is hours, casting, tracks, track-gap, lounge
+    verdict(cast_log(0.01, track_every=0, casting=0) + [ev(5, "lounge-receiver", type="terminated")],
+            expect_rc=1, expect_last="SOAK FAIL hours,casting,tracks,lounge", min_hours=1)
+    rows = [e for e in cast_log(1, track_every=0)] + [sent(100), sent(2100), ev(5, "lounge-receiver", type="terminated")]
+    verdict(rows, expect_rc=1, expect_last="SOAK FAIL hours,tracks,track-gap,lounge", min_hours=5, min_tracks=3)
     print("SELF-TEST OK")
     return 0
 
@@ -571,6 +706,9 @@ def main(argv):
     ap.add_argument("--since")
     ap.add_argument("--until")
     ap.add_argument("--min-hours", type=float, default=0.0)
+    ap.add_argument("--min-casting-hours", type=float, default=0.0)
+    ap.add_argument("--min-tracks", type=int, default=None)
+    ap.add_argument("--allow-idle", action="store_true")
     ap.add_argument("--max-track-gap-s", type=float, default=DEFAULT_TRACK_GAP_S)
     ap.add_argument("--max-idle-housekeeping-gap-s", type=float, default=DEFAULT_HOUSEKEEPING_BOUND_S)
     ap.add_argument("--self-test", action="store_true")
@@ -584,7 +722,7 @@ def main(argv):
     if not args.files:
         ap.error("no input files")
     return run(args.files, args.since, args.until, args.min_hours, args.max_track_gap_s,
-               args.max_idle_housekeeping_gap_s, sys.stdout)
+               args.max_idle_housekeeping_gap_s, args.min_casting_hours, args.min_tracks, args.allow_idle, sys.stdout)
 
 
 if __name__ == "__main__":
