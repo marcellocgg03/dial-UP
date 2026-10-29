@@ -87,6 +87,12 @@ class Ssdp(
         }
     }
 
+    /**
+     * True while the client is started and at least one search socket is open. [start] reports a failed bind through
+     * `onError` and does not throw, so a client whose every bind failed is running but deaf: this tells them apart.
+     */
+    fun isBound(): Boolean = running && sockets.any { !it.socket.isClosed }
+
     /** Sends an M-SEARCH from every search socket. A loopback socket never sends to a multicast target (JVM tests). */
     fun search(st: String, mx: Int = 3) {
         val bytes = buildSearch(st, mx)

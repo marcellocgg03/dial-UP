@@ -629,6 +629,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
+    /** Tests only: the current SSDP client, so a test can break it the way a failed rebind step or bind does. */
+    internal fun ssdpClientForTest(): Ssdp? = ssdp
+
     /** The port each responder listen socket bound, by spec id. */
     fun ssdpPorts(): Map<String, Int> = responder?.boundPorts().orEmpty()
 

@@ -13,6 +13,7 @@ import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -197,5 +198,47 @@ class SsdpClientTest {
             parseMessage("NOTIFY * HTTP/1.1\r\nNTS: ssdp:alive\r\n\r\n".toByteArray()),
         )
         assertEquals(listOf("notify"), events.errors.toList())
+    }
+
+    @Test
+    @DisplayName("isBound is true only while a search socket is open: before start, after stop and after a failed bind it is false")
+    fun isBoundFollowsTheSearchSockets() {
+        val events = Collected()
+        val ssdp = Ssdp(listOf(loopback), events)
+        assertFalse(ssdp.isBound(), "before start")
+        ssdp.start()
+        try {
+            assertTrue(ssdp.isBound(), "after start on a local address")
+        } finally {
+            ssdp.stop()
+        }
+        assertFalse(ssdp.isBound(), "after stop")
+
+        // a bind address that is not local: start does not throw, the error goes to onError and the client is deaf
+        val failing = Collected()
+        val deaf = Ssdp(listOf(InetAddress.getByName("203.0.113.9")), failing)
+        deaf.start()
+        try {
+            assertFalse(deaf.isBound(), "a client whose every bind failed is running but not bound")
+            assertTrue(failing.errors.any { it.startsWith("bind:") }, "the bind failure is reported: ${failing.errors}")
+        } finally {
+            deaf.stop()
+        }
+    }
+
+    @Test
+    @DisplayName("a search on a stopped or never started client is a no-op that does not throw")
+    fun searchOnAStoppedClientIsHarmless() {
+        FakeSpeaker(loopback, listOf(reply("200 OK"))).use { speaker ->
+            val events = Collected()
+            val ssdp = Ssdp(listOf(loopback), events, speaker.address)
+            ssdp.search(RENDERER_ST)
+            ssdp.start()
+            ssdp.stop()
+            ssdp.search(RENDERER_ST)
+            Thread.sleep(200)
+            assertTrue(speaker.requests.isEmpty(), "a stopped client sends nothing: ${speaker.requests}")
+            assertTrue(events.errors.isEmpty(), "and reports nothing: ${events.errors}")
+        }
     }
 }

@@ -287,6 +287,20 @@ class SsdpResponderTest {
         assertEquals(0, responder.restartListeners(), "a stopped responder does not reopen anything")
     }
 
+    @Test
+    fun announceAndWithdrawOnAStoppedResponderAreHarmlessNoOps() {
+        // plan 05-18 (W2): a housekeeping pass can hold a responder that a rebind stopped under it
+        Harness().use { h ->
+            h.start(h.device(uuidA))
+            h.responder.stop()
+            h.notifies(300) // drain the byebye the stop sent
+            h.responder.announce()
+            h.responder.withdraw(uuidA)
+            h.responder.register(h.device(uuidB))
+            assertEquals(0, h.notifies(300).size, "a stopped responder puts nothing on the wire")
+        }
+    }
+
     // ------------------------------------------------------------------------------------------ reply socket repair (05-15)
 
     private fun realReplySocket(bind: InetAddress, iface: NetworkInterface?): MulticastSocket =
