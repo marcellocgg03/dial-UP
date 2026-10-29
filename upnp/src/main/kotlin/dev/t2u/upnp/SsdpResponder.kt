@@ -133,7 +133,7 @@ class SsdpResponder(
         openListeners()
     }
 
-    /** Asks the factory for a reply socket; a failure is reported through onError and leaves the responder without one. */
+    /** Asks the [openReplySocket] factory for a reply socket; a failure is reported through onError and leaves the responder without one. */
     private fun createReplySocket(): MulticastSocket? = try {
         openReplySocket(replyBind, replyInterface)
     } catch (t: Throwable) {
