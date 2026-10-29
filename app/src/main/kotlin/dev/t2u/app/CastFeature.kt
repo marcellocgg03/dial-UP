@@ -292,6 +292,9 @@ class CastFeature : SpikeFeature, CastCountSource {
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
+                // plan 05-18's housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
+                // changed address; a supplier that throws counts as no Wi-Fi
+                currentNetwork = { runCatching { bridgeNetwork(h) }.getOrNull() },
             ),
         )
         b.start()

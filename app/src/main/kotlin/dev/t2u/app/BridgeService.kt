@@ -86,7 +86,17 @@ class BridgeService : Service(), SpikeHost {
 
     override fun onCreate() {
         super.onCreate()
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        // an exception nobody handles on this scope would end the process; log it instead (plan 05-19, WR-01). The scope
+        // exists before the evidence log does, so a failure in that window goes to logcat.
+        scope = CoroutineScope(
+            SupervisorJob() + Dispatchers.IO + loggingExceptionHandler { where, t ->
+                if (::evidence.isInitialized) {
+                    evidence.event("feature-error", featureErrorFields(where, t))
+                } else {
+                    android.util.Log.e("t2u", "$where: ${t.javaClass.name}: ${t.message}")
+                }
+            },
+        )
 
         // Pitfall 12: channel first, startForeground before anything slow. A refusal (A9) is logged
         // and stops the service instead of crashing it.

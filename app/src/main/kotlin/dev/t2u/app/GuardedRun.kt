@@ -3,6 +3,7 @@ package dev.t2u.app
 // Plan 05-19: guards for the places where a failure must be logged and survived instead of ending the casting.
 // Pure Kotlin (no android imports) so it is tested on the JVM. GPL-3.0-only.
 
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlin.coroutines.cancellation.CancellationException
 
 /** How long CastFeature waits before it tries to start a bridge again after a start that threw or found no Wi-Fi. */
@@ -35,6 +36,18 @@ suspend fun runGuarded(where: String, report: (String, Throwable) -> Unit, block
     }
 }
 
-/** Red-commit seam (plan 05-19 task 2): replaced in the implementation commit. */
-fun loggingExceptionHandler(report: (String, Throwable) -> Unit): kotlinx.coroutines.CoroutineExceptionHandler =
-    kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }
+/**
+ * A [CoroutineExceptionHandler] for the service scope: an exception that escapes a launched coroutine is reported as
+ * `uncaught` instead of ending the process. Cancellation never reaches a handler; a failing [report] is dropped.
+ * Nothing global is installed; the handler is passed to the scope explicitly.
+ */
+fun loggingExceptionHandler(report: (String, Throwable) -> Unit): CoroutineExceptionHandler =
+    CoroutineExceptionHandler { _, t ->
+        if (t !is CancellationException) {
+            try {
+                report("uncaught", t)
+            } catch (_: Throwable) {
+                // dropped on purpose
+            }
+        }
+    }
