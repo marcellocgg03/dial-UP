@@ -13,8 +13,9 @@ import java.net.Inet4Address
 
 /**
  * Logs every Wi-Fi network event as a `net` evidence line and calls [onChange] (with the event name)
- * whenever the Wi-Fi IPv4 address differs from the last one seen, including going to none and coming
- * back (RESEARCH Pitfall 9: without this, matrix row 6 would measure the spike and not Android).
+ * whenever the phone's current Wi-Fi IPv4 address (a [WifiAddressTracker] over all Wi-Fi networks, so the loss of a
+ * network that is not the current one changes nothing, review WR-04) differs from the last one seen, including going
+ * to none and coming back (RESEARCH Pitfall 9: without this, matrix row 6 would measure the spike and not Android).
  * [seed] sets the address the owner is currently bound to so the initial callbacks cause no rebind.
  */
 class NetworkMonitor(
@@ -24,7 +25,7 @@ class NetworkMonitor(
 ) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     private val lock = Any()
-    private var lastIp: String? = null
+    private val tracker = WifiAddressTracker()
     private var registered = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
@@ -32,17 +33,17 @@ class NetworkMonitor(
             val props = cm?.getLinkProperties(network)
             log("available", network, props)
             // link properties usually arrive in onLinkPropertiesChanged right after; judge then if absent
-            if (props != null) evaluate("available", ipv4(props))
+            if (props != null) evaluate(network.networkHandle, "available", ipv4(props))
         }
 
         override fun onLost(network: Network) {
             log("lost", network, null)
-            evaluate("lost", null)
+            lost(network.networkHandle)
         }
 
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
             log("linkPropertiesChanged", network, linkProperties)
-            evaluate("linkPropertiesChanged", ipv4(linkProperties))
+            evaluate(network.networkHandle, "linkPropertiesChanged", ipv4(linkProperties))
         }
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
@@ -51,7 +52,7 @@ class NetworkMonitor(
     }
 
     fun seed(ip: String?) {
-        synchronized(lock) { lastIp = ip }
+        synchronized(lock) { tracker.seed(ip) }
     }
 
     fun start() {
@@ -104,11 +105,14 @@ class NetworkMonitor(
         )
     }
 
-    private fun evaluate(event: String, ip: String?) {
-        val changed = synchronized(lock) {
-            if (ip == lastIp) false else { lastIp = ip; true }
-        }
+    private fun evaluate(handle: Long, event: String, ip: String?) {
+        val changed = synchronized(lock) { tracker.onReport(handle, ip) }
         if (changed) onChange(event)
+    }
+
+    private fun lost(handle: Long) {
+        val changed = synchronized(lock) { tracker.onLost(handle) }
+        if (changed) onChange("lost")
     }
 
     private companion object {
