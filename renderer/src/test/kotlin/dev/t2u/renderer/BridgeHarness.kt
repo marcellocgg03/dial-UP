@@ -9,6 +9,7 @@ package dev.t2u.renderer
 
 import com.sun.net.httpserver.HttpServer
 import dev.t2u.dial.DialAccessMode
+import dev.t2u.dial.DialAccessPolicy
 import dev.t2u.lounge.FakeInnerTubeServer
 import dev.t2u.lounge.FakeLoungeServer
 import dev.t2u.media.PipeLauncher
@@ -18,6 +19,8 @@ import dev.t2u.media.VideoResolver
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.FakeRenderer
 import dev.t2u.upnp.ListenSpec
+import dev.t2u.upnp.SsdpEvents
+import dev.t2u.upnp.SsdpResponder
 import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -203,6 +206,8 @@ internal class BridgeHarness(
         upstreamPolicy: UpstreamPolicy? = null,
         clock: (() -> Long)? = null,
         housekeepingIntervalMs: Long? = null,
+        currentNetwork: (() -> BridgeNetwork?)? = null,
+        responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
     ): Bridge {
         val network = network(loopback)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -216,6 +221,9 @@ internal class BridgeHarness(
             // null: leave BridgeDeps' own defaults (wall clock, 5 minutes) in place
             clock = clock ?: System::currentTimeMillis,
             housekeepingIntervalMs = housekeepingIntervalMs ?: HOUSEKEEPING_INTERVAL_MS,
+            // null: no supplier, the network is always present (the JVM default); null factory: the production responder
+            currentNetwork = currentNetwork,
+            responderFactory = responderFactory,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

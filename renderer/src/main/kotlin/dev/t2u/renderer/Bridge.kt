@@ -120,6 +120,13 @@ data class BridgeDeps(
     val clock: () -> Long = System::currentTimeMillis,
     /** How often the bridge runs [Bridge.housekeeping] by itself while the CPU is awake. */
     val housekeepingIntervalMs: Long = HOUSEKEEPING_INTERVAL_MS,
+    /**
+     * What the phone's Wi-Fi is right now; a null result means there is no Wi-Fi at this moment. No supplier means the bridge
+     * assumes it is present, as in JVM tests. The app passes a function that reads the system (plan 05-19).
+     */
+    val currentNetwork: (() -> BridgeNetwork?)? = null,
+    /** Tests only: builds the SSDP responder for a network. Null builds the production responder. */
+    val responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
