@@ -202,6 +202,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     private val advertisedDevices = ConcurrentHashMap<String, SsdpDevice>()
 
+    // Evidence for the device session (plan 05-18, W1): did anything reach the app after the network came back? M-SEARCH
+    // datagrams (the own liveness probe excluded) and DIAL HTTP requests counted since the last housekeeping event that took
+    // them, and when the last of each arrived. Counts and times only: no address, name or payload.
+    private val msearchRx = java.util.concurrent.atomic.AtomicLong(0)
+    private val dialRx = java.util.concurrent.atomic.AtomicLong(0)
+
+    @Volatile private var lastMsearchAt: Long? = null
+
+    @Volatile private var lastDialAt: Long? = null
+
     private val dropLogged = ConcurrentHashMap<String, Long>()
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
@@ -302,7 +312,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                         endpoints = deps.loungeEndpoints,
                         sink = deps.events,
                         scope = deps.scope,
-                        onDialRequest = deps.onDialRequest,
+                        onDialRequest = { request ->
+                            dialRx.incrementAndGet()
+                            lastDialAt = deps.clock()
+                            deps.onDialRequest(request)
+                        },
                     ),
                 )
                 track(receiver)
@@ -421,6 +435,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             emit("ssdp-bind", "sock" to specId, "ok" to ok, "port" to boundPort, "error" to error)
 
         override fun onReceive(specId: String, src: InetSocketAddress, msg: SsdpMessage, raw: String) {
+            // the responder's own probe (ST urn:dev-t2u:probe:...) is not a search from the network
+            if (msg.startLine.uppercase().startsWith("M-SEARCH") && msg.headers["ST"]?.startsWith("urn:dev-t2u:probe:") != true) {
+                msearchRx.incrementAndGet()
+                lastMsearchAt = deps.clock()
+            }
             if (!msg.startLine.uppercase().startsWith("NOTIFY")) return
             try {
                 ssdp?.onNotify(src, msg)
@@ -501,11 +520,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     suspend fun housekeeping(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
         if (networkDown) {
-            emit("housekeeping", "trigger" to trigger, "skipped" to "network-down")
+            emit("housekeeping", "trigger" to trigger, "skipped" to "network-down", *inboundEvidence())
             return false
         }
         if (!wifiPresent()) {
-            emit("housekeeping", "trigger" to trigger, "skipped" to "no-wifi")
+            emit("housekeeping", "trigger" to trigger, "skipped" to "no-wifi", *inboundEvidence())
             return false
         }
         return try {
@@ -526,6 +545,20 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             failure("housekeeping", t)
             false
         }
+    }
+
+    /**
+     * The inbound evidence fields for a housekeeping event: M-SEARCH and DIAL request counts since the previous call (which
+     * resets them) and how long ago the last of each arrived (null: never since the bridge started).
+     */
+    private fun inboundEvidence(): Array<Pair<String, Any?>> {
+        val now = deps.clock()
+        return arrayOf(
+            "msearchRx" to msearchRx.getAndSet(0),
+            "dialRx" to dialRx.getAndSet(0),
+            "lastMsearchAgoMs" to lastMsearchAt?.let { now - it },
+            "lastDialAgoMs" to lastDialAt?.let { now - it },
+        )
     }
 
     /** False only when a supplier is set and reports no Wi-Fi right now; a supplier that throws counts as present. */
@@ -591,6 +624,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             "housekeeping",
             "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "repaired" to repaired,
             "ms" to (System.nanoTime() - t0) / 1_000_000,
+            *inboundEvidence(),
         )
         return true
     }
