@@ -1,6 +1,5 @@
 package dev.t2u.app
 
-import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -40,8 +39,8 @@ object ServiceHub {
 }
 
 /**
- * The bridge's foreground service (type connectedDevice). Holds a MulticastLock, a WifiLock and a
- * partial WakeLock for its whole lifetime, writes a heartbeat every 30 s and a state.json snapshot
+ * The bridge's foreground service (type connectedDevice). Holds a MulticastLock for its whole
+ * lifetime and a WifiLock and a timed partial WakeLock while casting (D-16, [LockPolicy]), writes a heartbeat every 30 s and a state.json snapshot
  * that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
  * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir.
  *
@@ -72,6 +71,7 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wifiLock: WifiManager.WifiLock
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
+    private val playLocks = LockPolicy(clock = SystemClock::elapsedRealtime)
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
     private var startForegroundFailed = false
@@ -215,7 +215,10 @@ class BridgeService : Service(), SpikeHost {
 
     // ----- locks ---------------------------------------------------------------------------------
 
-    @SuppressLint("WakelockTimeout")
+    /**
+     * Creates the three locks and acquires only the multicast lock (D-16): the Wi-Fi and wake locks
+     * follow the cast count through [applyPlayLocks].
+     */
     @Suppress("DEPRECATION")
     private fun acquireLocks() {
         val wifi = applicationContext.getSystemService(WifiManager::class.java)
@@ -233,12 +236,33 @@ class BridgeService : Service(), SpikeHost {
         wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "t2u:cpu").apply { setReferenceCounted(false) }
 
         mcastLock.acquire()
-        wifiLock.acquire()
-        wakeLock.acquire()
+        evidence.event("lock", mapOf("name" to "t2u:mcast", "mode" to "multicast", "isHeld" to mcastLock.isHeld, "reason" to "service"))
+    }
 
-        evidence.event("lock", mapOf("name" to "t2u:mcast", "mode" to "multicast", "isHeld" to mcastLock.isHeld))
-        evidence.event("lock", mapOf("name" to "t2u:wifi", "mode" to modeName, "isHeld" to wifiLock.isHeld))
-        evidence.event("lock", mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld))
+    /**
+     * Holds the Wi-Fi lock and the partial wake lock while [hold] (a speaker is casting or the 60 s
+     * grace is running) and releases both otherwise (D-16, SVC-03). The wake lock always carries
+     * [WAKE_LOCK_TIMEOUT_MS] and is re-armed on every call while held (reference counting is off), so
+     * a stuck loop cannot keep the CPU awake for ever (Pitfall 9). Only transitions are logged.
+     */
+    @Synchronized
+    private fun applyPlayLocks(hold: Boolean, reason: String) {
+        // a denied or failed start never created the locks
+        if (!::wifiLock.isInitialized || !::wakeLock.isInitialized) return
+        if (hold) {
+            if (!wifiLock.isHeld) {
+                wifiLock.acquire()
+                evidence.event("lock", mapOf("name" to "t2u:wifi", "mode" to wifiLockMode, "isHeld" to wifiLock.isHeld, "reason" to "casting"))
+            }
+            val wakeWasHeld = wakeLock.isHeld
+            wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
+            if (!wakeWasHeld) {
+                evidence.event("lock", mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld, "reason" to "casting"))
+            }
+        } else if (wifiLock.isHeld || wakeLock.isHeld) {
+            releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() }, "idle-grace")
+            releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() }, "idle-grace")
+        }
     }
 
     private fun releaseLocks() {
@@ -248,13 +272,13 @@ class BridgeService : Service(), SpikeHost {
         if (::wakeLock.isInitialized) releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
     }
 
-    private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit) {
+    private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit, reason: String = "service-stop") {
         try {
             if (isHeld()) release()
         } catch (t: Throwable) {
             evidence.event("feature-error", mapOf("where" to "release:$name", "error" to t.javaClass.name, "message" to t.message))
         }
-        evidence.event("lock", mapOf("name" to name, "isHeld" to isHeld()))
+        evidence.event("lock", mapOf("name" to name, "isHeld" to isHeld(), "reason" to reason))
     }
 
     // ----- wifi helpers --------------------------------------------------------------------------
@@ -281,6 +305,7 @@ class BridgeService : Service(), SpikeHost {
     private suspend fun heartbeatLoop() {
         while (scope.isActive) {
             try {
+                applyPlayLocks(playLocks.shouldHold(), "tick")
                 val state = currentState()
                 evidence.event("heartbeat", heartbeatFields())
                 writeStateFile(state)
@@ -407,6 +432,7 @@ class BridgeService : Service(), SpikeHost {
     private suspend fun castCountLoop() {
         sumCastCounts(features.filterIsInstance<CastCountSource>()).collect { count ->
             casting = count.casting
+            applyPlayLocks(playLocks.onCasting(count.casting), "casting")
             evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             val text = notificationText(count)
             if (text != lastNotifiedText) {
