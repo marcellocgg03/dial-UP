@@ -11,8 +11,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -674,5 +676,78 @@ class RendererRegistryTest {
         assertEquals(1, h.events.named("stale").size)
         assertEquals(0, h.registry.count.value)
         job.cancel()
+    }
+
+    // ---- Plan 05-14: a cancelled retry pass (WR-02) ----
+
+    /**
+     * Ten speakers fail their first setup, then a retry pass runs while every init blocks, and is cancelled once
+     * the registry's parallel limit of inits is blocked (the others wait for a permit). Afterwards inits succeed.
+     */
+    private inner class CancelledPass {
+        val phase = java.util.concurrent.atomic.AtomicInteger(0)
+        val entered = java.util.concurrent.atomic.AtomicInteger(0)
+        val release = CompletableDeferred<Boolean>()
+        val h = Harness(initBehaviour = {
+            when (phase.get()) {
+                0 -> throw java.io.IOException("boom")
+                1 -> {
+                    entered.incrementAndGet()
+                    release.await()
+                }
+                else -> true
+            }
+        })
+
+        suspend fun run() {
+            repeat(10) { i ->
+                h.alive(udn = "S$i", location = "http://192.168.50.${50 + i}:1400/xml/device_description.xml", src = "192.168.50.${50 + i}")
+            }
+            assertEquals(10, h.created.size)
+            assertEquals(0, h.registry.count.value)
+            h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+            phase.set(1)
+            coroutineScope {
+                val pass = launch(Dispatchers.Default) { h.registry.retryDue() }
+                val end = System.currentTimeMillis() + 3000
+                while (entered.get() < RendererRegistry.RETRY_PARALLEL && System.currentTimeMillis() < end) delay(5)
+                delay(50)
+                assertEquals(RendererRegistry.RETRY_PARALLEL, entered.get())
+                pass.cancelAndJoin()
+            }
+            phase.set(2)
+        }
+    }
+
+    @Test
+    @DisplayName("a retry pass cancelled while some setups wait for a permit leaves no speaker pending, so the next pass retries all of them")
+    fun aCancelledRetryPassLeavesNoSpeakerPending() = runBlocking {
+        val c = CancelledPass()
+        c.run()
+        assertEquals(10, c.h.registry.retryDue())
+        assertEquals(10, c.h.registry.count.value)
+    }
+
+    @Test
+    @DisplayName("a cancelled retry pass does not count as a failed attempt: the next pass reports attempt 1 for every speaker")
+    fun aCancelledRetryPassDoesNotCountAsAFailedAttempt() = runBlocking {
+        val c = CancelledPass()
+        c.run()
+        c.h.registry.retryDue()
+        val retries = c.h.events.retries.filter { it["reason"] == "failed" }
+        assertEquals(10, retries.size)
+        assertTrue(retries.all { it["attempt"] == 1 && it["outcome"] == "added" })
+    }
+
+    @Test
+    @DisplayName("a setup cancelled before its renderer was registered destroys it and frees its port")
+    fun aCancelledSetupDestroysItsHalfBuiltRendererAndFreesItsPort() = runBlocking {
+        val c = CancelledPass()
+        c.run()
+        val cancelled = c.h.created.subList(10, 10 + RendererRegistry.RETRY_PARALLEL)
+        assertEquals(RendererRegistry.RETRY_PARALLEL, cancelled.size)
+        assertTrue(cancelled.all { it.destroyCalls.get() == 1 })
+        c.h.registry.retryDue()
+        assertEquals((3000..3009).toList(), c.h.registry.renderers().map { it.port }.sorted())
     }
 }

@@ -60,7 +60,7 @@ class RendererRegistry(
         const val MAX_SKIPPED = 256
 
         /** How many due setups [retryDue] runs at once. */
-        private const val RETRY_PARALLEL = 8
+        internal const val RETRY_PARALLEL = 8
     }
 
     /**
