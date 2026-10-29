@@ -30,6 +30,7 @@ import dev.t2u.media.SourceDownloader
 import dev.t2u.media.VideoResolver
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
+import dev.t2u.upnp.ProbeResult
 import dev.t2u.upnp.RENDERER_ST
 import dev.t2u.upnp.Ssdp
 import dev.t2u.upnp.SsdpClientEvents
@@ -184,6 +185,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** Wall-clock time the last run started; null before the first. Guards against a timer tick and an alarm tick doubling up. */
     @Volatile private var lastHousekeepingAt: Long? = null
 
+    /**
+     * What the receivers advertised, by uuid. The bridge owns this list so a responder built later (a housekeeping repair
+     * after a failed rebind step or a deaf responder) has something to serve. A rebind does not copy it: the receivers
+     * re-advertise their moved locations. A repair copies it onto the new responder.
+     */
+    private val advertisedDevices = ConcurrentHashMap<String, SsdpDevice>()
+
     private val dropLogged = ConcurrentHashMap<String, Long>()
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
@@ -253,18 +261,18 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
             accessPolicy = policy
 
-            val resp = newResponder(net, policy)
-            resp.start()
-            responder = resp
+            responder = buildResponder(net, policy)
 
             // reads the field, so a receiver that outlives a move advertises on the responder of the new address
             val advertiser = object : DialAdvertiser {
                 override fun advertise(device: SsdpDevice) {
+                    advertisedDevices[device.uuid] = device
                     responder?.register(device)
                     responder?.announce()
                 }
 
                 override fun withdraw(uuid: String) {
+                    advertisedDevices.remove(uuid)
                     responder?.withdraw(uuid)
                 }
             }
@@ -335,6 +343,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     // ------------------------------------------------------------------------------------------ SSDP wiring
+
+    /** Builds and starts a responder for [network]: through the test factory when one is set, else the production one. */
+    private fun buildResponder(network: BridgeNetwork, policy: DialAccessPolicy): SsdpResponder {
+        val resp = deps.responderFactory?.invoke(network, responderEvents(), policy) ?: newResponder(network, policy)
+        resp.start()
+        return resp
+    }
 
     private fun newResponder(network: BridgeNetwork, policy: DialAccessPolicy) = SsdpResponder(
         network.ssdpListen,
@@ -513,23 +528,33 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     private suspend fun runHousekeeping(trigger: String): Boolean {
         if (stopped.get()) return false
-        val resp = responder ?: return false
         val t0 = System.nanoTime()
         // refresh the speakers too: the in-process discovery timer may have slept through the last interval
-        val client = ssdp
-        val searched = client != null && try {
-            withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
-            true
+        var clientFailed = false
+        val searched = try {
+            // the field is read at the moment of use; a client a rebind just stopped answers a search with nothing (no-op)
+            val client = ssdp
+            if (client == null) {
+                clientFailed = true
+                false
+            } else {
+                withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
+                // a client without a search socket "searches" and sends nothing: that is a failed search, not a refresh
+                val bound = client.isBound()
+                if (!bound) clientFailed = true
+                bound
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             failure("housekeeping-search", t)
+            clientFailed = true
             false
         }
         // the registry defers its first prune after a long sleep until a search ran (plan 05-04)
         if (searched) registry?.searched()
         if (accessPolicy?.announceAllowed() == true) {
-            withContext(Dispatchers.IO) { resp.announce() }
+            withContext(Dispatchers.IO) { responder?.announce() }
             emit("reannounce", "mode" to "lan", "trigger" to trigger, "devices" to registry?.renderers().orEmpty().size)
         } else {
             emit("reannounce", "mode" to "phone", "skipped" to "phone-only", "trigger" to trigger)
@@ -543,18 +568,159 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             failure("housekeeping-retry", t)
             0
         }
+        val repaired = probeAndRepair(trigger, clientFailed)
+        emit(
+            "housekeeping",
+            "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "repaired" to repaired,
+            "ms" to (System.nanoTime() - t0) / 1_000_000,
+        )
+        return true
+    }
+
+    /**
+     * Proves the responder's own listener still receives and repairs what reopening cannot heal (D-06, review WR-03). The
+     * caller holds [netLock]. Order: probe; on failure reopen the sockets ([SsdpResponder.restartListeners]) and probe again;
+     * when that fails too, or the responder is missing, rebuild it ([repairResponder]). A client that could not search is
+     * rebuilt too ([repairClient]). At most one of each per pass. Returns how many repairs were attempted.
+     */
+    private suspend fun probeAndRepair(trigger: String, clientFailed: Boolean): Int {
+        // the network may have gone down while this pass was waiting for the lock
         if (networkDown || !wifiPresent()) {
             emit("ssdp-probe", "skipped" to if (networkDown) "network-down" else "no-wifi", "trigger" to trigger)
-            return true
+            return 0
         }
-        val ok = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
-        emit("ssdp-probe", "ok" to ok, "trigger" to trigger)
-        if (!ok) {
-            val restarted = withContext(Dispatchers.IO) { resp.restartListeners() }
-            val again = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
-            emit("ssdp-probe", "ok" to again, "restarted" to restarted, "trigger" to trigger)
+        var repairs = 0
+        var rebuild = false
+        val resp = responder
+        if (resp == null) {
+            rebuild = true
+        } else {
+            val first = withContext(Dispatchers.IO) { resp.probe(PROBE_TIMEOUT_MS) }
+            emitProbe(first, trigger)
+            if (first != ProbeResult.OK) {
+                val restarted = withContext(Dispatchers.IO) { resp.restartListeners() }
+                val again = withContext(Dispatchers.IO) { resp.probe(PROBE_TIMEOUT_MS) }
+                emitProbe(again, trigger, "restarted" to restarted)
+                rebuild = again != ProbeResult.OK
+            }
         }
-        emit("housekeeping", "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "ms" to (System.nanoTime() - t0) / 1_000_000)
+        if (rebuild && repairResponder(trigger)) repairs++
+        if (clientFailed && repairClient(trigger)) repairs++
+        return repairs
+    }
+
+    /** One `ssdp-probe` event: ok, any [extra] fields, the trigger, and (only on failure) the fixed reason code. */
+    private fun emitProbe(result: ProbeResult, trigger: String, vararg extra: Pair<String, Any?>) {
+        val fields = ArrayList<Pair<String, Any?>>()
+        fields.add("ok" to (result == ProbeResult.OK))
+        fields.addAll(extra)
+        fields.add("trigger" to trigger)
+        if (result != ProbeResult.OK) fields.add("reason" to result.wire)
+        emit("ssdp-probe", *fields.toTypedArray())
+    }
+
+    /** True when the system says the phone's Wi-Fi address is not the one the bridge is bound to: that is the rebind's job. */
+    private fun addressChanged(): Boolean {
+        val current = try {
+            deps.currentNetwork?.invoke()
+        } catch (_: Exception) {
+            null
+        }
+        return current != null && current.wifiIp != net.wifiIp
+    }
+
+    /**
+     * Replaces a responder that reopening could not heal (or that a failed rebind step left missing) with a new one on the
+     * bridge's own address, serving every device the receivers advertised. Announces again only when the access policy allows
+     * it (never in phone-only mode, T-05-49). Skipped when the system address differs from the bridge's (T-05-50). The caller
+     * holds [netLock]. Returns false when nothing was attempted.
+     */
+    private suspend fun repairResponder(trigger: String): Boolean {
+        if (addressChanged()) {
+            emit("ssdp-repair", "what" to "responder", "skipped" to "address-changed", "trigger" to trigger)
+            return false
+        }
+        val policy = accessPolicy ?: return false
+        val network = net
+        step("responder-stop", "repair") {
+            try {
+                withContext(Dispatchers.IO) { responder?.stop() }
+            } finally {
+                responder = null
+            }
+        }
+        var fresh: SsdpResponder? = null
+        var error: String? = null
+        try {
+            val built = withContext(Dispatchers.IO) { buildResponder(network, policy) }
+            fresh = built
+            for (device in advertisedDevices.values) built.register(device)
+            responder = built
+            if (policy.announceAllowed()) withContext(Dispatchers.IO) { built.announce() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("repair:responder", t)
+            error = t.javaClass.simpleName
+            runCatching { fresh?.stop() }
+            if (responder === fresh) responder = null
+            fresh = null
+        }
+        val result = fresh?.let { f -> withContext(Dispatchers.IO) { f.probe(PROBE_TIMEOUT_MS) } }
+        val fields = ArrayList<Pair<String, Any?>>()
+        fields.add("what" to "responder")
+        fields.add("ok" to (result == ProbeResult.OK))
+        fields.add("trigger" to trigger)
+        if (error != null) fields.add("error" to error)
+        emit("ssdp-repair", *fields.toTypedArray())
+        if (result != null) emitProbe(result, trigger, "repaired" to true)
+        return true
+    }
+
+    /**
+     * Replaces an SSDP client that has no search socket (a failed bind leaves one that looks alive and never searches) and
+     * searches through the new one at once. Skipped when the system address differs from the bridge's. The caller holds
+     * [netLock]. Returns false when nothing was attempted.
+     */
+    private suspend fun repairClient(trigger: String): Boolean {
+        val reg = registry ?: return false
+        if (addressChanged()) {
+            emit("ssdp-repair", "what" to "client", "skipped" to "address-changed", "trigger" to trigger)
+            return false
+        }
+        val network = net
+        step("ssdp-client-stop", "repair") {
+            try {
+                withContext(Dispatchers.IO) { ssdp?.stop() }
+            } finally {
+                ssdp = null
+            }
+        }
+        var ok = false
+        var error: String? = null
+        try {
+            val fresh = Ssdp(listOf(network.wifiIp), clientEvents(reg), network.ssdpSearchTarget)
+            withContext(Dispatchers.IO) { fresh.start() }
+            if (fresh.isBound()) {
+                ssdp = fresh
+                withContext(Dispatchers.IO) { fresh.search(RENDERER_ST, 3) }
+                reg.searched()
+                ok = true
+            } else {
+                withContext(Dispatchers.IO) { fresh.stop() }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("repair:client", t)
+            error = t.javaClass.simpleName
+        }
+        val fields = ArrayList<Pair<String, Any?>>()
+        fields.add("what" to "client")
+        fields.add("ok" to ok)
+        fields.add("trigger" to trigger)
+        if (error != null) fields.add("error" to error)
+        emit("ssdp-repair", *fields.toTypedArray())
         return true
     }
 
@@ -593,22 +759,33 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
             // the media server first: URLs built after the move must point at a server that answers; tokens are kept
             step("media", "rebind") { withContext(Dispatchers.IO) { mediaServer?.rebindHost(newIp) } }
-            step("responder-stop", "rebind") { withContext(Dispatchers.IO) { oldResponder?.stop() } }
+            // a stopped responder is never left installed: the field is cleared as soon as the old one is stopped, and only a
+            // replacement that started is assigned (review WR-03); housekeeping rebuilds what a failed step leaves missing
+            step("responder-stop", "rebind") {
+                try {
+                    withContext(Dispatchers.IO) { oldResponder?.stop() }
+                } finally {
+                    responder = null
+                }
+            }
             // the old listeners are closed before the new ones open, so a same-address move never fights itself for the socket
             net = newNet
             if (policy != null) {
                 step("responder-start", "rebind") {
-                    val fresh = newResponder(newNet, policy)
-                    withContext(Dispatchers.IO) { fresh.start() }
-                    responder = fresh
+                    responder = withContext(Dispatchers.IO) { buildResponder(newNet, policy) }
                 }
             }
             step("ssdp-client", "rebind") {
-                withContext(Dispatchers.IO) { oldClient?.stop() }
+                try {
+                    withContext(Dispatchers.IO) { oldClient?.stop() }
+                } finally {
+                    ssdp = null
+                }
                 if (reg != null) {
                     val fresh = Ssdp(listOf(newNet.wifiIp), clientEvents(reg), newNet.ssdpSearchTarget)
                     withContext(Dispatchers.IO) { fresh.start() }
-                    ssdp = fresh
+                    // start() reports a failed bind through onError and does not throw: a deaf client is not installed
+                    if (fresh.isBound()) ssdp = fresh else withContext(Dispatchers.IO) { fresh.stop() }
                 }
             }
             var moved = 0
