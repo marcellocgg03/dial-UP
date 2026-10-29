@@ -418,6 +418,9 @@ class CachingResolver(
         synchronized(lock) { cache.remove(videoId) }
     }
 
+    /** How many yt-dlp lookups run now (callers of one ID share one). The yt-dlp updater waits while it is above 0. */
+    fun inFlightCount(): Int = synchronized(lock) { inflight.size }
+
     private suspend fun lookup(id: String): ResolvedInfo = withContext(Dispatchers.IO) {
         val result = try {
             gateway.run(dumpJsonCall(id, cacheDir, verbose))

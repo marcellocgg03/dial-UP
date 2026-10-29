@@ -77,6 +77,9 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     @Volatile private var bridge: Bridge? = null
 
+    /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup running (RESEARCH Pitfall 4). */
+    @Volatile private var resolver: CachingResolver? = null
+
     /** What the last bridge start applied from files/config.json (counts and switches only, never pattern text). */
     @Volatile private var configSummaryJson: JsonObject? = null
 
@@ -122,6 +125,7 @@ class CastFeature : SpikeFeature, CastCountSource {
             onEvent = { host.evidence.event("ytdlp-update", it) },
             elapsedMs = { SystemClock.elapsedRealtime() },
             maxPauseMs = UPDATE_RECHECK_MS,
+            busy = { (resolver?.inFlightCount() ?: 0) > 0 },
         )
         updater = u
         updaterJob = host.scope.launch { u.run() }
@@ -246,6 +250,7 @@ class CastFeature : SpikeFeature, CastCountSource {
             onEvent = { h.evidence.event("resolve", it) },
             verbose = loaded.config.ytdlpVerbose,
         )
+        this.resolver = resolver
         val b = Bridge(
             network,
             BridgeDeps(
