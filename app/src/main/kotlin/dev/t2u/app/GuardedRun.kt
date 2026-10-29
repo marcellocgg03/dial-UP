@@ -34,3 +34,7 @@ suspend fun runGuarded(where: String, report: (String, Throwable) -> Unit, block
         return false
     }
 }
+
+/** Red-commit seam (plan 05-19 task 2): replaced in the implementation commit. */
+fun loggingExceptionHandler(report: (String, Throwable) -> Unit): kotlinx.coroutines.CoroutineExceptionHandler =
+    kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> }

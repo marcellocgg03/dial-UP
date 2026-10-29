@@ -1,8 +1,14 @@
 package dev.t2u.app
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -54,5 +60,42 @@ class GuardedRunTest {
         assertEquals("java.lang.IllegalStateException", fields["error"])
         assertEquals(200, (fields["message"] as String).length)
         assertNull(featureErrorFields("w", IllegalStateException())["message"])
+    }
+
+    @Test
+    fun theHandlerReportsAnUncaughtFailureAsUncaught() {
+        val latch = CountDownLatch(1)
+        val seen = java.util.concurrent.CopyOnWriteArrayList<Pair<String, Throwable>>()
+        val boom = IllegalStateException("boom")
+        val scope = CoroutineScope(SupervisorJob() + loggingExceptionHandler { w, t -> seen.add(w to t); latch.countDown() })
+        runBlocking { scope.launch { throw boom }.join() }
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals(1, seen.size)
+        assertEquals("uncaught", seen[0].first)
+        assertTrue(seen[0].second === boom)
+    }
+
+    @Test
+    fun theHandlerIgnoresCancellation() {
+        var reported = 0
+        val scope = CoroutineScope(SupervisorJob() + loggingExceptionHandler { _, _ -> reported++ })
+        runBlocking {
+            val job = scope.launch { throw CancellationException("stop") }
+            job.join()
+            scope.coroutineContext[kotlinx.coroutines.Job]!!.let { it.cancel(); it.join() }
+        }
+        assertEquals(0, reported)
+    }
+
+    @Test
+    fun theHandlerSurvivesAReportThatThrows() {
+        val scope = CoroutineScope(SupervisorJob() + loggingExceptionHandler { _, _ -> throw IllegalStateException("log is broken") })
+        val done = CountDownLatch(1)
+        runBlocking {
+            scope.launch { throw IllegalStateException("boom") }.join()
+            scope.launch { done.countDown() }.join()
+        }
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        scope.cancel()
     }
 }
