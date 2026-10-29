@@ -468,11 +468,19 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * In both modes it proves that the responder's own listener still receives, by sending itself one probe, and on
      * silence it reopens the listen sockets (a socket-level repair, never a bridge rebind) and probes once more.
      * Returns true when the run happened; false when the bridge is not running or the run failed (also logged).
+     *
+     * It skips (touching nothing) while the network is marked down (rebind switch on) and while the system reports no Wi-Fi
+     * ([BridgeDeps.currentNetwork]; this works with the rebind switch off, where [networkLost] is never called): probing
+     * and reopening sockets during an outage the bridge was not told about is what broke Session E step 5.
      */
     suspend fun housekeeping(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
         if (networkDown) {
             emit("housekeeping", "trigger" to trigger, "skipped" to "network-down")
+            return false
+        }
+        if (!wifiPresent()) {
+            emit("housekeeping", "trigger" to trigger, "skipped" to "no-wifi")
             return false
         }
         return try {
@@ -490,6 +498,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } catch (t: Throwable) {
             failure("housekeeping", t)
             false
+        }
+    }
+
+    /** False only when a supplier is set and reports no Wi-Fi right now; a supplier that throws counts as present. */
+    private fun wifiPresent(): Boolean {
+        val supplier = deps.currentNetwork ?: return true
+        return try {
+            supplier() != null
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -524,6 +542,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } catch (t: Throwable) {
             failure("housekeeping-retry", t)
             0
+        }
+        if (networkDown || !wifiPresent()) {
+            emit("ssdp-probe", "skipped" to if (networkDown) "network-down" else "no-wifi", "trigger" to trigger)
+            return true
         }
         val ok = withContext(Dispatchers.IO) { resp.selfProbe(PROBE_TIMEOUT_MS) }
         emit("ssdp-probe", "ok" to ok, "trigger" to trigger)
