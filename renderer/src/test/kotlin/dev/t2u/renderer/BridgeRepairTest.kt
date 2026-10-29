@@ -375,4 +375,39 @@ class BridgeRepairTest {
         assertTrue(bridge.housekeeping("alarm"), "a clock that moved back is not 'recent'")
         assertTrue(after(marker, "housekeeping").none { it["skipped"] == "recent" })
     }
+
+    // ------------------------------------------------------------------------------------------ inbound evidence (W1)
+
+    @Test
+    fun theLogShowsWhetherSearchesAndDialRequestsArriveBetweenPasses() = h.run<Unit> {
+        // diagnostics for the device session: after the network returns, did anything reach the app? Counts of inbound
+        // M-SEARCH datagrams (probes excluded) and DIAL requests since the previous pass, and how long ago the last one came.
+        val up = AtomicBoolean(true)
+        val bridge = h.newBridge(currentNetwork = { if (up.get()) h.network(h.loopback) else null })
+        bridge.start()
+        val launched = h.launch(bridge)
+        assertTrue(bridge.housekeeping("adb")) // takes the launch's own search and DIAL requests off the counters
+        assertTrue(bridge.housekeeping("adb"))
+
+        // quiet interval: the own probe and the pass's own traffic are not counted as inbound searches
+        val quiet = h.events.last { it.first == "housekeeping" && it.second["ran"] == true }.second
+        assertEquals(0L, quiet["msearchRx"], "$quiet")
+
+        assertNotNull(h.dialSearchAt(bridge, h.loopback))
+        h.http.send(
+            HttpRequest.newBuilder(URI("http://127.0.0.1:${launched.port}/ytcr/ssdp/device-desc.xml")).GET().build(),
+            HttpResponse.BodyHandlers.discarding(),
+        )
+        up.set(false)
+        assertFalse(bridge.housekeeping("alarm"))
+        val skipped = h.events.last { it.first == "housekeeping" && it.second["skipped"] == "no-wifi" }.second
+        assertTrue((skipped["msearchRx"] as Long) >= 1, "the skipped pass reports the search that arrived: $skipped")
+        assertTrue((skipped["dialRx"] as Long) >= 1, "and the DIAL request: $skipped")
+
+        up.set(true)
+        assertTrue(bridge.housekeeping("adb"))
+        val after = h.events.last { it.first == "housekeeping" && it.second["ran"] == true }.second
+        assertEquals(0L, after["msearchRx"], "counted once, then reset: $after")
+        assertNotNull(after["lastMsearchAgoMs"])
+    }
 }
