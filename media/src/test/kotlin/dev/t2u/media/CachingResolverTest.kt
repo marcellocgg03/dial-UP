@@ -175,6 +175,41 @@ class CachingResolverTest {
         assertEquals(setOf("miss", "coalesced"), events.map { it["result"] }.toSet(), events.toString())
     }
 
+    private fun awaitInFlight(r: CachingResolver, expected: Int) {
+        // the entry is removed by the lookup's completion handler, a moment after the caller got its answer
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (r.inFlightCount() != expected && System.nanoTime() < deadline) Thread.sleep(10)
+        assertEquals(expected, r.inFlightCount())
+    }
+
+    @Test
+    fun inFlightCountIsOneWhileALookupRunsEvenForTwoCallersAndZeroAfterwards() = runBlocking {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val gw = FakeGateway({ ok(signedUrl(null)) }, onRun = {
+            entered.countDown()
+            check(release.await(10, TimeUnit.SECONDS)) { "gateway never released" }
+        })
+        val r = resolverWith(gw, AtomicLong(now))
+        assertEquals(0, r.inFlightCount())
+        val a = async(Dispatchers.Default) { r.resolve("dQw4w9WgXcQ") }
+        assertTrue(entered.await(10, TimeUnit.SECONDS), "lookup never reached the gateway")
+        val b = async(Dispatchers.Default) { r.resolve("dQw4w9WgXcQ") }
+        Thread.sleep(150) // the second caller joins the same lookup
+        assertEquals(1, r.inFlightCount())
+        release.countDown()
+        awaitAll(a, b)
+        awaitInFlight(r, 0)
+    }
+
+    @Test
+    fun inFlightCountIsZeroAgainAfterAFailedLookup() = runBlocking {
+        val gw = FakeGateway({ GatewayResult(1, "", "ERROR: nope", 5) })
+        val r = resolverWith(gw, AtomicLong(now))
+        assertFailsWith<ResolveException> { r.resolve("dQw4w9WgXcQ") }
+        awaitInFlight(r, 0)
+    }
+
     @Test
     fun aFailingGatewayThrowsWithoutTheFullUrlAndIsNotCached() = runBlocking {
         val stderr = "ERROR: unable to download https://$host/videoplayback?expire=1&sig=SECRET: HTTP Error 403"
