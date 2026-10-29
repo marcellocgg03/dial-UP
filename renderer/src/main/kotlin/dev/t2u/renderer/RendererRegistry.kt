@@ -68,6 +68,9 @@ class RendererRegistry(
      * A device that is not set up. [until] is the epoch ms of its next retry, or Long.MAX_VALUE for a device that
      * is not a usable renderer (never retried by the timer). [src], [maxAge] and [attempts] let [retryDue] set a
      * failed device up again without a new alive; [attempts] counts the timer retries already made.
+     *
+     * [until] is wall-clock time and the clock can move backwards (NTP, carrier time). No legitimate wait is longer
+     * than [RETRY_FAILED_MS], so an [until] further ahead than that is not waiting any more (see [isWaiting]).
      */
     private class Skip(
         val location: String,
@@ -76,6 +79,10 @@ class RendererRegistry(
         val maxAge: Int = 0,
         val attempts: Int = 0,
     )
+
+    /** True while [skip] still holds its speaker back at time [now]; a due time more than one retry period ahead counts as due. */
+    private fun isWaiting(skip: Skip, now: Long): Boolean =
+        skip.until == Long.MAX_VALUE || (skip.until > now && skip.until - now <= RETRY_FAILED_MS)
 
     private val lock = Mutex()
     private val running = LinkedHashMap<String, ManagedRenderer>()
@@ -222,7 +229,7 @@ class RendererRegistry(
 
         val go = lock.withLock {
             val skip = skipped[udn]
-            if (skip != null && skip.location == location && skip.until > clock()) return@withLock false
+            if (skip != null && skip.location == location && isWaiting(skip, clock())) return@withLock false
             pending.add(udn)
         }
         if (!go) return
@@ -300,7 +307,7 @@ class RendererRegistry(
             val now = clock()
             val picked = skipped.entries
                 .filter { (udn, skip) ->
-                    skip.until != Long.MAX_VALUE && skip.until <= now && skip.src != null &&
+                    skip.until != Long.MAX_VALUE && !isWaiting(skip, now) && skip.src != null &&
                         udn !in pending && udn !in running
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
