@@ -76,6 +76,13 @@ class Session(
     private val random: Random = SecureRandom(),
     /** Pause between failed RPC connects (a test shortens it). */
     private val rpcRetryDelayMs: Long = 1000,
+    /**
+     * Adaptation 47: how long the RPC reconnect keeps retrying the same token after network errors (not HTTP statuses)
+     * before the token is refreshed. 0 turns the tolerance off.
+     */
+    private val rpcOutageBudgetMs: Long = 120_000,
+    /** Waits between those retries; the last value repeats. */
+    private val rpcOutageWaitsMs: List<Long> = listOf(2_000, 4_000, 8_000, 16_000, 30_000),
 ) {
     @Volatile
     var status: SessionStatus = SessionStatus.STOPPED
@@ -502,6 +509,31 @@ class Session(
         throw lastError
     }
 
+    /**
+     * [openRpcStream], and when it fails with a network error (an IOException that is not the lounge answering with a
+     * status) the same token is retried with growing waits for up to [rpcOutageBudgetMs] since the first failure, so a
+     * Wi-Fi outage of a minute or two does not cost the session its token (plan 05-10; yt-cast-receiver's RPCConnection
+     * terminates after 3 connects). An HTTP status failure or an exhausted budget throws, which takes the refresh path.
+     */
+    private suspend fun openRpcRidingOutOutage(handle: RpcHandle): Opened {
+        var firstFailure = 0L
+        var attempt = 0
+        while (true) {
+            try {
+                return openRpcStream()
+            } catch (e: IOException) {
+                if (e is LoungeHttpException || rpc !== handle) throw e
+                val now = System.nanoTime()
+                if (attempt == 0) firstFailure = now
+                if ((now - firstFailure) / 1_000_000 >= rpcOutageBudgetMs) throw e
+                val wait = rpcOutageWaitsMs.getOrNull(attempt) ?: rpcOutageWaitsMs.lastOrNull() ?: rpcRetryDelayMs
+                attempt++
+                log.session("rpc-wait", "attempt" to attempt, "waitMs" to wait)
+                delay(wait)
+            }
+        }
+    }
+
     private class Opened(val call: Call, val response: Response)
 
     private val rpcClient: OkHttpClient by lazy {
@@ -519,8 +551,8 @@ class Session(
 
     /**
      * Reads the stream; when it ends (the lounge closes it every few minutes) or times out, opens a new one. When
-     * reopening fails after [LoungeConstants.RPC_MAX_RETRIES] connects the lounge token is refreshed (RPCConnection.js
-     * 'terminate' then Session.js refreshLoungeToken).
+     * reopening fails after [LoungeConstants.RPC_MAX_RETRIES] connects (and, for network errors, after the outage budget
+     * of [openRpcRidingOutOutage]) the lounge token is refreshed (RPCConnection.js 'terminate' then Session.js refreshLoungeToken).
      */
     private suspend fun rpcLoop(first: Opened, handle: RpcHandle) {
         var opened = first
@@ -534,7 +566,7 @@ class Session(
             if ((System.nanoTime() - started) / 1_000_000 < MIN_STREAM_MS) delay(rpcRetryDelayMs)
             log.session("rpc-reconnect")
             opened = try {
-                openRpcStream()
+                openRpcRidingOutOutage(handle)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 if (rpc !== handle) return
