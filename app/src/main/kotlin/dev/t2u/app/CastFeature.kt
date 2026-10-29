@@ -4,6 +4,7 @@ package dev.t2u.app
 // foreground service: every speaker found on the Wi-Fi becomes a cast target in YouTube and YouTube Music.
 // GPL-3.0-only.
 
+import android.os.SystemClock
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CachingResolver
@@ -64,6 +65,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var rebindJob: Job? = null
     private var countJob: Job? = null
     private var updaterJob: Job? = null
+    @Volatile private var updater: YtDlpUpdater? = null
     private var settings: Settings? = null
 
     /**
@@ -112,12 +114,17 @@ class CastFeature : SpikeFeature, CastCountSource {
         HousekeepingAlarm.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
-        val updater = YtDlpUpdater(
+        // The deadline runs on the elapsed-time clock (time the CPU slept counts), is re-checked at least every 15 minutes
+        // and at every housekeeping alarm (plan 05-11, RESEARCH Pitfall 3).
+        val u = YtDlpUpdater(
             gateway = AndroidYtDlpGateway(host.context, host.evidence),
             channel = { loadAppConfig(host.context.filesDir).config.ytdlpChannel },
             onEvent = { host.evidence.event("ytdlp-update", it) },
+            elapsedMs = { SystemClock.elapsedRealtime() },
+            maxPauseMs = UPDATE_RECHECK_MS,
         )
-        updaterJob = host.scope.launch { updater.run() }
+        updater = u
+        updaterJob = host.scope.launch { u.run() }
     }
 
     /**
@@ -129,6 +136,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         host?.let { HousekeepingAlarm.cancel(it.context) }
         updaterJob?.cancel()
         updaterJob = null
+        updater = null
         runCatching { monitor?.stop() }
         monitor = null
         rebindJob?.cancel()
@@ -165,7 +173,15 @@ class CastFeature : SpikeFeature, CastCountSource {
      * of the bridge, by [HousekeepingReceiver] when the alarm wakes the idle phone, and by `cmd housekeeping`.
      */
     suspend fun housekeeping(trigger: String) {
-        bridge?.housekeeping(trigger)
+        try {
+            bridge?.housekeeping(trigger)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            host?.evidence?.event("feature-error", mapOf("where" to "housekeeping", "error" to t.javaClass.name, "message" to t.message))
+        }
+        // a yt-dlp update that came due while the timers stalled in Doze runs now; failures never reach the cast path
+        updater?.runIfDue()
     }
 
     private fun netRebindCommand(mode: String?): CommandReply {
@@ -450,6 +466,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         const val REBIND_DEBOUNCE_MS = 2000L
         const val VALIDATED_WAIT_MS = 20_000L
         const val WARMUP_WAIT_MS = 15_000L
+        const val UPDATE_RECHECK_MS = 900_000L
         const val MAX_CONFIG_WARNING_EVENTS = 20
         const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
     }
