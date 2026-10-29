@@ -53,4 +53,27 @@ class RebindDecisionTest {
             assertEquals(RebindAction.REBIND_IN_PLACE, rebindAction(reason, true, hasBridge = true, wifiIp = ip))
         }
     }
+
+    @Test
+    fun `a retry with no bridge and an address starts one, also with the switch off`() {
+        for (enabled in listOf(true, false)) {
+            assertEquals(RebindAction.START, rebindAction("retry", enabled, hasBridge = false, wifiIp = ip))
+        }
+    }
+
+    @Test
+    fun `a retry with a bridge does nothing`() {
+        for (enabled in listOf(true, false)) {
+            for (wifi in listOf(null, ip)) {
+                assertEquals(RebindAction.NOTHING, rebindAction("retry", enabled, hasBridge = true, wifiIp = wifi))
+            }
+        }
+    }
+
+    @Test
+    fun `a retry with no address does nothing`() {
+        for (enabled in listOf(true, false)) {
+            assertEquals(RebindAction.NOTHING, rebindAction("retry", enabled, hasBridge = false, wifiIp = null))
+        }
+    }
 }

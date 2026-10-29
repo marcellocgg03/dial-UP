@@ -359,6 +359,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 h.evidence.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
             }
 
+            RebindAction.NOTHING -> Unit
+
             RebindAction.REBIND_IN_PLACE -> {
                 val started = System.nanoTime()
                 val validated = monitor?.awaitValidated(VALIDATED_WAIT_MS) ?: false

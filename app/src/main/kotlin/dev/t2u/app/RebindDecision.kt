@@ -18,6 +18,9 @@ enum class RebindAction {
 
     /** reload-config: stop the bridge without clearing the speakers and start it again so the edited file applies. */
     RESTART,
+
+    /** Only for the retry reason: a bridge exists or there is no Wi-Fi address, so there is nothing to start. */
+    NOTHING,
 }
 
 /**
