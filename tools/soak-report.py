@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Soak verdict of the app's JSONL event log (plan 05-03: how long did the phone sleep, did the playlist advance).
 
-Run as:  python3 -I tools/soak-report.py FILE... [--since HH:MM:SS] [--until HH:MM:SS] [--min-hours H]
+Run as:  python3 -I tools/soak-report.py FILE... [--since T] [--until T] [--min-hours H]
                                           [--max-track-gap-s S] [--max-idle-housekeeping-gap-s S]
          python3 -I tools/soak-report.py --self-test
 
@@ -20,7 +20,17 @@ HOUSEKEEPING compares the largest gap between SSDP housekeeping runs while the p
 for plans 05-12 and 05-13 to judge; it does not change the SOAK verdict. RETRY and PROBE read events of plans
 05-04 and 05-02 and show zeros on a log from a build without them.
 
---since/--until compare with the wall-clock part (HH:MM:SS) of each event's ts, which is phone local time.
+--since/--until take a time of day (HH:MM:SS) or a full moment (YYYY-MM-DDTHH:MM:SS, optional fraction, optional Z or
++-HH:MM offset; a space may replace the T). Both bounds must be the same kind.
+  time of day   compared with the wall-clock part of each event's ts (phone local time) and matched on every day
+                in the log, so use a moment for a log longer than a day. With --since later than --until the window
+                wraps midnight (clock >= since or clock <= until).
+  moment        a moment without an offset is read in the event's own local time (the phone writes its offset into
+                every ts); a moment with an offset is compared as an instant. A --since later than --until is a
+                usage error (exit status 2), like any value that is neither form.
+When either bound is given the first output line is
+  WINDOW since=<v> until=<v> mode=<time-of-day|time-of-day-wrapping|moment> kept=<n> dropped=<m>
+and a window that keeps nothing ends in SOAK NONE.
 
 The input is untrusted text (some of it comes from LAN peers): json.loads only, unparsable lines are skipped
 and counted, control characters are escaped, and only counts, times, short reason codes and dotted-quad
@@ -41,7 +51,8 @@ HEARTBEAT_GAP_S = 90
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?(Z|[+-]\d\d:\d\d)?$")
-_CLOCK = re.compile(r"^\d\d:\d\d:\d\d$")
+_CLOCK = re.compile(r"^(\d\d):(\d\d):(\d\d)$")
+_MOMENT = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?(Z|[+-]\d\d:\d\d)?$")
 _QUAD = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
 _CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
 
@@ -119,8 +130,82 @@ def read_events(paths):
     return events, bad, unreadable
 
 
-def in_range(clock, since, until):
-    return (since is None or clock >= since) and (until is None or clock <= until)
+class UsageError(ValueError):
+    pass
+
+
+def parse_bound(text, name):
+    """('clock', 'HH:MM:SS') or ('moment', datetime); the datetime is naive when the text carries no offset."""
+    m = _CLOCK.match(text)
+    if m:
+        h, mi, s = (int(g) for g in m.groups())
+        if h > 23 or mi > 59 or s > 59:
+            raise UsageError("%s: %s is not a valid time of day" % (name, esc(text)))
+        return "clock", text
+    m = _MOMENT.match(text)
+    if not m:
+        raise UsageError("%s needs HH:MM:SS or YYYY-MM-DDTHH:MM:SS (optional fraction and Z or +-HH:MM)" % name)
+    y, mo, d, h, mi, s, frac, tz = m.groups()
+    try:
+        if tz is None:
+            tzinfo = None
+        elif tz == "Z":
+            tzinfo = timezone.utc
+        else:
+            sign = -1 if tz[0] == "-" else 1
+            tzinfo = timezone(sign * timedelta(hours=int(tz[1:3]), minutes=int(tz[4:6])))
+        micro = int((frac or "0").ljust(6, "0"))
+        return "moment", datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), micro, tzinfo=tzinfo)
+    except (ValueError, OverflowError):
+        raise UsageError("%s: %s is not a valid moment" % (name, esc(text)))
+
+
+class Window:
+    """The --since/--until window: a time of day (matches every day in the log, wraps midnight when since is
+    later than until) or a full moment (a naive moment is read in the event's own local time)."""
+
+    def __init__(self, since_text, until_text):
+        self.since_text, self.until_text = since_text, until_text
+        bounds = [parse_bound(t, n) for n, t in (("--since", since_text), ("--until", until_text)) if t is not None]
+        kinds = {kind for kind, _v in bounds}
+        if len(kinds) > 1:
+            raise UsageError("--since and --until must both be a time of day or both be a full moment")
+        self.kind = kinds.pop()
+        self.since = parse_bound(since_text, "--since")[1] if since_text is not None else None
+        self.until = parse_bound(until_text, "--until")[1] if until_text is not None else None
+        if self.kind == "clock":
+            wraps = self.since is not None and self.until is not None and self.since > self.until
+            self.mode = "time-of-day-wrapping" if wraps else "time-of-day"
+        else:
+            self.mode = "moment"
+            s, u = self.since, self.until
+            if s is not None and u is not None and (s.tzinfo is None) == (u.tzinfo is None) and s > u:
+                raise UsageError("--since is later than --until")
+
+    @staticmethod
+    def _at_or_after(dt, bound):
+        return (dt.replace(tzinfo=None) if bound.tzinfo is None else dt) >= bound
+
+    def keeps(self, dt, clock):
+        s, u = self.since, self.until
+        if self.kind == "clock":
+            if s is not None and u is not None and s > u:
+                return clock >= s or clock <= u
+            return (s is None or clock >= s) and (u is None or clock <= u)
+        return (s is None or self._at_or_after(dt, s)) and (u is None or not self._after(dt, u))
+
+    @staticmethod
+    def _after(dt, bound):
+        return (dt.replace(tzinfo=None) if bound.tzinfo is None else dt) > bound
+
+    def line(self, kept, dropped):
+        return "WINDOW since=%s until=%s mode=%s kept=%d dropped=%d" % (
+            esc(self.since_text if self.since_text is not None else "-"),
+            esc(self.until_text if self.until_text is not None else "-"), self.mode, kept, dropped)
+
+
+def parse_window(since, until):
+    return None if since is None and until is None else Window(since, until)
 
 
 def is_int(value):
@@ -329,9 +414,16 @@ def fmt_num(value):
 
 def run(paths, since, until, min_hours, max_track_gap_s, bound_s, out):
     events, bad, unreadable = read_events(paths)
+    window = parse_window(since, until)
+    window_line = None
+    if window is not None:
+        total = len(events)
+        events = [e for e in events if window.keeps(e[0], e[1])]
+        window_line = window.line(len(events), total - len(events))
+    if window_line is not None:
+        print(window_line, file=out)
     for u in unreadable:
         print("UNREADABLE %s" % esc(u), file=out)
-    events = [e for e in events if in_range(e[1], since, until)]
     lines, rc = report(analyse(events, max_track_gap_s, bound_s), min_hours, max_track_gap_s, bound_s)
     # SOAK NONE stands alone; any other verdict is the last line
     if bad:
@@ -342,26 +434,33 @@ def run(paths, since, until, min_hours, max_track_gap_s, bound_s, out):
 
 
 def self_test():
-    base = datetime(2026, 10, 20, 22, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
+    import io
+    import contextlib
 
-    def ts(sec):
-        return (base + timedelta(seconds=sec)).strftime("%Y-%m-%dT%H:%M:%S.000-04:00")
+    def helpers(base):
+        def ts(sec):
+            return (base + timedelta(seconds=sec)).strftime("%Y-%m-%dT%H:%M:%S.000-04:00")
 
-    def ev(sec, kind, **kw):
-        d = {"ts": ts(sec), "mono": 1, "kind": kind}
-        d.update(kw)
-        return d
+        def ev(sec, kind, **kw):
+            d = {"ts": ts(sec), "mono": 1, "kind": kind}
+            d.update(kw)
+            return d
 
-    def hb(sec, elapsed_ms=None, uptime_ms=None, idle=False, casting=1, ip="192.168.0.20"):
-        d = dict(idle=idle, casting=casting, wifiIp=ip)
-        if elapsed_ms is not None:
-            d.update(elapsedRealtimeMs=elapsed_ms, uptimeMillis=uptime_ms)
-        return ev(sec, "heartbeat", **d)
+        def hb(sec, elapsed_ms=None, uptime_ms=None, idle=False, casting=1, ip="192.168.0.20"):
+            d = dict(idle=idle, casting=casting, wifiIp=ip)
+            if elapsed_ms is not None:
+                d.update(elapsedRealtimeMs=elapsed_ms, uptimeMillis=uptime_ms)
+            return ev(sec, "heartbeat", **d)
 
-    def sent(sec):
-        return ev(sec, "renderer", level="info", message='Sent "T" to renderer as adts')
+        def sent(sec):
+            return ev(sec, "renderer", level="info", message='Sent "T" to renderer as adts')
 
-    def verdict(rows, *extra, expect_rc, expect_last):
+        return ev, hb, sent
+
+    ev, hb, sent = helpers(datetime(2026, 10, 20, 22, 0, 0, tzinfo=timezone(timedelta(hours=-4))))
+
+    def verdict(rows, *extra, expect_rc, expect_last, since=None, until=None, min_hours=0.0,
+                min_casting_hours=0.0, min_tracks=None, allow_idle=False):
         with tempfile.TemporaryDirectory(prefix="soak-report-") as tmp:
             path = os.path.join(tmp, "events.jsonl")
             with open(path, "w", encoding="utf-8") as fh:
@@ -369,9 +468,8 @@ def self_test():
                     fh.write(json.dumps(e) + "\n")
                 for junk in extra:
                     fh.write(junk + "\n")
-            import io
             buf = io.StringIO()
-            rc = run([path], None, None, 0.0, DEFAULT_TRACK_GAP_S, DEFAULT_HOUSEKEEPING_BOUND_S, buf)
+            rc = run([path], since, until, min_hours, DEFAULT_TRACK_GAP_S, DEFAULT_HOUSEKEEPING_BOUND_S, buf)
             text = buf.getvalue()
         last = text.strip().splitlines()[-1]
         assert rc == expect_rc and last.startswith(expect_last), (rc, last, text)
@@ -419,6 +517,50 @@ def self_test():
     assert "NET events=0 rebinds=0 skipped=0 ips=2" in text and text.count("\nIP ") == 3, text
     assert "SECRET" not in text and "evil" not in text and "\x1b" not in text, text
     assert "\\x1b" in esc("a\x1bb")
+
+    # --- window (WR-08): a night across midnight after an early session the same evening
+    wev, whb, wsent = helpers(datetime(2026, 10, 28, 21, 5, 0, tzinfo=timezone(timedelta(hours=-4))))
+    early = [wev(0, "service-start", reason="boot")] + [whb(i) for i in range(0, 1501, 30)] + [wsent(i) for i in range(10, 1500, 240)]
+    night = [wev(1680, "service-start", reason="boot")] + [whb(1680 + i) for i in range(0, 32221, 60)]
+    night += [wsent(1690 + i) for i in range(0, 32220, 240)]
+    both = early + night
+
+    def kept_dropped(text):
+        m = re.search(r"kept=(\d+) dropped=(\d+)", text.splitlines()[0])
+        assert m, text
+        return int(m.group(1)), int(m.group(2))
+
+    text = verdict(both, expect_rc=0, expect_last="SOAK OK 8.95 h",
+                   since="2026-10-28T21:33:00", until="2026-10-29T07:00:00")
+    assert text.splitlines()[0].startswith(
+        "WINDOW since=2026-10-28T21:33:00 until=2026-10-29T07:00:00 mode=moment kept="), text
+    assert kept_dropped(text) == (len(night), len(early)), (kept_dropped(text), len(night), len(early))
+    assert "SPAN first=2026-10-28T21:33:00.000-04:00 last=2026-10-29T06:30:00.000-04:00" in text, text
+    text = verdict(both, expect_rc=0, expect_last="SOAK OK 8.95 h", since="2026-10-28 21:33:00", until="2026-10-29T07:00:00")
+    assert "mode=moment" in text and kept_dropped(text) == (len(night), len(early)), text
+    text = verdict(both, expect_rc=0, expect_last="SOAK OK 8.95 h", since="21:33:00", until="07:00:00")
+    assert "mode=time-of-day-wrapping" in text.splitlines()[0], text
+    assert kept_dropped(text) == (len(night), len(early)), text
+    text = verdict(both, expect_rc=0, expect_last="SOAK OK", since="06:00:00", until="07:00:00")
+    assert "mode=time-of-day " in text.splitlines()[0] and "SPAN first=2026-10-29T06:00:00.000-04:00 last=2026-10-29T06:30:00.000-04:00" in text, text
+    # an explicit offset is an instant: 10:00+00:00 is 06:00 in the phone's -04:00
+    a = verdict(both, expect_rc=0, expect_last="SOAK OK", since="2026-10-29T10:00:00+00:00", until="2026-10-29T10:20:00Z")
+    b = verdict(both, expect_rc=0, expect_last="SOAK OK", since="2026-10-29T06:00:00", until="2026-10-29T06:20:00")
+    assert kept_dropped(a) == kept_dropped(b) and kept_dropped(a)[0] > 0, (a, b)
+    # a window that keeps nothing still says what it was and ends in NONE
+    text = verdict(both, expect_rc=1, expect_last="SOAK NONE", since="2026-11-01T00:00:00", until="2026-11-02T00:00:00")
+    assert text.startswith("WINDOW ") and kept_dropped(text)[0] == 0, text
+    # usage errors exit with status 2
+    for bad in (["--since", "2026-10-29T07:00:00", "--until", "2026-10-28T21:33:00"],
+                ["--since", "25:61:00"], ["--since", "tomorrow"], ["--until", "2026-13-45T00:00:00"],
+                ["--since", "21:00:00", "--until", "2026-10-29T07:00:00"]):
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                main(bad + ["/dev/null"])
+            except SystemExit as exc:
+                assert exc.code == 2, (bad, exc.code)
+            else:
+                raise AssertionError("no usage error for %r" % bad)
     print("SELF-TEST OK")
     return 0
 
@@ -435,9 +577,10 @@ def main(argv):
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
-    for name, value in (("--since", args.since), ("--until", args.until)):
-        if value is not None and not _CLOCK.match(value):
-            ap.error("%s needs HH:MM:SS" % name)
+    try:
+        parse_window(args.since, args.until)
+    except UsageError as exc:
+        ap.error(str(exc))
     if not args.files:
         ap.error("no input files")
     return run(args.files, args.since, args.until, args.min_hours, args.max_track_gap_s,
