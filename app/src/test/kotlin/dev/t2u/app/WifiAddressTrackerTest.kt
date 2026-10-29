@@ -39,4 +39,55 @@ class WifiAddressTrackerTest {
         assertTrue(tracker.onReport(1L, ip47))
         assertEquals(ip47, tracker.currentIp)
     }
+
+    @Test
+    fun losingTheCurrentNetworkFallsBackToTheOtherOne() {
+        val tracker = WifiAddressTracker()
+        tracker.onReport(1L, ip41)
+        tracker.onReport(2L, ip47)
+
+        assertTrue(tracker.onLost(2L))
+        assertEquals(ip41, tracker.currentIp)
+        assertTrue(tracker.onLost(1L))
+        assertNull(tracker.currentIp)
+    }
+
+    @Test
+    fun aLostCallbackForAnUnseenNetworkIsIgnored() {
+        val tracker = WifiAddressTracker(ip41)
+        assertFalse(tracker.onLost(99L))
+        assertEquals(ip41, tracker.currentIp)
+    }
+
+    @Test
+    fun aNetworkWithoutAnIpv4DoesNotHideTheOtherOne() {
+        val tracker = WifiAddressTracker()
+        tracker.onReport(1L, ip41)
+        assertFalse(tracker.onReport(2L, null))
+        assertEquals(ip41, tracker.currentIp)
+        assertTrue(tracker.onLost(1L))
+        assertNull(tracker.currentIp)
+    }
+
+    @Test
+    fun trackedCountsTheKnownNetworks() {
+        val tracker = WifiAddressTracker()
+        assertEquals(0, tracker.tracked)
+        tracker.onReport(1L, ip41)
+        tracker.onReport(2L, ip47)
+        assertEquals(2, tracker.tracked)
+        tracker.onLost(1L)
+        assertEquals(1, tracker.tracked)
+        tracker.onLost(99L)
+        assertEquals(1, tracker.tracked)
+    }
+
+    @Test
+    fun theSameAddressOnTwoNetworksIsOneAddress() {
+        val tracker = WifiAddressTracker()
+        tracker.onReport(1L, ip41)
+        assertFalse(tracker.onReport(2L, ip41))
+        assertFalse(tracker.onLost(2L))
+        assertEquals(ip41, tracker.currentIp)
+    }
 }

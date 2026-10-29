@@ -31,19 +31,22 @@ class NetworkMonitor(
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val props = cm?.getLinkProperties(network)
-            log("available", network, props)
             // link properties usually arrive in onLinkPropertiesChanged right after; judge then if absent
-            if (props != null) evaluate(network.networkHandle, "available", ipv4(props))
+            val changed = props != null && update(network.networkHandle, ipv4(props))
+            log("available", network, props)
+            if (changed) onChange("available")
         }
 
         override fun onLost(network: Network) {
+            val changed = synchronized(lock) { tracker.onLost(network.networkHandle) }
             log("lost", network, null)
-            lost(network.networkHandle)
+            if (changed) onChange("lost")
         }
 
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            val changed = update(network.networkHandle, ipv4(linkProperties))
             log("linkPropertiesChanged", network, linkProperties)
-            evaluate(network.networkHandle, "linkPropertiesChanged", ipv4(linkProperties))
+            if (changed) onChange("linkPropertiesChanged")
         }
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
@@ -101,19 +104,12 @@ class NetworkMonitor(
                 "network" to network.networkHandle,
                 "iface" to props?.interfaceName,
                 "ipv4" to props?.linkAddresses?.map { it.address }?.filterIsInstance<Inet4Address>()?.map { it.hostAddress },
+                "tracked" to synchronized(lock) { tracker.tracked },
             ),
         )
     }
 
-    private fun evaluate(handle: Long, event: String, ip: String?) {
-        val changed = synchronized(lock) { tracker.onReport(handle, ip) }
-        if (changed) onChange(event)
-    }
-
-    private fun lost(handle: Long) {
-        val changed = synchronized(lock) { tracker.onLost(handle) }
-        if (changed) onChange("lost")
-    }
+    private fun update(handle: Long, ip: String?): Boolean = synchronized(lock) { tracker.onReport(handle, ip) }
 
     private companion object {
         const val VALIDATED_POLL_MS = 500L
