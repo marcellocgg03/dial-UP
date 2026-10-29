@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
-    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "net-rebind")
+    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "net-rebind", "housekeeping")
 
     private val lifecycle = Mutex()
     private var host: SpikeHost? = null
@@ -109,6 +109,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()
         host.scope.launch { lifecycle.withLock { startBridge(host) } }
+        HousekeepingAlarm.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
         val updater = YtDlpUpdater(
@@ -125,6 +126,7 @@ class CastFeature : SpikeFeature, CastCountSource {
      * parallel across speakers, so the worst case stays inside the 10 s join below.
      */
     override fun stop() {
+        host?.let { HousekeepingAlarm.cancel(it.context) }
         updaterJob?.cancel()
         updaterJob = null
         runCatching { monitor?.stop() }
@@ -150,7 +152,20 @@ class CastFeature : SpikeFeature, CastCountSource {
             CommandReply(true, """{"ok":true,"note":"restarting the bridge; playback is interrupted"}""")
         }
         "net-rebind" -> netRebindCommand(args["mode"])
+        "housekeeping" -> {
+            // trigger adb is never deduped; the reply does not wait for the run
+            host?.scope?.launch { housekeeping("adb") }
+            CommandReply(true, """{"started":true}""")
+        }
         else -> CommandReply(false, """{"error":"unknown command"}""")
+    }
+
+    /**
+     * One housekeeping pass (plan 05-11): the bridge's search, retry, re-announce and probe. Run by the in-process timer
+     * of the bridge, by [HousekeepingReceiver] when the alarm wakes the idle phone, and by `cmd housekeeping`.
+     */
+    suspend fun housekeeping(trigger: String) {
+        bridge?.housekeeping(trigger)
     }
 
     private fun netRebindCommand(mode: String?): CommandReply {
