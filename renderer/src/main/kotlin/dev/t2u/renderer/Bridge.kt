@@ -179,10 +179,20 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** The access policy the responder and the receivers share; housekeeping reads it to decide whether to announce. */
     @Volatile private var accessPolicy: DialAccessPolicy? = null
 
-    /** Serialises the network housekeeping, so two triggers never probe and reopen sockets at the same time. */
+    /**
+     * Serialises everything that changes the sockets: the probe and repair step of housekeeping, [networkLost] and
+     * [rebindNetwork]. A housekeeping pass holds it only around that step, never through its search and retries, so a
+     * network drop is acknowledged at once (review WR-06).
+     */
     private val netLock = Mutex()
 
-    /** Wall-clock time the last run started; null before the first. Guards against a timer tick and an alarm tick doubling up. */
+    /** Serialises whole housekeeping passes, so two triggers never run one after the other's half-finished state. */
+    private val housekeepingLock = Mutex()
+
+    /**
+     * Wall-clock time the last run started; null before the first. Guards against a timer tick and an alarm tick doubling up.
+     * It is the wall clock (not nanoTime) because sleep time must count; a clock that moved backwards counts as "not recent".
+     */
     @Volatile private var lastHousekeepingAt: Long? = null
 
     /**
@@ -502,12 +512,14 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             // a timer tick and an alarm tick (plan 05-11) must not double up; the adb trigger is a person asking
             val now = deps.clock()
             val last = lastHousekeepingAt
-            if (trigger != "adb" && last != null && now - last < deps.housekeepingIntervalMs / 2) {
-                emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to now - last)
+            // a negative elapsed time means the wall clock moved back: that is not "recent" (review WR-07)
+            val elapsed = if (last != null) now - last else null
+            if (trigger != "adb" && elapsed != null && elapsed >= 0 && elapsed < deps.housekeepingIntervalMs / 2) {
+                emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to elapsed)
                 return false
             }
             lastHousekeepingAt = now
-            netLock.withLock { runHousekeeping(trigger) }
+            housekeepingLock.withLock { runHousekeeping(trigger) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -568,7 +580,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             failure("housekeeping-retry", t)
             0
         }
-        val repaired = probeAndRepair(trigger, clientFailed)
+        // the network lock is taken only around the probe and repair step; the system is asked first, outside the lock
+        val repaired = if (!wifiPresent()) {
+            emit("ssdp-probe", "skipped" to "no-wifi", "trigger" to trigger)
+            0
+        } else {
+            netLock.withLock { probeAndRepair(trigger, clientFailed) }
+        }
         emit(
             "housekeeping",
             "trigger" to trigger, "ran" to true, "searched" to searched, "retried" to retried, "repaired" to repaired,
