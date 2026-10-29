@@ -16,6 +16,7 @@ import dev.t2u.upnp.maxAge
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -236,27 +237,42 @@ class RendererRegistry(
      */
     private suspend fun setUp(udn: String, location: String, src: InetSocketAddress, age: Int, retryAttempt: Int?) {
         var port: Int? = null
+        var holdsPort = false
         var renderer: ManagedRenderer? = null
+        var registered = false
         try {
             port = ports.claim(udn)
+            holdsPort = true
             renderer = factory.create(udn, location, src.address.hostAddress.orEmpty(), age, port)
             if (renderer.init()) {
                 lock.withLock {
                     running[udn] = renderer
                     skipped.remove(udn)
                     publish()
+                    registered = true
                 }
                 ports.remember(udn, port)
                 log("added", udn, renderer.name, location, port)
                 if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, port, retryAttempt, "added")
             } else {
                 ports.release(port)
+                holdsPort = false
                 lock.withLock { putSkip(udn, Skip(location, Long.MAX_VALUE)) }
                 log("skipped", udn, renderer.name, location, reason = "not a usable renderer")
                 if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
             }
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
+            if (e is CancellationException) {
+                // A cancelled setup is not a failure: no skip entry is written or changed. A renderer that never got
+                // into [running] is destroyed and its port freed; a registered one owns its port and is left alone.
+                if (!registered) {
+                    withContext(NonCancellable) {
+                        runCatching { renderer?.destroy() }
+                        if (holdsPort && port != null) ports.release(port)
+                    }
+                }
+                throw e
+            }
             withContext(NonCancellable) {
                 runCatching { renderer?.destroy() }
                 if (port != null) ports.release(port)
@@ -275,7 +291,9 @@ class RendererRegistry(
      * alive, and asks every running speaker to revive a receiver that stopped itself ([ManagedRenderer.reviveIfDue]).
      * A device that was refused (not a usable renderer), one an alive is setting up right now and one that already
      * runs are left alone. Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
-     * number of setup attempts made; receiver revivals are logged but not counted.
+     * number of setup attempts made; receiver revivals are logged but not counted. A cancelled pass releases every
+     * reservation it made, destroys any half-built renderer and does not change any skip entry, so the next pass
+     * retries the same speakers at the same attempt number.
      */
     suspend fun retryDue(): Int {
         val due = lock.withLock {
@@ -293,7 +311,19 @@ class RendererRegistry(
             val gate = Semaphore(RETRY_PARALLEL)
             coroutineScope {
                 due.map { (udn, skip, attempt) ->
-                    async { gate.withPermit { setUp(udn, skip.location, skip.src!!, skip.maxAge, attempt) } }
+                    // ATOMIC: the body starts even when the scope is already cancelled, so the finally below always runs
+                    async(start = CoroutineStart.ATOMIC) {
+                        var entered = false
+                        try {
+                            gate.withPermit {
+                                entered = true
+                                setUp(udn, skip.location, skip.src!!, skip.maxAge, attempt)
+                            }
+                        } finally {
+                            // setUp's own finally released the reservation when it was entered; otherwise do it here
+                            if (!entered) withContext(NonCancellable) { lock.withLock { pending.remove(udn) } }
+                        }
+                    }
                 }.awaitAll()
             }
         }
