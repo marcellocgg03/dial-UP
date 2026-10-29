@@ -53,7 +53,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * A Wi-Fi change does not restart the bridge (plan 05-10, SVC-04): every address change freezes the renderers at once
  * ([Bridge.networkLost]); after a 2 s debounce [rebindAction] decides, and a new address waits up to 20 s for a validated
  * Wi-Fi network and then moves the running bridge in place ([Bridge.rebindNetwork]), so receivers, lounge sessions and
- * the playing track survive. Only `reload-config` still restarts it.
+ * the playing track survive. Only `reload-config` still restarts it. A start that throws, or finds no Wi-Fi, is logged
+ * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists, also with the rebind switch off.
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
@@ -63,6 +64,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var host: SpikeHost? = null
     private var monitor: NetworkMonitor? = null
     private var rebindJob: Job? = null
+    private var retryJob: Job? = null
     private var countJob: Job? = null
     private var updaterJob: Job? = null
     @Volatile private var updater: YtDlpUpdater? = null
@@ -113,7 +115,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()
-        host.scope.launch { lifecycle.withLock { startBridge(host) } }
+        host.scope.launch { lifecycle.withLock { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
         HousekeepingAlarm.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
@@ -144,6 +146,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         runCatching { monitor?.stop() }
         monitor = null
         rebindJob?.cancel()
+        retryJob?.cancel()
         // sockets are never touched on the main thread
         val t = Thread({ runBlocking { lifecycle.withLock { stopBridge(clearSpeakers = true) } } }, "t2u-cast-stop").apply { isDaemon = true }
         t.start()
@@ -222,6 +225,29 @@ class CastFeature : SpikeFeature, CastCountSource {
         val ifaceName = h.wifiInterfaceName() ?: return null
         val nif = NetworkInterface.getByName(ifaceName)
         return BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false)))
+    }
+
+    /**
+     * [startBridge] that logs a failure as `feature-error` instead of throwing (plan 05-19, review WR-01). True only when
+     * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with [lifecycle] held.
+     */
+    private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
+        runGuarded("start-bridge", { where, t -> h.evidence.event("feature-error", featureErrorFields(where, t) + ("reason" to reason)) }) {
+            startBridge(h)
+        }
+        return bridge != null
+    }
+
+    /**
+     * Looks for a bridge again after [START_RETRY_MS]. Its own job, so a retry that fails can schedule the next one
+     * without cancelling itself; [scheduleRebind] and [stop] cancel it.
+     */
+    private fun scheduleStartRetry(h: SpikeHost) {
+        h.evidence.event("net", mapOf("retry" to true, "inMs" to START_RETRY_MS))
+        retryJob = h.scope.launch {
+            delay(START_RETRY_MS)
+            lifecycle.withLock { applyRebind(h, "retry") }
+        }
     }
 
     /** Call with [lifecycle] held, off the main thread. */
@@ -327,6 +353,7 @@ class CastFeature : SpikeFeature, CastCountSource {
             h.evidence.event("net", mapOf("rebind" to false, "reason" to reason, "skipped" to "disabled"))
             return
         }
+        retryJob?.cancel()
         rebindJob?.cancel()
         rebindJob = h.scope.launch {
             delay(REBIND_DEBOUNCE_MS)
@@ -347,19 +374,30 @@ class CastFeature : SpikeFeature, CastCountSource {
 
             RebindAction.START -> {
                 // a move is never cut in half by a newer event; that one waits for the lock instead
-                withContext(NonCancellable) { startBridge(h) }
-                h.evidence.event("net", mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+                val ok = withContext(NonCancellable) { startBridgeGuarded(h, reason) }
+                if (ok) {
+                    h.evidence.event("net", mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+                } else {
+                    h.evidence.event("net", mapOf("rebind" to false, "mode" to "start-failed", "reason" to reason, "oldIp" to oldIp))
+                    scheduleStartRetry(h)
+                }
             }
 
             RebindAction.RESTART -> {
-                withContext(NonCancellable) {
+                val ok = withContext(NonCancellable) {
                     stopBridge(clearSpeakers = false)
-                    startBridge(h)
+                    startBridgeGuarded(h, reason)
                 }
-                h.evidence.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+                if (ok) {
+                    h.evidence.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+                } else {
+                    h.evidence.event("net", mapOf("rebind" to false, "mode" to "restart-failed", "reason" to reason, "oldIp" to oldIp))
+                    scheduleStartRetry(h)
+                }
             }
 
-            RebindAction.NOTHING -> Unit
+            // only the retry reason gets here: a bridge exists (done) or there is still no Wi-Fi (look again later)
+            RebindAction.NOTHING -> if (bridge == null) scheduleStartRetry(h)
 
             RebindAction.REBIND_IN_PLACE -> {
                 val started = System.nanoTime()
