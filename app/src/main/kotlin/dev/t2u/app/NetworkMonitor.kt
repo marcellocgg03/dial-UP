@@ -6,6 +6,9 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.net.Inet4Address
 
 /**
@@ -65,6 +68,27 @@ class NetworkMonitor(
         runCatching { cm?.unregisterNetworkCallback(callback) }
     }
 
+    /**
+     * True as soon as a Wi-Fi network has NET_CAPABILITY_VALIDATED (checked every 500 ms), false at [timeoutMs]. A LAN
+     * without internet never validates, so the caller moves anyway after the timeout (RESEARCH Pitfall 8).
+     */
+    suspend fun awaitValidated(timeoutMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val manager = cm ?: return@withContext false
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        var validated = wifiValidated(manager)
+        while (!validated && System.nanoTime() < deadline) {
+            delay(VALIDATED_POLL_MS)
+            validated = wifiValidated(manager)
+        }
+        validated
+    }
+
+    private fun wifiValidated(manager: ConnectivityManager): Boolean = manager.allNetworks.any { network ->
+        val caps = manager.getNetworkCapabilities(network)
+        caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     private fun ipv4(props: LinkProperties): String? =
         props.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>().firstOrNull()?.hostAddress
 
@@ -85,5 +109,9 @@ class NetworkMonitor(
             if (ip == lastIp) false else { lastIp = ip; true }
         }
         if (changed) onChange(event)
+    }
+
+    private companion object {
+        const val VALIDATED_POLL_MS = 500L
     }
 }

@@ -17,6 +17,7 @@ import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
 import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -46,6 +48,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * The optional `files/config.json` (see :renderer ConfigFile.kt for the keys) is read each time the bridge starts; what
  * was applied is logged as a `config` event and shown under "config" by `cast-state`, and `reload-config` restarts the
  * bridge (without clearing the speakers) so an edited file takes effect without reinstalling.
+ *
+ * A Wi-Fi change does not restart the bridge (plan 05-10, SVC-04): every address change freezes the renderers at once
+ * ([Bridge.networkLost]); after a 2 s debounce [rebindAction] decides, and a new address waits up to 20 s for a validated
+ * Wi-Fi network and then moves the running bridge in place ([Bridge.rebindNetwork]), so receivers, lounge sessions and
+ * the playing track survive. Only `reload-config` still restarts it.
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
@@ -97,7 +104,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 bridge?.onAccessModeChanged(mode)
             }
         }
-        val mon = NetworkMonitor(host.context, host.evidence) { reason -> scheduleRebind(reason) }
+        val mon = NetworkMonitor(host.context, host.evidence) { reason -> onNetworkChange(reason) }
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()
@@ -174,16 +181,23 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     // ----- lifecycle -----------------------------------------------------------------------------
 
+    /** The Wi-Fi address and interface as a bridge network; null when there is no Wi-Fi IPv4 or interface. */
+    private fun bridgeNetwork(h: SpikeHost): BridgeNetwork? {
+        val ip = h.wifiIpv4() ?: return null
+        val ifaceName = h.wifiInterfaceName() ?: return null
+        val nif = NetworkInterface.getByName(ifaceName)
+        return BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false)))
+    }
+
     /** Call with [lifecycle] held, off the main thread. */
     private suspend fun startBridge(h: SpikeHost) {
-        val ip = h.wifiIpv4()
-        val ifaceName = h.wifiInterfaceName()
-        if (ip == null || ifaceName == null) {
+        val network = bridgeNetwork(h)
+        if (network == null) {
             lastIp = null
             h.evidence.event("net", mapOf("wifi" to false))
             return
         }
-        lastIp = ip.hostAddress
+        lastIp = network.wifiIp.hostAddress
         val appSettings = checkNotNull(settings) { "settings not initialised" }
         val payloads = h.payloads()
         val cacheDir = File(h.context.cacheDir, "yt-dlp").also { it.mkdirs() }
@@ -201,9 +215,8 @@ class CastFeature : SpikeFeature, CastCountSource {
             onEvent = { h.evidence.event("resolve", it) },
             verbose = loaded.config.ytdlpVerbose,
         )
-        val nif = NetworkInterface.getByName(ifaceName)
         val b = Bridge(
-            BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false))),
+            network,
             BridgeDeps(
                 config = loaded.config,
                 resolver = resolver,
@@ -260,6 +273,18 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     // ----- rebind on Wi-Fi change ----------------------------------------------------------------
 
+    /**
+     * Called by [NetworkMonitor] on every Wi-Fi address change. With the switch on the renderers freeze at once, before
+     * the speaker's broken stream can be mirrored to the phone; the move itself waits for the debounce.
+     */
+    private fun onNetworkChange(reason: String) {
+        val h = host ?: return
+        if (rebindEnabled) {
+            h.scope.launch { bridge?.networkLost() }
+        }
+        scheduleRebind(reason)
+    }
+
     private fun scheduleRebind(reason: String) {
         val h = host ?: return
         if (!rebindEnabled && reason != "config") {
@@ -269,12 +294,63 @@ class CastFeature : SpikeFeature, CastCountSource {
         rebindJob?.cancel()
         rebindJob = h.scope.launch {
             delay(REBIND_DEBOUNCE_MS)
-            lifecycle.withLock {
-                val oldIp = lastIp
-                // the bridge comes straight back on the new address and playback is not being ended
-                stopBridge(clearSpeakers = false)
-                startBridge(h)
-                h.evidence.event("net", mapOf("rebind" to true, "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+            lifecycle.withLock { applyRebind(h, reason) }
+        }
+    }
+
+    /** Call with [lifecycle] held, after the debounce. A burst of events reaches here once, with the last reason. */
+    private suspend fun applyRebind(h: SpikeHost, reason: String) {
+        val oldIp = lastIp
+        when (rebindAction(reason, rebindEnabled, bridge != null, h.wifiIpv4()?.hostAddress)) {
+            RebindAction.SKIP_DISABLED ->
+                h.evidence.event("net", mapOf("rebind" to false, "reason" to reason, "skipped" to "disabled"))
+
+            RebindAction.MARK_LOST_ONLY ->
+                // no Wi-Fi address now: the bridge stays, frozen, and the next address change moves it
+                h.evidence.event("net", mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp))
+
+            RebindAction.START -> {
+                // a move is never cut in half by a newer event; that one waits for the lock instead
+                withContext(NonCancellable) { startBridge(h) }
+                h.evidence.event("net", mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+            }
+
+            RebindAction.RESTART -> {
+                withContext(NonCancellable) {
+                    stopBridge(clearSpeakers = false)
+                    startBridge(h)
+                }
+                h.evidence.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
+            }
+
+            RebindAction.REBIND_IN_PLACE -> {
+                val started = System.nanoTime()
+                val validated = monitor?.awaitValidated(VALIDATED_WAIT_MS) ?: false
+                val waitedMs = (System.nanoTime() - started) / 1_000_000L
+                // the network may be gone again after the wait: then the bridge stays frozen until the next address
+                val network = bridgeNetwork(h)
+                val b = bridge
+                if (network == null || b == null) {
+                    h.evidence.event(
+                        "net",
+                        mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp, "validated" to validated, "waitedMs" to waitedMs),
+                    )
+                    return
+                }
+                withContext(NonCancellable) { b.rebindNetwork(network) }
+                lastIp = network.wifiIp.hostAddress
+                h.evidence.event(
+                    "net",
+                    mapOf(
+                        "rebind" to true,
+                        "mode" to "in-place",
+                        "reason" to reason,
+                        "oldIp" to oldIp,
+                        "newIp" to lastIp,
+                        "validated" to validated,
+                        "waitedMs" to waitedMs,
+                    ),
+                )
             }
         }
     }
@@ -357,6 +433,7 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     private companion object {
         const val REBIND_DEBOUNCE_MS = 2000L
+        const val VALIDATED_WAIT_MS = 20_000L
         const val WARMUP_WAIT_MS = 15_000L
         const val MAX_CONFIG_WARNING_EVENTS = 20
         const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
