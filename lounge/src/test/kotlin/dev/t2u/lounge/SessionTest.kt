@@ -18,9 +18,13 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.AfterEach
+import okhttp3.OkHttpClient
 import org.junit.jupiter.api.Test
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -49,18 +53,25 @@ class SessionTest {
         fake.close()
     }
 
-    private fun session(store: DataStore? = MemoryStore(), client: Client = Client.YT): Session {
+    private fun session(
+        store: DataStore? = MemoryStore(),
+        client: Client = Client.YT,
+        http: OkHttpClient = lanHttpClient(),
+        outage: Pair<Long, List<Long>>? = null,
+    ): Session {
         val s = Session(
             client = client,
             screenName = "T2U test",
             brand = "T2U",
             model = "Test",
             dataStore = store,
-            http = lanHttpClient(),
+            http = http,
             endpoints = fake.endpoints,
             sink = sink,
             scope = scope,
             rpcRetryDelayMs = 20,
+            rpcOutageBudgetMs = outage?.first ?: 120_000,
+            rpcOutageWaitsMs = outage?.second ?: listOf(2_000, 4_000, 8_000, 16_000, 30_000),
         )
         sessions.add(s)
         return s
@@ -235,6 +246,57 @@ class SessionTest {
         s.onMessages = { m, _ -> received.addAll(m) }
         fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
         awaitUntil { received.any { it.name == "pause" } }
+    }
+
+    /** A client whose RPC GETs fail with an IOException while [failing] is set; asking for a token batch ends the outage. */
+    private class OutageNet(val failing: AtomicBoolean = AtomicBoolean(false), val failedRpcGets: AtomicInteger = AtomicInteger()) {
+        val http: OkHttpClient = lanHttpClient().newBuilder().addInterceptor { chain ->
+            val req = chain.request()
+            // the refresh path starts with a token batch POST: from there the network is back
+            if (req.url.encodedPath.endsWith("get_lounge_token_batch")) failing.set(false)
+            if (failing.get() && req.method == "GET" && req.url.queryParameter("RID") == "rpc") {
+                failedRpcGets.incrementAndGet()
+                throw IOException("network unreachable")
+            }
+            chain.proceed(req)
+        }.build()
+    }
+
+    private fun waitEvents() = events.filter { it.first == "lounge-session" && it.second["what"] == "rpc-wait" }
+
+    @Test
+    fun anOutageOfNetworkErrorsIsRiddenOutOnTheSameToken() = run {
+        val net = OutageNet()
+        val s = session(http = net.http, outage = 2_000L to listOf(60L, 120L))
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        s.begin()
+        net.failing.set(true)
+        fake.closeRpc("cl")
+        awaitUntil { net.failedRpcGets.get() >= 3 }
+        delay(300)
+        net.failing.set(false)
+        awaitUntil { fake.rpcOpen("cl") == 1 }
+        assertEquals(SessionStatus.RUNNING, s.status)
+        assertEquals(1, count("get_lounge_token_batch"), "the token is never asked for again")
+        assertTrue(waitEvents().isNotEmpty(), "rpc-wait events count the attempts")
+        assertEquals(1, waitEvents().first().second["attempt"])
+        fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
+        awaitUntil { received.any { it.name == "pause" } }
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun anOutageThatOutlastsTheBudgetTakesTheRefreshPath() = run {
+        val net = OutageNet()
+        val s = session(http = net.http, outage = 200L to listOf(50L))
+        s.begin()
+        net.failing.set(true)
+        fake.closeRpc("cl")
+        // the budget runs out, the refresh path asks for a new token (which also ends the simulated outage)
+        awaitUntil { count("get_lounge_token_batch") >= 2 && fake.rpcOpen("cl") == 1 && s.status == SessionStatus.RUNNING }
+        assertEquals(2, count("get_lounge_token_batch"))
+        assertTrue(waitEvents().isNotEmpty())
     }
 
     @Test
