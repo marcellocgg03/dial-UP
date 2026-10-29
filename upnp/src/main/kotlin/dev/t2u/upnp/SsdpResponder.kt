@@ -243,23 +243,20 @@ class SsdpResponder(
     /** Closes the listen sockets only, leaving the responder "running" but deaf, so tests can exercise [restartListeners]. */
     internal fun closeListenersForTest() = synchronized(lifecycle) { closeListeners() }
 
-    /** Placeholder until the probe logic moves here (05-15 task 2). */
-    fun probe(timeoutMs: Long = 2000): ProbeResult = ProbeResult.NOT_RUNNING
-
     /**
      * Proves this responder's own listener still receives: sends one M-SEARCH whose ST is a random nonce
      * ([PROBE_ST_PREFIX] + 16 hex characters) and waits up to [timeoutMs] for the listener to see it. The probe carries
      * no device name, UUID or location, is never answered and never reaches the SSDP client (handled first in [handle]).
-     * False when the responder is not running, has no reply socket, or heard nothing in time.
+     * The result names why it failed: not running, no reply socket, the send threw, or nothing was heard in time.
      */
-    fun selfProbe(timeoutMs: Long = 2000): Boolean {
-        val sock = replySocket
-        if (!running || sock == null) return false
+    fun probe(timeoutMs: Long = 2000): ProbeResult {
+        if (!running) return ProbeResult.NOT_RUNNING
+        val sock = replySocket ?: return ProbeResult.NO_REPLY_SOCKET
         val target: InetSocketAddress = if (probeTarget != null) {
             probeTarget
         } else if (replyBind.isLoopbackAddress) {
             // JVM tests: never multicast; aim at our own first listener
-            val l = listeners.firstOrNull() ?: return false
+            val l = listeners.firstOrNull() ?: return ProbeResult.NOT_HEARD
             InetSocketAddress(l.spec.bindAddress ?: replyBind, l.socket.localPort)
         } else {
             InetSocketAddress(InetAddress.getByName(SsdpConstants.GROUP), groupPort)
@@ -271,14 +268,22 @@ class SsdpResponder(
             val msg = "M-SEARCH * HTTP/1.1\r\nHOST: ${SsdpConstants.GROUP}:${SsdpConstants.PORT}\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\n" +
                 "ST: $PROBE_ST_PREFIX$nonce\r\n\r\n"
             val bytes = msg.toByteArray(Charsets.UTF_8)
-            sock.send(DatagramPacket(bytes, bytes.size, target))
-            return latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-        } catch (_: java.io.IOException) {
-            return false
+            try {
+                sock.send(DatagramPacket(bytes, bytes.size, target))
+            } catch (_: java.io.IOException) {
+                return ProbeResult.SEND_FAILED
+            }
+            return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) ProbeResult.OK else ProbeResult.NOT_HEARD
         } finally {
             pendingProbes.remove(nonce)
         }
     }
+
+    /**
+     * Proves this responder's own listener still receives (see [probe]). False when the responder is not running, has no
+     * reply socket, could not send, or heard nothing in time.
+     */
+    fun selfProbe(timeoutMs: Long = 2000): Boolean = probe(timeoutMs) == ProbeResult.OK
 
     private fun receiveLoop(l: Listener) {
         val buf = ByteArray(8192)
