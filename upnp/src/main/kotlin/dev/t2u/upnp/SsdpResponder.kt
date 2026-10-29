@@ -110,17 +110,17 @@ class SsdpResponder(
         check(!running) { "already started" }
         running = true
 
-        replySocket = try {
-            MulticastSocket(InetSocketAddress(replyBind, 0)).apply {
-                timeToLive = 4
-                if (replyInterface != null) networkInterface = replyInterface
-            }
-        } catch (t: Throwable) {
-            events.onError("reply-socket", t)
-            null
-        }
+        replySocket = createReplySocket()
 
         openListeners()
+    }
+
+    /** Asks the factory for a reply socket; a failure is reported through onError and leaves the responder without one. */
+    private fun createReplySocket(): MulticastSocket? = try {
+        openReplySocket(replyBind, replyInterface)
+    } catch (t: Throwable) {
+        events.onError("reply-socket", t)
+        null
     }
 
     /** Opens one multicast listen socket per [ListenSpec] and starts its receive thread. A failed bind is reported through onBind. */
@@ -207,13 +207,16 @@ class SsdpResponder(
     }
 
     /**
-     * Closes every listen socket and opens them again, on the same specs (D-06, Phase 1 carry-over d). The reply socket,
-     * the registered devices and the bridge are untouched: this is a socket-level repair for a listener that went deaf
-     * (a multicast membership the OS dropped), never a rebind. Returns how many listeners are bound now; 0 when the
-     * responder is not running.
+     * Replaces the reply socket and reopens every listen socket, on the same specs (D-06, Phase 1 carry-over d, review
+     * WR-03). The reply socket is recreated too: one the OS invalidated, or one that failed at [start], would otherwise
+     * leave the responder unable to answer, announce or probe for good. The registered devices and the running flag are
+     * untouched: this is a socket-level repair (a multicast membership the OS dropped, a dead socket), never a rebind.
+     * Returns how many listeners are bound now; 0 when the responder is not running.
      */
     fun restartListeners(): Int = synchronized(lifecycle) {
         if (!running) return@synchronized 0
+        runCatching { replySocket?.close() }
+        replySocket = createReplySocket()
         closeListeners()
         openListeners()
         listeners.size
