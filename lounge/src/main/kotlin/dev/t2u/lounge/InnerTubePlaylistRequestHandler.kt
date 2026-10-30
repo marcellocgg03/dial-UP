@@ -90,6 +90,7 @@ class InnerTubePlaylistRequestHandler(
                 ?.let { currentVisitor = it.content }
 
             val found = parseNext(root, target)
+            if (playlist.isLast) log("innertubeShape", target, "arrays" to videoArrays(root), "listId" to (target.context?.playlistId != null))
             val result = applyGuard(found, playlist, target)
             if (found.previous == null && found.next == null) {
                 log("innertube", target, "status" to status, "bytes" to text.length, "keys" to root.keys.sorted().joinToString(","), "found" to false)
@@ -211,6 +212,33 @@ class InnerTubePlaylistRequestHandler(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         private val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")
+
+        /**
+         * Spike diagnostic (25 entry window): every JSON array that holds at least three objects carrying a videoId,
+         * as "path:count" with array indexes dropped. Only key names and counts, never ids or tokens.
+         */
+        fun videoArrays(root: JsonObject): String {
+            val counts = sortedMapOf<String, Int>()
+            fun hasVideoId(e: kotlinx.serialization.json.JsonElement): Boolean = when (e) {
+                is JsonObject -> e.containsKey("videoId") || e.values.any { hasVideoId(it) }
+                is JsonArray -> e.any { hasVideoId(it) }
+                else -> false
+            }
+            fun walk(e: kotlinx.serialization.json.JsonElement, path: String, depth: Int) {
+                if (depth > 24) return
+                when (e) {
+                    is JsonObject -> e.forEach { (k, v) -> walk(v, "$path/$k", depth + 1) }
+                    is JsonArray -> {
+                        val n = e.count { it is JsonObject && hasVideoId(it) }
+                        if (n >= 3) counts[path] = n
+                        e.forEach { walk(it, path, depth + 1) }
+                    }
+                    else -> {}
+                }
+            }
+            walk(root, "", 0)
+            return counts.entries.joinToString(",") { "${it.key}:${it.value}" }.take(1500)
+        }
 
         /**
          * Reads previous, next and the autoplay video from a /next response. The explicit next wins; at the last item

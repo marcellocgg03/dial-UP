@@ -364,4 +364,13 @@ class InnerTubePlaylistRequestHandlerTest {
         assertEquals("cccccccccc3", playlist.getState().next?.id)
         assertEquals("aaaaaaaaaa1", playlist.getState().previous?.id)
     }
+
+    @Test
+    fun `videoArrays reports paths and counts of video lists without any id`() {
+        val root = Json.parseToJsonElement(
+            """{"a":{"panel":[{"videoId":"x"},{"w":{"videoId":"y"}},{"videoId":"z"},{"title":"t"}]},"b":[{"videoId":"q"}],"ctt":"SECRET"}""",
+        ).jsonObject
+        val shape = InnerTubePlaylistRequestHandler.videoArrays(root)
+        assertEquals("/a/panel:3", shape)
+    }
 }
