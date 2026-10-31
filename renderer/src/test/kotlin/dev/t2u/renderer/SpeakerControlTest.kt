@@ -73,4 +73,53 @@ class SpeakerControlTest {
         assertTrue(h.speakerCount("Play") > playsBefore, "the speaker received a Play: ${h.fakeRenderer.calls.map { it.action }}")
         h.awaitUntil("the card shows Playing") { renderer.ui.value.status == PlayerStatus.PLAYING }
     }
+
+    @Test
+    @DisplayName("next and previous from the card move through the queue")
+    fun nextAndPreviousFromTheCard() = h.run<Unit> {
+        val bridge = h.newBridge()
+        val renderer = castUntilPlaying(bridge, A, listOf(A, B))
+        h.awaitUntil("the card knows there is a next track") { renderer.ui.value.hasNext }
+        val urisBefore = h.setAvTransportUris().size
+
+        assertTrue(renderer.perform(SpeakerAction.NEXT))
+
+        h.awaitUntil("the speaker gets the second video's URI") { h.setAvTransportUris().size > urisBefore }
+        h.awaitUntil("the card shows B") { renderer.ui.value.track?.videoId == B }
+        h.awaitUntil("the sender is told about B") { h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == B } }
+        h.awaitUntil("the card knows there is a previous track") { renderer.ui.value.hasPrevious }
+        val urisAfterNext = h.setAvTransportUris().size
+
+        assertTrue(renderer.perform(SpeakerAction.PREVIOUS))
+
+        h.awaitUntil("the speaker gets another URI") { h.setAvTransportUris().size > urisAfterNext }
+        h.awaitUntil("the card is back on A") { renderer.ui.value.track?.videoId == A }
+    }
+
+    @Test
+    @DisplayName("stop from the card stops the speaker")
+    fun stopFromTheCard() = h.run<Unit> {
+        val bridge = h.newBridge()
+        val renderer = castUntilPlaying(bridge, A)
+        val stopsBefore = h.speakerCount("Stop")
+
+        assertTrue(renderer.perform(SpeakerAction.STOP))
+
+        assertTrue(h.speakerCount("Stop") > stopsBefore, "the speaker received a Stop: ${h.fakeRenderer.calls.map { it.action }}")
+        h.awaitUntil("the card shows Stopped") { renderer.ui.value.status == PlayerStatus.STOPPED }
+    }
+
+    @Test
+    @DisplayName("clear from the card empties the speaker even with clear-when-cast-ends off")
+    fun clearFromTheCardIgnoresTheSetting() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig(clearOnCastEnd = false))
+        val renderer = castUntilPlaying(bridge, A)
+        val stopsBefore = h.speakerCount("Stop")
+
+        assertTrue(renderer.perform(SpeakerAction.CLEAR))
+
+        assertTrue(h.speakerCount("Stop") > stopsBefore, "the speaker received a Stop")
+        assertEquals(1, h.setAvTransportUris().count { it.isEmpty() }, "an empty SetAVTransportURI: ${h.setAvTransportUris()}")
+        assertEquals("", h.fakeRenderer.state.currentUri)
+    }
 }
