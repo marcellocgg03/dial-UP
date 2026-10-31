@@ -11,7 +11,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -43,11 +42,9 @@ class AppModel private constructor(context: Context) {
         cast.flatMapLatest { it?.castCount?.map { c -> c.casting } ?: flowOf(0) }
             .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    /** The header's state; plan 07-03 switches the source to the cast feature to add the Wi-Fi address. */
+    /** The header's state: bridge up or not, the Wi-Fi address it runs on and the access mode (plan 07-04 words "Waiting for Wi-Fi"). */
     val status: StateFlow<BridgeStatus> =
-        combine(serviceRunning, settings.dialAccess) { up, mode ->
-            if (up) BridgeStatus(true, null, mode) else BridgeStatus.OFF
-        }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
+        cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
     companion object {
         @Volatile private var instance: AppModel? = null

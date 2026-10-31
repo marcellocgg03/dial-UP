@@ -4,7 +4,6 @@ package dev.t2u.app.ui
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -17,7 +16,7 @@ import dev.t2u.app.AppModel
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MainScreen(model: AppModel) {
-    MaterialTheme {
+    DialUpTheme {
         Scaffold(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },

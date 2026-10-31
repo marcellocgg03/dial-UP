@@ -5,6 +5,7 @@ package dev.t2u.app
 // GPL-3.0-only.
 
 import android.os.SystemClock
+import dev.t2u.app.model.BridgeStatus
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CachingResolver
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -73,7 +75,13 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var countJob: Job? = null
     private var updaterJob: Job? = null
     @Volatile private var updater: YtDlpUpdater? = null
-    private var settings: Settings? = null
+    private val settingsState = MutableStateFlow<Settings?>(null)
+
+    private var settings: Settings?
+        get() = settingsState.value
+        set(value) {
+            settingsState.value = value
+        }
 
     /**
      * Carry-over (c) test switch: when false a Wi-Fi change no longer rebinds the bridge (`net-rebind mode=off`).
@@ -105,7 +113,23 @@ class CastFeature : SpikeFeature, CastCountSource {
     @Volatile private var configSummaryJson: JsonObject? = null
 
     /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log. */
-    @Volatile private var lastIp: String? = null
+    private val lastIpState = MutableStateFlow<String?>(null)
+
+    private var lastIp: String?
+        get() = lastIpState.value
+        set(value) {
+            lastIpState.value = value
+        }
+
+    /** The header's state (plan 07-03, D-05): whether a bridge exists, the Wi-Fi address it is bound to, and who may cast. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val status: Flow<BridgeStatus> = settingsState.flatMapLatest { s ->
+        if (s == null) {
+            flowOf(BridgeStatus.OFF)
+        } else {
+            combine(bridgeState, lastIpState, s.dialAccess) { b, ip, mode -> BridgeStatus(b != null, if (b != null) ip else null, mode) }
+        }
+    }
 
     private val warmed = AtomicBoolean(false)
     private val denied = AtomicInteger()
