@@ -32,11 +32,12 @@ fun startReasonOf(intentIsNull: Boolean, action: String?, reasonExtra: String?):
     }
 
 /**
- * Whether the bridge may run (D-04, D-12): only with the battery-optimisation exemption. The reason
- * never opens the gate; it is passed so the decision and its log line name the same reason.
+ * Whether the bridge may run: only with the battery-optimisation exemption (D-12) and only while the
+ * author's switch is on (D-04). The reason never opens the gate; it is passed so the decision and its
+ * log line name the same reason. A sticky restart after the switch went off is denied here (RESEARCH Pitfall 1).
  */
 @Suppress("UNUSED_PARAMETER")
-fun gateDecision(exempt: Boolean, reason: StartReason): Boolean = exempt
+fun gateDecision(exempt: Boolean, enabled: Boolean, reason: StartReason): Boolean = exempt && enabled
 
 /** The Android side of the gate. */
 object BatteryGate {

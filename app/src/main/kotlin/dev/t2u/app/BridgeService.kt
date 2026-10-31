@@ -174,6 +174,8 @@ class BridgeService : Service(), SpikeHost {
      */
     private fun bootstrap(reason: StartReason): Boolean {
         val exempt = BatteryGate.isOpen(this)
+        // D-04: the author's switch, persisted; a sticky restart after it went off is denied below (RESEARCH Pitfall 1)
+        val enabled = AppSettings.of(this).data.value.bridgeEnabled
         evidence.event(
             "service-start",
             mapOf(
@@ -182,11 +184,12 @@ class BridgeService : Service(), SpikeHost {
                 "version" to BuildConfigFacts.versionName(this),
                 "reason" to reason.wire,
                 "exempt" to exempt,
+                "enabled" to enabled,
             ),
         )
         logDirFact?.let { (logDir, where) -> evidence.event("logdir", mapOf("where" to where, "path" to logDir.absolutePath)) }
-        if (!gateDecision(exempt, reason)) {
-            evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire))
+        if (!gateDecision(exempt, enabled, reason)) {
+            evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled))
             stopSelf()
             return false
         }

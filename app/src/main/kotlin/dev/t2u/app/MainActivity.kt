@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
+import dev.t2u.app.model.shouldStartService
 import dev.t2u.app.ui.MainScreen
 import java.io.File
 
@@ -103,9 +104,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Opening the app never turns a switched-off bridge on (D-04): the start goes through [shouldStartService]. */
     private fun startServiceIfNeeded() {
-        if (ServiceHub.service == null) {
+        val enabled = AppSettings.of(this).data.value.bridgeEnabled
+        if (shouldStartService(enabled, BatteryGate.isOpen(this), ServiceHub.service != null)) {
             ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+        } else if (!enabled) {
+            Log.i(TAG, "open: the bridge is switched off in the app; not started")
         }
     }
 
