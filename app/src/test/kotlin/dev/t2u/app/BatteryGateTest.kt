@@ -48,6 +48,14 @@ class BatteryGateTest {
     }
 
     @Test
+    fun `a boot starts the bridge only when the switch is on and the exemption is held`() {
+        assertTrue(bootStartDecision(enabled = true, exempt = true))
+        assertFalse(bootStartDecision(enabled = false, exempt = true))
+        assertFalse(bootStartDecision(enabled = true, exempt = false))
+        assertFalse(bootStartDecision(enabled = false, exempt = false))
+    }
+
+    @Test
     fun `first launch without the exemption asks notifications then the exemption`() {
         assertEquals(
             listOf(LaunchStep.ASK_NOTIFICATIONS, LaunchStep.ASK_EXEMPTION),

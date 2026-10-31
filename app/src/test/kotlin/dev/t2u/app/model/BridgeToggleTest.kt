@@ -2,6 +2,7 @@
 // Original Kotlin code for Tube2U[PnP] for Android.
 package dev.t2u.app.model
 
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -63,5 +64,38 @@ class BridgeToggleTest {
         assertFalse(shouldStartService(enabled = true, exempt = false, running = false))
         assertFalse(shouldStartService(enabled = true, exempt = true, running = true))
         assertFalse(shouldStartService(enabled = false, exempt = false, running = false))
+    }
+
+    @Test
+    fun `a restart with nothing playing runs at once`() {
+        assertEquals(RestartStep.RESTART_NOW, restartStep(0))
+    }
+
+    @Test
+    fun `a restart while anything plays asks first`() {
+        assertEquals(RestartStep.CONFIRM_FIRST, restartStep(1))
+        assertEquals(RestartStep.CONFIRM_FIRST, restartStep(3))
+    }
+
+    @Test
+    fun `the restart switches off, waits for the stop, then switches on`() = runTest {
+        val calls = mutableListOf<String>()
+        val ok = restartSequence(
+            setEnabled = { calls += "set:$it" },
+            awaitStopped = { calls += "await"; true },
+        )
+        assertEquals(listOf("set:false", "await", "set:true"), calls)
+        assertTrue(ok)
+    }
+
+    @Test
+    fun `a timeout while waiting for the stop still switches on and reports false`() = runTest {
+        val calls = mutableListOf<String>()
+        val ok = restartSequence(
+            setEnabled = { calls += "set:$it" },
+            awaitStopped = { calls += "await"; false },
+        )
+        assertEquals(listOf("set:false", "await", "set:true"), calls)
+        assertFalse(ok)
     }
 }
