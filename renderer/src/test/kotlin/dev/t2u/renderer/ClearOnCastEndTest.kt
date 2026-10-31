@@ -32,6 +32,7 @@ class ClearOnCastEndTest {
         h.connectSender()
         h.rpc("cl", "setPlaylist", h.playlist(VID))
         h.awaitUntil("the speaker holding our stream") { h.fakeRenderer.state.currentUri.contains("/stream/") }
+        h.awaitUntil("the speaker told to play") { h.speakerCount("Play") >= 1 }
     }
 
     /** The sender leaves (an explicit disconnect), and the player resets: the speaker gets its Stop. */
@@ -82,5 +83,51 @@ class ClearOnCastEndTest {
         h.awaitUntil("the speaker emptied") { h.fakeRenderer.state.currentUri.isEmpty() }
 
         assertEquals(1, emptiedUris(), "exactly one empty SetAVTransportURI: ${h.setAvTransportUris()}")
+    }
+
+    // ------------------------------------------------------------------------------------------ bridge stop paths (D-03)
+
+    @Test
+    @DisplayName("Bridge.stop with stopSpeakers and no clear stops a playing speaker and leaves its URI")
+    fun stopSpeakersWithoutClear() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig(clearOnCastEnd = false))
+        castUntilLoaded(bridge)
+        val loaded = h.fakeRenderer.state.currentUri
+        val stopsBefore = h.speakerCount("Stop")
+
+        bridge.stop(clearSpeakers = false, stopSpeakers = true)
+
+        assertTrue(h.speakerCount("Stop") > stopsBefore, "the speaker received a Stop: ${h.fakeRenderer.calls.map { it.action }}")
+        assertEquals(0, emptiedUris(), "no empty SetAVTransportURI: ${h.setAvTransportUris()}")
+        assertEquals(loaded, h.fakeRenderer.state.currentUri)
+    }
+
+    @Test
+    @DisplayName("Bridge.stop with clearSpeakers empties the speaker as before")
+    fun stopWithClearEmptiesTheSpeaker() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig(clearOnCastEnd = true))
+        castUntilLoaded(bridge)
+        val stopsBefore = h.speakerCount("Stop")
+
+        bridge.stop(clearSpeakers = true, stopSpeakers = true)
+
+        assertTrue(h.speakerCount("Stop") > stopsBefore, "the speaker received a Stop")
+        assertEquals(1, emptiedUris(), "exactly one empty SetAVTransportURI: ${h.setAvTransportUris()}")
+        assertEquals("", h.fakeRenderer.state.currentUri)
+    }
+
+    @Test
+    @DisplayName("Bridge.stop without either flag sends nothing to the speaker")
+    fun stopWithoutFlagsSendsNothing() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig(clearOnCastEnd = true))
+        castUntilLoaded(bridge)
+        val loaded = h.fakeRenderer.state.currentUri
+        val stopsBefore = h.speakerCount("Stop")
+
+        bridge.stop() // the reload-config restart path
+
+        assertEquals(stopsBefore, h.speakerCount("Stop"), "no Stop: ${h.fakeRenderer.calls.map { it.action }}")
+        assertEquals(0, emptiedUris())
+        assertEquals(loaded, h.fakeRenderer.state.currentUri)
     }
 }
