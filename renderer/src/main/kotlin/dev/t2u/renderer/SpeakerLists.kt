@@ -6,6 +6,8 @@ package dev.t2u.renderer
 // ports.json, as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen", "address": "192.168.1.20"}}. The name and address are
 // kept only so the Hidden section can show something the author recognises while the speaker is not running.
 
+import dev.t2u.upnp.isPrivateLanAddress
+import dev.t2u.upnp.parseIpv4Literal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -144,6 +146,9 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
 
 private val prettyManualJson = Json { prettyPrint = true }
 
+/** T-07-31: the manual list never holds more than this many speakers (a damaged or runaway file cannot grow it). */
+const val MAX_MANUAL = 32
+
 /** GUI-04 (plan 07-13, D-06): a speaker the author added by typing its IPv4 address, kept so it is probed at every start. */
 data class ManualSpeaker(val ip: String, val udn: String, val name: String, val location: String)
 
@@ -177,10 +182,13 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
                 when {
                     ip == null || name == null || location == null || udn.isEmpty() || location.isEmpty() ->
                         warn("Ignoring entry '$udn' in $file: it needs a UDN and a string ip, name and location")
+                    !validAddress(ip) ->
+                        warn("Ignoring entry '$udn' in $file: '$ip' is not a private LAN IPv4 address")
+                    loaded.size >= MAX_MANUAL && udn !in loaded && loaded.values.none { it.ip == ip } ->
+                        warn("Ignoring entry '$udn' in $file: more than $MAX_MANUAL manual speakers")
                     else -> {
-                        val entry = ManualSpeaker(ip, udn, name, location)
-                        loaded.entries.removeIf { it.value.ip == ip }
-                        loaded[udn] = entry
+                        loaded.entries.removeIf { it.key == udn || it.value.ip == ip }
+                        loaded[udn] = ManualSpeaker(ip, udn, name, location)
                     }
                 }
             }
@@ -199,15 +207,36 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         return this
     }
 
-    /** Saves [entry], replacing an entry with the same UDN or the same address, and writes the file. */
+    /**
+     * Saves [entry], replacing an entry with the same UDN or the same address, and writes the file. False, with a warning, when
+     * the address is not a private LAN IPv4 literal or [MAX_MANUAL] other speakers are saved already.
+     */
     suspend fun add(entry: ManualSpeaker): Boolean {
-        synchronized(lock) {
-            items.entries.removeIf { it.key == entry.udn || it.value.ip == entry.ip }
-            items[entry.udn] = entry
-            publish()
+        val refusal = synchronized(lock) {
+            val replaced = items.values.count { it.udn == entry.udn || it.ip == entry.ip }
+            when {
+                !validAddress(entry.ip) -> "'${entry.ip}' is not a private LAN IPv4 address"
+                replaced == 0 && items.size >= MAX_MANUAL -> "$MAX_MANUAL speakers are saved already"
+                else -> {
+                    items.entries.removeIf { it.key == entry.udn || it.value.ip == entry.ip }
+                    items[entry.udn] = entry
+                    publish()
+                    null
+                }
+            }
+        }
+        if (refusal != null) {
+            warn("Not saving '${entry.udn}': $refusal")
+            return false
         }
         persist()
         return true
+    }
+
+    /** T-07-31: the address is re-checked here, so a damaged file or a careless caller cannot save an aim at a public address. */
+    private fun validAddress(ip: String): Boolean {
+        val parsed = parseIpv4Literal(ip) ?: return false
+        return isPrivateLanAddress(parsed)
     }
 
     /** Forgets [udn] and writes the file. False when it was not saved. */
