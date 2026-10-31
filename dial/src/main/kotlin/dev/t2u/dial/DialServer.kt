@@ -32,9 +32,15 @@ import io.ktor.server.routing.routing
 import io.ktor.util.AttributeKey
 import io.ktor.utils.io.readBuffer
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.readByteArray
+import java.net.BindException
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 data class DialConfig(
     val friendlyName: String,
@@ -88,10 +94,24 @@ class DialServer(
     /** Pid handed out in the run link and in the POST LOCATION header; fixed for this server's lifetime. */
     private val pid: String = config.pid ?: UUID.randomUUID().toString()
 
+    /**
+     * Binds and starts the engine. A port another listener still holds (the old bridge during a restart)
+     * throws [BindException] to the caller and leaves this instance startable again; Ktor's accept job
+     * must never throw it on a thread whose uncaught handler ends the process (CR-01 b).
+     */
     fun start() {
         check(server == null) { "already started" }
+        // Pre-bind check: Ktor CIO binds inside its accept job, where a failure is uncaught. reuseAddress
+        // keeps TIME_WAIT from failing it, as for the real bind below.
+        if (config.port != 0) requireBindable(config.bindHost, config.port)
+        // Safety net for the race between the check and the bind: the failure is recorded, not thrown on a thread.
+        val asyncFailure = AtomicReference<Throwable?>(null)
+        val handler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
         // reuseAddress: a restart (variant change, Wi-Fi rebind) must not hit EADDRINUSE from TIME_WAIT
-        val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
+        val s = embeddedServer(CIO, serverConfig {
+            parentCoroutineContext = SupervisorJob() + handler
+            module { configure(this) }
+        }) {
             reuseAddress = true
             connectors.add(
                 EngineConnectorBuilder().apply {
@@ -100,9 +120,27 @@ class DialServer(
                 },
             )
         }
-        s.start(wait = false)
-        boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+        try {
+            s.start(wait = false)
+            boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+        } catch (e: Throwable) {
+            runCatching { s.stop(0, 0) }
+            val cause = asyncFailure.get() ?: e
+            throw cause as? BindException
+                ?: BindException("DIAL server cannot bind ${config.bindHost}:${config.port}: ${cause.message}").also { it.initCause(cause) }
+        }
         server = s
+    }
+
+    private fun requireBindable(host: String, port: Int) {
+        ServerSocket().use { probe ->
+            probe.reuseAddress = true
+            try {
+                probe.bind(InetSocketAddress(host, port))
+            } catch (e: BindException) {
+                throw BindException("DIAL port $host:$port is busy: ${e.message}").also { it.initCause(e) }
+            }
+        }
     }
 
     fun stop() {
