@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.t2u.app"
+    namespace = "dev.dialup.app"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.t2u.spike"
+        applicationId = "dev.dialup"
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37 (CLAUDE.md)
         versionCode = 1

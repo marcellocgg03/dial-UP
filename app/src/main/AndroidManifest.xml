@@ -17,7 +17,7 @@
          useLegacyPackaging = true (Pitfall 10). -->
     <application
         android:allowBackup="false"
-        android:label="Tube2U (app)"
+        android:label="DialUP"
         android:usesCleartextTraffic="true">
 
         <activity
@@ -63,7 +63,7 @@
             android:exported="true"
             android:permission="android.permission.DUMP">
             <intent-filter>
-                <action android:name="dev.t2u.spike.CMD" />
+                <action android:name="dev.dialup.CMD" />
             </intent-filter>
         </receiver>
 
