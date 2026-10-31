@@ -21,11 +21,28 @@ import java.io.IOException
 const val CONFIG_FILE = "config.json"
 
 /**
- * Reads `<filesDir>/config.json` on top of `Config(dataDir = <filesDir>/cast)`. Whatever the file system looks like,
- * this returns a usable config: a missing file is the plain defaults, a bad one is the defaults plus a value-free
- * warning. It never throws, so a bad file cannot stop the bridge from starting.
+ * Puts the overrides the app saved in settings.json on top of [base] (config.json or the defaults). Pure. Only the
+ * non-null overrides change anything, so a hand-edited config.json value stays in force until the author changes that
+ * setting in the app.
+ */
+fun applySettings(base: Config, s: AppSettingsData): Config =
+    base.copy(
+        gapless = s.gapless ?: base.gapless,
+    )
+
+/**
+ * Reads `<filesDir>/config.json` on top of `Config(dataDir = <filesDir>/cast)`, then lays the app's settings.json on
+ * top of that ([applySettings]). Whatever the file system looks like, this returns a usable config: a missing file is
+ * the plain defaults, a bad one is the defaults plus a value-free warning. It never throws, so a bad file cannot stop
+ * the bridge from starting.
  */
 fun loadAppConfig(filesDir: File): ConfigFileResult {
+    val fromFile = loadConfigOnly(filesDir)
+    val settings = readSettingsFile(File(filesDir, SETTINGS_FILE))
+    return fromFile.copy(config = applySettings(fromFile.config, settings))
+}
+
+private fun loadConfigOnly(filesDir: File): ConfigFileResult {
     val base = Config(dataDir = File(filesDir, "cast"))
     val file = File(filesDir, CONFIG_FILE)
     return try {
