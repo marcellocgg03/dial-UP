@@ -169,6 +169,8 @@ internal class BridgeHarness(
         ffmpegLogLevel: String = "error",
         ytdlpVerbose: Boolean = false,
         startTimeoutMs: Long = 5000,
+        // The existing CAST-06 tests were written for clearing; the off default (GUI-08) is pinned by ClearOnCastEndTest.
+        clearOnCastEnd: Boolean = true,
     ): Config = Config(
         dataDir = dataDir,
         outputFormat = outputFormat,
@@ -183,6 +185,7 @@ internal class BridgeHarness(
         // Node's test setup() omits PREFETCH; the Config default (true) would prepare the next track behind these
         // tests. Plan 04-08 turns it on where it wants it with testConfig().copy(prefetch = true).
         prefetch = false,
+        clearOnCastEnd = clearOnCastEnd,
     )
 
     /**
@@ -208,6 +211,8 @@ internal class BridgeHarness(
         housekeepingIntervalMs: Long? = null,
         currentNetwork: (() -> BridgeNetwork?)? = null,
         responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
+        // null: leave BridgeDeps' own default (the config's flag) in place
+        clearOnCastEnd: (() -> Boolean)? = null,
     ): Bridge {
         val network = network(loopback)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -224,6 +229,7 @@ internal class BridgeHarness(
             // null: no supplier, the network is always present (the JVM default); null factory: the production responder
             currentNetwork = currentNetwork,
             responderFactory = responderFactory,
+            clearOnCastEnd = clearOnCastEnd,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

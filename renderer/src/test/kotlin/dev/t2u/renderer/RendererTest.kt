@@ -83,7 +83,7 @@ class RendererTest {
     private class Harness(
         val fake: FakeRenderer,
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        config: (File) -> Config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "") },
+        config: (File) -> Config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", clearOnCastEnd = true) },
         resolveDelayMs: Long = 0,
         locationOverride: String? = null,
         private val artist: String = "Band",
@@ -299,7 +299,7 @@ class RendererTest {
     @DisplayName("the default config keeps the coexistence suffix in the receiver name")
     fun defaultSuffixIsKept() = withFake { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200) }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, clearOnCastEnd = true) }).use { h ->
             h.renderer.init()
             assertEquals("🔊 Living Room Speaker (app)", h.receiverOptions?.name)
         }
@@ -470,7 +470,7 @@ class RendererTest {
     @DisplayName("the start clock restarts at Play after a deferred load")
     fun startClockRestartsAtPlayAfterADeferredLoad() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -494,7 +494,7 @@ class RendererTest {
     @DisplayName("a Play after a Pause restarts the start clock when the speaker was never seen playing")
     fun aPlayAfterAPauseRestartsTheStartClockWhenTheSpeakerWasNeverSeenPlaying() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "") }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -531,7 +531,7 @@ class RendererTest {
     @DisplayName("a Pause during start-up waits for PLAYING before it is sent")
     fun aPauseDuringStartupWaitsForPlayingBeforeItIsSent() = withFake { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -956,7 +956,7 @@ class RendererTest {
     private fun FakeRenderer.sentSince(mark: Int): List<String> = calls.drop(mark).map { it.action }.filter { it in transportCommands }
 
     private fun mp4Config(): (File) -> Config =
-        { Config(dataDir = it, outputFormat = "mp4", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }
+        { Config(dataDir = it, outputFormat = "mp4", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "", clearOnCastEnd = true) }
 
     @Test
     @DisplayName("a stop while the speaker is on another source sends no Stop, forgets our track and stops polling")

@@ -559,7 +559,7 @@ class ClearSpeakerTest {
         val now = java.util.concurrent.atomic.AtomicLong(1_000_000)
         private val dir = Files.createTempDirectory("clear-registry-").toFile().also { it.deleteOnExit() }
         val registry = RendererRegistry(
-            Config(dataDir = dir),
+            Config(dataDir = dir, clearOnCastEnd = true),
             PortRegistry(dir, 3000).load(),
             { udn, _, address, _, port -> StubSpeaker(udn, address, port, timeline, onClear(udn)).also { speakers.add(it) } },
             clock = { now.get() },

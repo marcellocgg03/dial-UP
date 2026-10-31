@@ -62,7 +62,7 @@ internal class HarnessReceiver : CastReceiver {
  */
 internal class RendererHarness(
     val fake: FakeRenderer,
-    config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", prefetch = false) },
+    config: (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", prefetch = false, clearOnCastEnd = true) },
     val dataDir: File = Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() },
     private val prepareDelayMs: Long = 0,
     @Volatile var prepareFailure: (VideoEntry) -> Throwable? = { null },

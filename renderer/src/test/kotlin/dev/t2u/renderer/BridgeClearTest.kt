@@ -106,7 +106,7 @@ class BridgeClearTest {
             BridgeDeps(
                 config = Config(
                     dataDir = dataDir, outputFormat = "adts", receiverBasePort = freePort(), mediaPort = 0,
-                    pollIntervalMs = 100, startTimeoutMs = 5000,
+                    pollIntervalMs = 100, startTimeoutMs = 5000, clearOnCastEnd = true,
                 ),
                 resolver = resolver,
                 launcher = null,
