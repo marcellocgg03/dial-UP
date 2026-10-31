@@ -6,7 +6,6 @@ import dev.t2u.app.AppSettingsData
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YtDlpUpdateOutcome
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -90,7 +89,7 @@ class SettingsPresenterTest {
     private fun TestScope.presenter(
         settings: FakeSettingsPort = FakeSettingsPort(),
         bridge: FakeBridgePort = FakeBridgePort(),
-    ): SettingsPresenter = SettingsPresenter(backgroundScope as CoroutineScope, settings, bridge).also { runCurrent() }
+    ): SettingsPresenter = SettingsPresenter(backgroundScope, settings, bridge).also { runCurrent() }
 
     @Test
     fun `phone-only switch writes the dial access mode`() = runTest {
