@@ -23,6 +23,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -34,8 +37,19 @@ import java.net.Inet4Address
 
 /** Process-level handle so the command receiver can reach the running service. */
 object ServiceHub {
-    @Volatile
-    var service: BridgeService? = null
+    private val serviceState = MutableStateFlow<BridgeService?>(null)
+
+    /** The running service as a flow, so the GUI follows it live. */
+    val serviceFlow: StateFlow<BridgeService?> = serviceState.asStateFlow()
+
+    var service: BridgeService?
+        get() = serviceState.value
+        set(value) {
+            serviceState.value = value
+        }
+
+    /** The cast feature once the service has started its features; null otherwise. */
+    val cast = MutableStateFlow<CastFeature?>(null)
 }
 
 /**
@@ -187,6 +201,7 @@ class BridgeService : Service(), SpikeHost {
 
     override fun onDestroy() {
         evidence.event("service-stop")
+        ServiceHub.cast.value = null
         stopFeatures()
         releaseLocks()
         scope.cancel()
@@ -211,6 +226,7 @@ class BridgeService : Service(), SpikeHost {
                 )
             }
         }
+        ServiceHub.cast.value = all.filterIsInstance<CastFeature>().firstOrNull()
     }
 
     private fun stopFeatures() {
