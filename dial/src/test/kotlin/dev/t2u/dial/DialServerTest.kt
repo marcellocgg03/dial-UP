@@ -15,6 +15,12 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.ktor.utils.io.ByteReadChannel
 import org.junit.jupiter.api.Test
+import java.net.BindException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -168,5 +174,49 @@ class DialServerTest {
         }
         assertEquals(listOf(404, 404), seen.map { it.status })
         assertNull(seen[0].body)
+    }
+
+    // ----- bind failures (CR-01 b) ------------------------------------------------------------
+
+    @Test
+    fun startOnABusyPortThrowsAndNothingIsUncaught() {
+        val uncaught = CopyOnWriteArrayList<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, e -> uncaught.add(e) }
+        val blocker = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        val port = blocker.localPort
+        val server = DialServer(DialConfig("busy", "u-busy", "127.0.0.1", port)) {}
+        try {
+            val failure = runCatching { server.start() }.exceptionOrNull()
+            assertTrue(failure is BindException, "start() must throw BindException, got $failure")
+            Thread.sleep(1000)
+            assertTrue(uncaught.isEmpty(), "nothing uncaught, got $uncaught")
+
+            blocker.close()
+            server.start()
+            assertEquals(port, server.resolvedPort())
+            val r = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/ytcr/ssdp/device-desc.xml")).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString(),
+            )
+            assertEquals(200, r.statusCode())
+            assertTrue(r.body().contains("<friendlyName>busy</friendlyName>"), r.body())
+        } finally {
+            server.stop()
+            blocker.close()
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
+        assertTrue(uncaught.isEmpty(), "nothing uncaught after the retry, got $uncaught")
+    }
+
+    @Test
+    fun port0StillBindsAnEphemeralPort() {
+        val server = DialServer(DialConfig("eph", "u-eph", "127.0.0.1", 0)) {}
+        server.start()
+        try {
+            assertTrue(server.resolvedPort() > 0)
+        } finally {
+            server.stop()
+        }
     }
 }
