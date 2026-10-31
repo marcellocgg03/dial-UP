@@ -30,13 +30,21 @@ class BatteryGateTest {
     }
 
     @Test
-    fun `the gate is open for every reason when the app is exempt`() {
-        for (reason in StartReason.entries) assertTrue(gateDecision(exempt = true, reason = reason), reason.name)
+    fun `the gate is open for every reason when the app is exempt and enabled`() {
+        for (reason in StartReason.entries) assertTrue(gateDecision(exempt = true, enabled = true, reason = reason), reason.name)
     }
 
     @Test
     fun `the gate is shut for every reason when the app is not exempt`() {
-        for (reason in StartReason.entries) assertFalse(gateDecision(exempt = false, reason = reason), reason.name)
+        for (reason in StartReason.entries) {
+            assertFalse(gateDecision(exempt = false, enabled = true, reason = reason), reason.name)
+            assertFalse(gateDecision(exempt = false, enabled = false, reason = reason), reason.name)
+        }
+    }
+
+    @Test
+    fun `the gate is shut for every reason when the switch is off even with the exemption`() {
+        for (reason in StartReason.entries) assertFalse(gateDecision(exempt = true, enabled = false, reason = reason), reason.name)
     }
 
     @Test
