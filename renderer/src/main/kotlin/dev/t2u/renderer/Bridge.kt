@@ -155,6 +155,11 @@ data class BridgeDeps(
      * probes every saved entry, so its card returns at every start. Null saves nothing and probes nothing.
      */
     val manual: ManualSpeakers? = null,
+    /**
+     * GUI-04, D-07: how often every saved manual speaker is asked again. A speaker that missed two rounds in a row is taken out of
+     * the registry (no longer a cast target) and comes back when it answers. Tests shorten it.
+     */
+    val manualProbeIntervalMs: Long = MANUAL_PROBE_INTERVAL_MS,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -392,22 +397,81 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val saved = deps.manual?.entries?.value.orEmpty()
         if (saved.isEmpty()) return
         handlerScope.launch {
-            for (entry in saved) {
-                val ip = parseIpv4Literal(entry.ip)
-                if (ip == null || !manualTargetAllowed(ip)) {
-                    emit("manual-probe", "ip" to entry.ip, "result" to "Refused")
-                    continue
+            for (entry in saved) sendManualProbe(client, entry)
+        }
+    }
+
+    /** One unicast search to a saved speaker, after the same two address checks as the first add (T-07-31). Never throws. */
+    private suspend fun sendManualProbe(client: Ssdp, entry: ManualSpeaker) {
+        val ip = parseIpv4Literal(entry.ip)
+        if (ip == null || !manualTargetAllowed(ip)) {
+            emit("manual-probe", "ip" to entry.ip, "result" to "Refused")
+            return
+        }
+        try {
+            withContext(Dispatchers.IO) { client.searchAt(InetSocketAddress(ip, deps.manualSsdpPort), RENDERER_ST, 1) }
+            emit("manual-probe", "ip" to entry.ip, "result" to "Sent")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("manual-probe", t)
+        }
+    }
+
+    /**
+     * GUI-04, D-07, RESEARCH Pitfall 5: once per [BridgeDeps.manualProbeIntervalMs] decides for every saved speaker whether it
+     * answered since the previous round (any search reply or NOTIFY from its address counts, see [noteReply]); a speaker that
+     * missed two rounds in a row is removed from the registry, so it stops being a cast target, and a later answer sets it up
+     * again through the registry's ordinary alive path. Then every saved speaker is asked again, which is also what keeps a
+     * speaker that only answers unicast from being pruned after 45 minutes. A round is skipped while the network is down
+     * (nothing could have answered). The client is read from the field, so a rebind's replacement is followed. [since] is when
+     * the start-up probe went out. At most [MAX_MANUAL] datagrams per round (T-07-33).
+     */
+    private fun watchManualSpeakers(reg: RendererRegistry, since: Long) {
+        val store = deps.manual ?: return
+        handlerScope.launch {
+            val liveness = HashMap<String, ManualLiveness>()
+            val offline = HashSet<String>()
+            var last = since
+            while (true) {
+                delay(deps.manualProbeIntervalMs)
+                if (networkDown) continue
+                val roundAt = System.currentTimeMillis()
+                val saved = store.entries.value
+                val udns = saved.map { it.udn }.toSet()
+                liveness.keys.retainAll(udns)
+                offline.retainAll(udns)
+                for (entry in saved) {
+                    val replied = (replySources[entry.ip]?.at ?: Long.MIN_VALUE) >= last
+                    when (liveness.getOrPut(entry.udn) { ManualLiveness() }.round(replied)) {
+                        ManualVerdict.ONLINE -> if (offline.remove(entry.udn)) {
+                            emit("manual-online", "udn" to entry.udn, "ip" to entry.ip)
+                        }
+                        ManualVerdict.MISSED -> {}
+                        ManualVerdict.OFFLINE -> {
+                            if (reg.isRunning(entry.udn)) reg.remove(entry.udn, "offline", "no answer to 2 probes at ${entry.ip}")
+                            if (offline.add(entry.udn)) emit("manual-offline", "udn" to entry.udn, "ip" to entry.ip)
+                        }
+                    }
                 }
-                try {
-                    withContext(Dispatchers.IO) { client.searchAt(InetSocketAddress(ip, deps.manualSsdpPort), RENDERER_ST, 1) }
-                    emit("manual-probe", "ip" to entry.ip, "result" to "Sent")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    failure("manual-probe", t)
-                }
+                last = roundAt
+                val client = ssdp ?: continue
+                for (entry in saved) sendManualProbe(client, entry)
             }
         }
+    }
+
+    /**
+     * GUI-04, D-07: forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
+     * of the registry (byebye, DIAL server closed). A speaker that multicast discovery also finds comes back at the next search as
+     * an ordinary discovered speaker without the manual mark; hiding it is what keeps it away. False when it was not saved.
+     */
+    suspend fun removeManual(udn: String): Boolean {
+        val store = deps.manual ?: return false
+        if (!store.remove(udn)) return false
+        if (started.get() && !stopped.get()) registry?.remove(udn, "manual-removed", null)
+        emit("manual-removed", "udn" to udn)
+        return true
     }
 
     private suspend fun probeManual(ip: InetAddress): ManualAddResult {
@@ -575,7 +639,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)
             client.start()
             ssdp = client
+            val probesSentAt = System.currentTimeMillis()
             probeSavedSpeakers(client)
+            watchManualSpeakers(reg, probesSentAt)
 
             handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
             handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
@@ -724,12 +790,40 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }.distinctUntilChanged()
 
-    /** The status UI's list: every renderer's [Renderer.ui] combined, rebuilt whenever a speaker joins or leaves the registry. */
+    /**
+     * The status UI's list: every renderer's [Renderer.ui] combined, rebuilt whenever a speaker joins or leaves the registry.
+     * With a manual store (GUI-04, D-07) a running speaker whose UDN is saved is marked manual, and a saved speaker that is not
+     * running (it does not answer) is listed after them as an offline card: idle, no track, controls off.
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private fun speakersFlow(reg: RendererRegistry): Flow<List<SpeakerUi>> = reg.renderersFlow.flatMapLatest { list ->
-        val renderers = list.filterIsInstance<Renderer>()
-        if (renderers.isEmpty()) flowOf(emptyList()) else combine(renderers.map { it.ui }) { it.toList() }
-    }.distinctUntilChanged()
+    private fun speakersFlow(reg: RendererRegistry): Flow<List<SpeakerUi>> {
+        val running = reg.renderersFlow.flatMapLatest { list ->
+            val renderers = list.filterIsInstance<Renderer>()
+            if (renderers.isEmpty()) flowOf(emptyList()) else combine(renderers.map { it.ui }) { it.toList() }
+        }
+        val saved = deps.manual?.entries ?: return running.distinctUntilChanged()
+        return combine(running, saved) { live, entries ->
+            val savedUdns = entries.mapTo(HashSet()) { it.udn }
+            val liveUdns = live.mapTo(HashSet()) { it.udn }
+            live.map { if (it.udn in savedUdns) it.copy(manual = true) else it } +
+                entries.filter { it.udn !in liveUdns }.map { offlineManualCard(it) }
+        }.distinctUntilChanged()
+    }
+
+    private fun offlineManualCard(entry: ManualSpeaker) = SpeakerUi(
+        udn = entry.udn,
+        name = entry.name,
+        address = entry.ip,
+        status = PlayerStatus.IDLE,
+        track = null,
+        error = null,
+        hasPrevious = false,
+        hasNext = false,
+        queueHasCurrent = false,
+        position = null,
+        online = false,
+        manual = true,
+    )
 
     // ------------------------------------------------------------------------------------------ commands
 

@@ -14,6 +14,9 @@ import java.net.InetAddress
 /** The UDP port a speaker listens on for SSDP searches. */
 const val MANUAL_SSDP_PORT = 1900
 
+/** GUI-04, D-07: how often the bridge asks every saved manual speaker again (RESEARCH Pitfall 5: prune alone takes 45 minutes). */
+const val MANUAL_PROBE_INTERVAL_MS = 60_000L
+
 /** How long an add waits for the speaker to answer the probe and its description to load. */
 const val MANUAL_ANSWER_TIMEOUT_MS = 5_000L
 
@@ -53,4 +56,25 @@ sealed interface ManualAddResult {
 
     /** The address was not a private LAN IPv4 address; nothing was sent. */
     data object Refused : ManualAddResult
+}
+
+/** What a probe round made of one saved manual speaker. */
+enum class ManualVerdict { ONLINE, MISSED, OFFLINE }
+
+/**
+ * GUI-04, D-07: the missed-probe counter of one saved manual speaker (one instance per saved UDN). A round in which the speaker
+ * replied is [ManualVerdict.ONLINE] and resets the count; [offlineAfter] rounds in a row without a reply make it
+ * [ManualVerdict.OFFLINE], and it stays OFFLINE until a reply. Pure: no clock and no network.
+ */
+class ManualLiveness(private val offlineAfter: Int = 2) {
+    private var missed = 0
+
+    fun round(replied: Boolean): ManualVerdict {
+        if (replied) {
+            missed = 0
+            return ManualVerdict.ONLINE
+        }
+        if (missed < offlineAfter) missed++
+        return if (missed >= offlineAfter) ManualVerdict.OFFLINE else ManualVerdict.MISSED
+    }
 }

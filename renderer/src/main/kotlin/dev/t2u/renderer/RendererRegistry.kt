@@ -387,6 +387,16 @@ class RendererRegistry(
     }
 
     /**
+     * GUI-04, D-07: takes the running speaker [udn] out of the registry for the bridge (an offline or removed manual speaker):
+     * it is destroyed (ssdp:byebye, DIAL server closed, the lounge session ended), its port freed, and [event] logged. Nothing
+     * is sent to the speaker. Does nothing when no such speaker runs.
+     */
+    suspend fun remove(udn: String, event: String, reason: String?) = removeRenderer(udn, event, reason)
+
+    /** Whether the speaker [udn] is in the registry now. */
+    fun isRunning(udn: String): Boolean = _renderersFlow.value.any { it.udn == udn }
+
+    /**
      * GUI-03: takes the running speaker [udn] out of the cast menus. The caller has already put it in the hidden set, so
      * every guard refuses it from now on. With [clear] the speaker is first emptied (bounded by `clearBudgetMs`), else with
      * [stop] a playing speaker is told to Stop (bounded the same way); then the renderer is destroyed (ssdp:byebye, DIAL

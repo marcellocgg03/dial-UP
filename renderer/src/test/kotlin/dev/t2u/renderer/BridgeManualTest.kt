@@ -235,7 +235,8 @@ class BridgeManualTest {
         h.awaitUntil("the speaker online again", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == true }
         assertTrue(bridge.speakers.value.single().manual)
         h.awaitUntil("a DIAL search reply again", timeoutMs = 2_000) { h.dialSearchAt(bridge, h.loopback) != null }
-        assertTrue(h.events.any { it.first == "manual-online" }, "manual-online is logged")
+        // the card is back as soon as the reply sets the speaker up; the probe round that counts the reply logs the transition
+        h.awaitUntil("manual-online logged", timeoutMs = 2_000) { h.events.any { it.first == "manual-online" } }
     }
 
     @Test

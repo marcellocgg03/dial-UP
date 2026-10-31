@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,9 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import kotlinx.coroutines.delay
+
+/** How faint a card is drawn while its speaker is offline (D-07). */
+private const val OFFLINE_ALPHA = 0.5f
 
 /**
  * One speaker as a Material 3 card (GUI-01): art, name, state word, and what it plays. The card has no loudness control of
@@ -69,7 +73,8 @@ fun SpeakerCard(
             nowMs = System.currentTimeMillis()
         }
     }
-    ElevatedCard(modifier.fillMaxWidth().testTag("speaker-card-$udn")) {
+    // D-07: a speaker that does not answer is drawn greyed; buttonsFor has already switched every control off
+    ElevatedCard(modifier.fillMaxWidth().alpha(if (speaker.online) 1f else OFFLINE_ALPHA).testTag("speaker-card-$udn")) {
         Row(
             Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
