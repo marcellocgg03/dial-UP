@@ -10,6 +10,7 @@
 #   tools/ui.sh type TEXT            type TEXT into the focused field (spaces escaped)
 #   tools/ui.sh tap-text TEXT        tap the centre of the first node whose text equals TEXT
 #                                    (fallback for a dialog whose tags do not surface)
+#   tools/ui.sh front                wake the phone and bring DialUP to the foreground
 #
 # UI_DUMP_FILE=path makes has/text/tap/count/tap-text read that XML file instead of dumping the
 # phone (used to test the parser off-device; tap then prints the coordinates and does not tap).
@@ -22,7 +23,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 REMOTE_DUMP="/sdcard/dialup-ui.xml"
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
 
 adb_() {
   if [ -n "${T2U_SERIAL:-}" ]; then
@@ -37,6 +38,12 @@ get_dump() {
   if [ -n "${UI_DUMP_FILE:-}" ]; then
     cat "$UI_DUMP_FILE"
     return
+  fi
+  # The phone dozes within seconds on wireless adb and a dump of a dozing screen has no app nodes,
+  # so wake it first (a no-op when it is already awake) and give the window a moment to draw.
+  if adb_ shell dumpsys power 2>/dev/null | grep -q 'mWakefulness=\(Dozing\|Asleep\)'; then
+    adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+    sleep 1
   fi
   adb_ shell uiautomator dump "$REMOTE_DUMP" >/dev/null 2>&1 || {
     echo "ui: uiautomator dump failed (device unreachable or screen off?)" >&2
@@ -61,6 +68,11 @@ if start < 0:
     sys.exit(1)
 root = ET.fromstring(raw[start:])
 nodes = list(root.iter("node"))
+# A dump of another app (or the lock screen) must not read as "no such node" or "zero cards".
+pkgs = {n.get("package", "") for n in nodes}
+if any(pkgs) and not any(p.startswith("dev.dialup") for p in pkgs):
+    sys.stderr.write("ui: DialUP is not in the foreground (saw %s); run tools/ui.sh front\n" % ", ".join(sorted(p for p in pkgs if p)))
+    sys.exit(3)
 
 def centre(n):
     m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", n.get("bounds", ""))
@@ -147,6 +159,11 @@ main() {
         # shellcheck disable=SC2086
         adb_ shell input tap $xy
       fi
+      ;;
+    front)
+      adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+      adb_ shell am start -n dev.dialup/dev.dialup.app.MainActivity >/dev/null
+      sleep 1
       ;;
     type)
       need_arg type "${2:-}"
