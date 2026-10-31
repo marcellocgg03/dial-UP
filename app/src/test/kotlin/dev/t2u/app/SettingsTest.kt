@@ -57,4 +57,18 @@ class SettingsTest {
         settings(f).setDialAccess(DialAccessMode.LAN)
         assertEquals("""{"dialAccess":"lan"}""", f.readText())
     }
+
+    @Test
+    fun updateKeepsUnknownKeysAndWritesAtomically() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"dialAccess":"lan","future":42}""") }
+        val s = settings(f)
+        s.update { it.copy(gapless = false) }
+        assertFalse(File(dir, "settings.json.tmp").exists(), "temp file was renamed away")
+        val text = f.readText()
+        assertTrue(text.contains(""""dialAccess":"lan""""), text)
+        assertTrue(text.contains(""""gapless":false"""), text)
+        assertTrue(text.contains(""""future":42"""), text)
+        assertEquals(false, s.data.value.gapless)
+        assertEquals(DialAccessMode.LAN, s.dialAccess.value)
+    }
 }
