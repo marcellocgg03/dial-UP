@@ -31,6 +31,7 @@ class BridgeManualTest {
         manualSsdpPort: Int? = null,
         hidden: HiddenSpeakers? = null,
         manual: ManualSpeakers? = null,
+        manualProbeIntervalMs: Long? = null,
     ): Bridge =
         h.newBridge(
             searchTarget = InetSocketAddress(h.loopback, h.freePort()),
@@ -38,6 +39,7 @@ class BridgeManualTest {
             manualAnswerTimeoutMs = manualAnswerTimeoutMs,
             hidden = hidden,
             manual = manual,
+            manualProbeIntervalMs = manualProbeIntervalMs,
         )
 
     @Test
@@ -189,5 +191,62 @@ class BridgeManualTest {
 
         assertTrue(store.entries.value.isEmpty())
         assertFalse(manualFile.exists(), "no file was written")
+    }
+    // ------------------------------------------------------------------------------------------ plan 07-14: offline, back, remove
+
+    /** A bridge with a saved manual speaker that is up, probing every 200 ms. */
+    private suspend fun upManualBridge(): Pair<Bridge, ManualSpeakers> {
+        val store = ManualSpeakers(h.dataDir).load()
+        val bridge = blindBridge(manual = store, manualProbeIntervalMs = 200)
+        bridge.start()
+        assertTrue(bridge.addManual(h.loopback) is ManualAddResult.Added)
+        h.awaitUntil("the speaker listed") { bridge.speakers.value.size == 1 }
+        return bridge to store
+    }
+
+    @Test
+    @DisplayName("a silent manual speaker goes offline and is no longer a cast target")
+    fun aSilentManualSpeakerGoesOfflineAndIsNoLongerACastTarget() = h.run<Unit> {
+        val (bridge, _) = upManualBridge()
+        assertTrue(bridge.speakers.value.single().manual)
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it answers")
+
+        h.speakerSilent = true
+
+        h.awaitUntil("the speaker offline", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == false }
+        val card = bridge.speakers.value.single()
+        assertTrue(card.manual)
+        assertEquals(dev.t2u.lounge.PlayerStatus.IDLE, card.status)
+        assertEquals(HARNESS_RENDERER_UDN, card.udn)
+        assertNull(h.dialSearchAt(bridge, h.loopback), "an offline speaker is not advertised")
+        assertEquals(0, bridge.castCount.value.total)
+        assertTrue(h.events.any { it.first == "manual-offline" }, "manual-offline is logged")
+    }
+
+    @Test
+    @DisplayName("an offline manual speaker comes back when it answers")
+    fun anOfflineManualSpeakerComesBackWhenItAnswers() = h.run<Unit> {
+        val (bridge, _) = upManualBridge()
+        h.speakerSilent = true
+        h.awaitUntil("the speaker offline", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == false }
+
+        h.speakerSilent = false
+
+        h.awaitUntil("the speaker online again", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        assertTrue(bridge.speakers.value.single().manual)
+        h.awaitUntil("a DIAL search reply again", timeoutMs = 2_000) { h.dialSearchAt(bridge, h.loopback) != null }
+        assertTrue(h.events.any { it.first == "manual-online" }, "manual-online is logged")
+    }
+
+    @Test
+    @DisplayName("an answering manual speaker is probed every interval")
+    fun anAnsweringManualSpeakerIsProbedEveryInterval() = h.run<Unit> {
+        val (bridge, _) = upManualBridge()
+        val before = h.searchesSeen.get()
+
+        delay(1_000)
+
+        assertTrue(h.searchesSeen.get() - before >= 3, "unicast searches seen: ${h.searchesSeen.get() - before}")
+        assertTrue(bridge.speakers.value.single().online, "it never went offline")
     }
 }

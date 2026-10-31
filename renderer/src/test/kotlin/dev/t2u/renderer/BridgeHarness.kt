@@ -96,6 +96,9 @@ internal class BridgeHarness(
     /** Answers every M-SEARCH with a MediaRenderer reply whose LOCATION is the fake speaker. */
     private val speakerSocket = DatagramSocket(InetSocketAddress(loopback, 0)).also { it.soTimeout = 200 }
 
+    /** While true the fake speaker counts an M-SEARCH but does not answer it: the speaker is unplugged (plan 07-14). */
+    @Volatile var speakerSilent = false
+
     /** The fake speaker's datagram port: what a manual add (plan 07-12) sends its unicast search to instead of 1900. */
     val speakerPort: Int get() = speakerSocket.localPort
 
@@ -113,6 +116,7 @@ internal class BridgeHarness(
             }
             if (!String(packet.data, 0, packet.length, Charsets.UTF_8).startsWith("M-SEARCH")) continue
             searchesSeen.incrementAndGet()
+            if (speakerSilent) continue
             val reply = (
                 "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
                     "USN: uuid:$HARNESS_RENDERER_UDN::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
@@ -229,6 +233,8 @@ internal class BridgeHarness(
         manualAnswerTimeoutMs: Long? = null,
         // null: no saved manual speakers (GUI-04, D-06), so nothing is probed at start and nothing is saved
         manual: ManualSpeakers? = null,
+        // null: leave BridgeDeps' own default (60 s) in place
+        manualProbeIntervalMs: Long? = null,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -251,6 +257,7 @@ internal class BridgeHarness(
             manualSsdpPort = manualSsdpPort ?: MANUAL_SSDP_PORT,
             manualAnswerTimeoutMs = manualAnswerTimeoutMs ?: MANUAL_ANSWER_TIMEOUT_MS,
             manual = manual,
+            manualProbeIntervalMs = manualProbeIntervalMs ?: MANUAL_PROBE_INTERVAL_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

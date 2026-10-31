@@ -164,4 +164,18 @@ class ManualSpeakersTest {
         assertTrue(w.lines.any { it.contains("Could not save") }, w.lines.toString())
         assertEquals(1, s.entries.value.size)
     }
+    @Test
+    @DisplayName("ManualLiveness: a reply keeps it online, two misses in a row mean offline, a reply brings it back")
+    fun livenessCountsMissedProbes() {
+        val live = ManualLiveness()
+        assertEquals(ManualVerdict.ONLINE, live.round(true))
+        assertEquals(ManualVerdict.MISSED, live.round(false))
+        assertEquals(ManualVerdict.OFFLINE, live.round(false))
+        assertEquals(ManualVerdict.OFFLINE, live.round(false))
+        assertEquals(ManualVerdict.ONLINE, live.round(true))
+        // a reply between two misses resets the count
+        assertEquals(ManualVerdict.MISSED, live.round(false))
+        assertEquals(ManualVerdict.ONLINE, live.round(true))
+        assertEquals(ManualVerdict.MISSED, live.round(false))
+    }
 }
