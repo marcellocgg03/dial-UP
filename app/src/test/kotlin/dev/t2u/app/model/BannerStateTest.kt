@@ -29,4 +29,15 @@ class BannerStateTest {
         assertEquals(listOf(Banner.BATTERY), bannerState(sdk = 32, notificationsGranted = false, exempt = false))
         assertEquals(emptyList(), bannerState(sdk = 32, notificationsGranted = false, exempt = true))
     }
+
+    @Test
+    fun `the first ask and an ask with a rationale request the permission`() {
+        assertEquals(GrantAction.REQUEST, notificationGrantAction(askedBefore = false, rationale = false))
+        assertEquals(GrantAction.REQUEST, notificationGrantAction(askedBefore = true, rationale = true))
+    }
+
+    @Test
+    fun `asked before without a rationale means denied for good so the settings page opens`() {
+        assertEquals(GrantAction.OPEN_SETTINGS, notificationGrantAction(askedBefore = true, rationale = false))
+    }
 }
