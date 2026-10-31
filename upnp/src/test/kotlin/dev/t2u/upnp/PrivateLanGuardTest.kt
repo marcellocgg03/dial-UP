@@ -21,11 +21,21 @@ import java.net.InetAddress
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** SVC-05: plain HTTP may only reach private LAN IP literals; redirects are never followed. */
 class PrivateLanGuardTest {
     private fun allowed(host: String) = isPrivateLanAddress(InetAddress.getByName(host))
+
+    @Test
+    fun `parseIpv4Literal reads plain dotted decimal only`() {
+        assertEquals(InetAddress.getByAddress(byteArrayOf(192.toByte(), 168.toByte(), 1, 40)), parseIpv4Literal("192.168.1.40"))
+        assertEquals("0.0.0.0", parseIpv4Literal("0.0.0.0")?.hostAddress)
+        for (bad in listOf("192.168.001.40", "0x7f.0.0.1", "1.2.3", "1.2.3.4.5", "256.1.1.1", "speaker.local", "", " 1.2.3.4", "1.2.3.-4", "::1")) {
+            assertNull(parseIpv4Literal(bad), "'$bad' must not parse")
+        }
+    }
 
     @Test
     fun `private ranges are allowed`() {
