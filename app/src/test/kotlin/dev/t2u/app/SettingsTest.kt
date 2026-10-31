@@ -71,4 +71,82 @@ class SettingsTest {
         assertEquals(false, s.data.value.gapless)
         assertEquals(DialAccessMode.LAN, s.dialAccess.value)
     }
+
+    @Test
+    fun missingFileGivesTheFreshInstallDefaults() {
+        val d = settings().data.value
+        assertEquals(AppSettingsData(), d)
+        assertTrue(d.bridgeEnabled)
+        assertEquals(DialAccessMode.PHONE, d.dialAccess)
+        assertFalse(d.clearOnCastEnd)
+        assertEquals(null, d.logEnabled)
+        assertEquals(null, d.gapless)
+        assertEquals(null, d.cacheMb)
+        assertEquals(null, d.outputFormat)
+        assertEquals(null, d.ytdlpChannel)
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun everySettingRoundTripsThroughAFreshInstance() {
+        val f = File(dir, SETTINGS_FILE)
+        val all = AppSettingsData(
+            bridgeEnabled = false,
+            dialAccess = DialAccessMode.LAN,
+            clearOnCastEnd = true,
+            logEnabled = false,
+            gapless = false,
+            cacheMb = 512,
+            outputFormat = "mp3",
+            ytdlpChannel = "nightly",
+        )
+        settings(f).update { all }
+        assertEquals(all, settings(f).data.value)
+        assertTrue(errors.isEmpty(), errors.toString())
+    }
+
+    @Test
+    fun aBadValueFallsBackAloneAndReportsOneError() {
+        val cases = listOf(
+            """{"cacheMb":-1,"gapless":false}""",
+            """{"cacheMb":40000,"gapless":false}""",
+            """{"outputFormat":"ogg","gapless":false}""",
+            """{"ytdlpChannel":"master","gapless":false}""",
+            """{"logEnabled":"yes","gapless":false}""",
+            """{"bridgeEnabled":"no","gapless":false}""",
+            """{"cacheMb":12.5,"gapless":false}""",
+        )
+        for (content in cases) {
+            errors.clear()
+            val f = File(dir, SETTINGS_FILE).apply { writeText(content) }
+            val d = settings(f).data.value
+            assertEquals(false, d.gapless, content)
+            assertEquals(null, d.cacheMb, content)
+            assertEquals(null, d.outputFormat, content)
+            assertEquals(null, d.ytdlpChannel, content)
+            assertEquals(null, d.logEnabled, content)
+            assertTrue(d.bridgeEnabled, content)
+            assertEquals(listOf("settings:read"), errors, content)
+        }
+    }
+
+    @Test
+    fun problemsNameKeysNeverValues() {
+        val p = parseSettings("""{"outputFormat":"SECRETVALUE","cacheMb":99999}""")
+        assertEquals(listOf("outputFormat", "cacheMb"), p.problems)
+        assertFalse("SECRETVALUE" in p.problems.toString())
+    }
+
+    @Test
+    fun theRangeEdgesOfCacheMbAreAccepted() {
+        assertEquals(0, parseSettings("""{"cacheMb":0}""").data.cacheMb)
+        assertEquals(32768, parseSettings("""{"cacheMb":32768}""").data.cacheMb)
+    }
+
+    @Test
+    fun settingsJsonNeverCarriesAPrefetchKey() {
+        val f = File(dir, SETTINGS_FILE)
+        settings(f).update { it.copy(logEnabled = true, gapless = true, cacheMb = 64, outputFormat = "auto", ytdlpChannel = "stable", clearOnCastEnd = true) }
+        assertFalse("prefetch" in f.readText(), f.readText())
+    }
 }
