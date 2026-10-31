@@ -4,10 +4,16 @@ package dev.t2u.app
 
 import android.content.Context
 import dev.t2u.app.model.BridgeStatus
+import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
+import dev.t2u.renderer.perform
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +52,26 @@ class AppModel private constructor(context: Context) {
     val status: StateFlow<BridgeStatus> =
         cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
+    /** Fire-and-forget [controlNow] for a card tap; it never throws into the UI. */
+    fun control(udn: String, action: SpeakerAction): Job = scope.launch { controlNow(udn, action) }
+
+    /**
+     * Runs a card [action] on the speaker [udn] of the running bridge and says whether the speaker did it. A command that
+     * takes over [CONTROL_TIMEOUT_MS], a missing speaker or bridge, and any failure all answer false: a card tap must never
+     * crash the app (plan 07-08). Cancellation still propagates. There is no volume action (T-02-36).
+     */
+    suspend fun controlNow(udn: String, action: SpeakerAction): Boolean =
+        try {
+            withTimeoutOrNull(CONTROL_TIMEOUT_MS) { cast.value?.currentBridge()?.renderer(udn)?.perform(action) } ?: false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+
     companion object {
+        private const val CONTROL_TIMEOUT_MS = 20_000L
+
         @Volatile private var instance: AppModel? = null
 
         fun of(context: Context): AppModel {

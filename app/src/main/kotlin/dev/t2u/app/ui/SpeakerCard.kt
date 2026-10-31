@@ -8,7 +8,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,6 +32,7 @@ import dev.t2u.app.model.progressText
 import dev.t2u.app.model.statusLabel
 import dev.t2u.app.model.trackLines
 import dev.t2u.lounge.PlayerStatus
+import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import kotlinx.coroutines.delay
 
@@ -36,7 +41,7 @@ import kotlinx.coroutines.delay
  * any kind (notes, T-02-36).
  */
 @Composable
-fun SpeakerCard(speaker: SpeakerUi, modifier: Modifier = Modifier) {
+fun SpeakerCard(speaker: SpeakerUi, modifier: Modifier = Modifier, onAction: (SpeakerAction) -> Unit = {}) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
     // One tick a second, only while this speaker plays and the card is composed (T-07-08). The clock is the renderer's epoch clock.
@@ -71,6 +76,18 @@ fun SpeakerCard(speaker: SpeakerUi, modifier: Modifier = Modifier) {
                     )
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+            }
+        }
+        if (speaker.online && (speaker.status == PlayerStatus.PLAYING || speaker.status == PlayerStatus.PAUSED)) {
+            val pause = speaker.status == PlayerStatus.PLAYING
+            IconButton(
+                onClick = { onAction(if (pause) SpeakerAction.PAUSE else SpeakerAction.PLAY) },
+                modifier = Modifier.testTag("btn-playpause-$udn"),
+            ) {
+                Icon(
+                    if (pause) PauseIcon else Icons.Filled.PlayArrow,
+                    contentDescription = if (pause) "Pause" else "Play",
+                )
             }
         }
         val position = speaker.position

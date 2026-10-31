@@ -35,7 +35,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(speakers, key = { it.udn }) { SpeakerCard(it) }
+            items(speakers, key = { it.udn }) { speaker -> SpeakerCard(speaker, onAction = { model.control(speaker.udn, it) }) }
         }
     }
 }
