@@ -8,9 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.t2u.spike"
-RECEIVER="$PKG/dev.t2u.app.CommandReceiver"
-ACTIVITY="$PKG/dev.t2u.app.MainActivity"
+PKG="dev.dialup"
+RECEIVER="$PKG/dev.dialup.app.CommandReceiver"
+ACTIVITY="$PKG/dev.dialup.app.MainActivity"
 EVIDENCE_REL="files/evidence"
 
 usage() {
@@ -81,7 +81,7 @@ cmd_send() {
   fi
   shift
   local remote
-  remote="am broadcast -n $(shq "$RECEIVER") -a dev.t2u.spike.CMD --es cmd $(shq "$name")"
+  remote="am broadcast -n $(shq "$RECEIVER") -a dev.dialup.CMD --es cmd $(shq "$name")"
   local kv
   for kv in "$@"; do
     case "$kv" in
@@ -154,7 +154,7 @@ cmd_wait() {
   while :; do
     # `adb exec-out` does not propagate the remote exit status (adb 37: `test -f` of a missing file
     # still exits 0), so the answer is read from the output of `adb shell`.
-    if [ "$(adb_ shell "run-as dev.t2u.spike test -f '$EVIDENCE_REL/$file' && echo present" 2>/dev/null | tr -d '\r')" = "present" ]; then
+    if [ "$(adb_ shell "run-as $PKG test -f '$EVIDENCE_REL/$file' && echo present" 2>/dev/null | tr -d '\r')" = "present" ]; then
       return 0
     fi
     if [ $((SECONDS - start)) -ge "$timeout" ]; then
@@ -173,11 +173,11 @@ cmd_pull() {
   fi
   mkdir -p "$dest"
   local names name
-  names="$(adb_ exec-out run-as dev.t2u.spike ls -1 "$EVIDENCE_REL" | tr -d '\r')"
+  names="$(adb_ exec-out run-as "$PKG" ls -1 "$EVIDENCE_REL" | tr -d '\r')"
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     safe_name "$name"
-    adb_ exec-out run-as dev.t2u.spike cat "$EVIDENCE_REL/$name" >"$dest/$name"
+    adb_ exec-out run-as "$PKG" cat "$EVIDENCE_REL/$name" >"$dest/$name"
   done <<<"$names"
   adb_ logcat -d -v threadtime -s 'T2U:*' >"$dest/logcat-T2U.txt"
   # the event log moved to the external files dir (plan 05-01); bring it too so earlier pull habits keep working

@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.t2u.spike"
+PKG="dev.dialup"
 REMOTE_FILE="files/config.json"
 REMOTE_TMP="files/config.json.tmp"
 MAX_BYTES=65536

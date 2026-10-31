@@ -1,6 +1,6 @@
 # Third-party notices
 
-This project is a derivative of Tube2U[PnP] / upnpTube (GPL-3.0-only, github.com/deaksa/tube2upnp).
+This project (DialUP) is a derivative of Tube2U[PnP] / upnpTube (GPL-3.0-only, github.com/deaksa/tube2upnp).
 
 | Component | Licence | Use |
 |-----------|---------|-----|

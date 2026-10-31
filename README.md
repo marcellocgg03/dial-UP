@@ -1,6 +1,8 @@
-# Tube2U[PnP] for Android
+# DialUP for Android
 
-A native Kotlin Android app that makes the phone the whole cast bridge. It finds UPnP/DLNA speakers
+DialUP is the Android port of Tube2U[PnP].
+
+A native Kotlin Android app (application ID `dev.dialup`) that makes the phone the whole cast bridge. It finds UPnP/DLNA speakers
 (Sonos Amp, Arc, SYMFONISK) on the Wi-Fi network, shows each one as a cast target in the YouTube and
 YouTube Music apps (DIAL), resolves audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves
 the stream to the speaker. No always-on server is needed.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Accelerated soak: samples dev.t2u.spike memory every minute and, every N minutes, fires a
+# Accelerated soak: samples dev.dialup memory every minute and, every N minutes, fires a
 # housekeeping broadcast (and optionally toggles Wi-Fi), for a cast that is already playing.
 # Wi-Fi toggling is OFF by default: the YouTube app can end the cast ~10-15 s after Wi-Fi is
 # lost even for a 5 s outage (seen 2026-10-29, Session H0), which defeats the soak. The loop runs ON the phone (nohup), so
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export ANDROID_SERIAL="${ANDROID_SERIAL:-$(cat .t2u/device)}"
-PKG=dev.t2u.spike
+PKG=dev.dialup
 DIR=/data/local/tmp/t2u-soak
 
 case "${1:-}" in
@@ -39,7 +39,7 @@ while [ \$(date +%s) -lt \$END ]; do
       echo "\$(date +%T) wifi off" >> \$DIR/events.txt; svc wifi disable; sleep $OFF
       svc wifi enable; echo "\$(date +%T) wifi on" >> \$DIR/events.txt
     fi
-    am broadcast -n \$PKG/dev.t2u.app.CommandReceiver -a dev.t2u.spike.CMD --es cmd housekeeping >/dev/null 2>&1
+    am broadcast -n \$PKG/dev.dialup.app.CommandReceiver -a dev.dialup.CMD --es cmd housekeeping >/dev/null 2>&1
     echo "\$(date +%T) housekeeping" >> \$DIR/events.txt
     NEXT=\$((\$(date +%s) + $EVERY*60))
   fi

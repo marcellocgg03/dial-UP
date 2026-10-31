@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.t2u.spike"
+PKG="dev.dialup"
 REMOTE="/sdcard/Android/data/$PKG/files/logs"
 
 DEST=${1:-}
