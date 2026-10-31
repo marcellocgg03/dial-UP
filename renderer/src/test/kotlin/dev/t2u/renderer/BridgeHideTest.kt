@@ -104,4 +104,51 @@ class BridgeHideTest {
         assertEquals(loaded, h.fakeRenderer.state.currentUri, "the speaker keeps its track")
         assertTrue(bridge.speakers.value.isEmpty())
     }
+    @Test
+    @DisplayName("restore brings the speaker back without waiting for the periodic search")
+    fun restoreBringsTheSpeakerBack() = h.run<Unit> {
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        val bridge = h.newBridge(hidden = hidden)
+        bridge.start()
+        awaitSpeakerUp(bridge)
+        assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
+        h.awaitUntil("the speaker gone") { bridge.speakers.value.isEmpty() }
+
+        assertTrue(bridge.unhide(HARNESS_RENDERER_UDN))
+        assertFalse(bridge.unhide(HARNESS_RENDERER_UDN), "a second restore finds nothing")
+
+        assertFalse(hidden.contains(HARNESS_RENDERER_UDN))
+        assertFalse(java.io.File(h.dataDir, "hidden.json").readText().contains(HARNESS_RENDERER_UDN))
+        h.awaitUntil("the speaker back", 5_000) { bridge.speakers.value.size == 1 }
+        h.awaitUntil("its DIAL target back", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
+    }
+
+    @Test
+    @DisplayName("the hidden set survives a bridge restart")
+    fun theHiddenSetSurvivesARestart() = h.run<Unit> {
+        val a = h.newBridge(hidden = HiddenSpeakers(h.dataDir).load())
+        a.start()
+        awaitSpeakerUp(a)
+        assertTrue(a.hide(HARNESS_RENDERER_UDN))
+        a.stop()
+
+        val reloaded = HiddenSpeakers(h.dataDir).load()
+        assertTrue(reloaded.contains(HARNESS_RENDERER_UDN))
+        val b = h.newBridge(h.testConfig(), hidden = reloaded)
+        b.start()
+        val searches = h.searchesSeen.get()
+        h.awaitUntil("the speaker saw bridge B search") { h.searchesSeen.get() > searches }
+        delay(800)
+        assertTrue(b.speakers.value.isEmpty(), "bridge B never lists the hidden speaker: ${b.speakers.value}")
+        assertEquals(0, b.castCount.value.total)
+    }
+
+    @Test
+    @DisplayName("unhiding without a store, or a speaker that was never hidden, does nothing")
+    fun unhideWithoutAStoreDoesNothing() = h.run<Unit> {
+        val withoutStore = h.newBridge()
+        withoutStore.start()
+        assertFalse(withoutStore.unhide(HARNESS_RENDERER_UDN))
+        assertFalse(withoutStore.hide(HARNESS_RENDERER_UDN))
+    }
 }
