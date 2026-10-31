@@ -507,7 +507,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             return ProbeOutcome(ManualAddResult.NotUsable("The bridge is not running"), "ssdp")
         }
         val host = ip.hostAddress.orEmpty()
-        val listedBefore = reg.renderers().firstOrNull { it.address == host }?.udn
+        val listedBefore = reg.renderers().firstOrNull { it.address == host }
+        if (listedBefore != null && deps.hidden?.contains(listedBefore.udn) != true) {
+            // review CR-02: a speaker that already has a card needs no probe; it also may not answer a unicast search at all
+            return ProbeOutcome(ManualAddResult.AlreadyListed(listedBefore.udn, listedBefore.name ?: listedBefore.udn), "listed")
+        }
         // an answer from before this probe must not count
         replySources.remove(host)
         try {
@@ -529,12 +533,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 val running = reg.renderers().firstOrNull { it.udn == reply.udn }
                 if (running != null) {
                     val name = running.name ?: running.udn
-                    val result = if (listedBefore == running.udn) {
-                        ManualAddResult.AlreadyListed(running.udn, name)
-                    } else {
-                        ManualAddResult.Added(running.udn, name)
-                    }
-                    return ProbeOutcome(result, via)
+                    return ProbeOutcome(ManualAddResult.Added(running.udn, name), via)
                 }
             }
             if (stopped.get()) return ProbeOutcome(ManualAddResult.NotUsable("The bridge stopped"), via)

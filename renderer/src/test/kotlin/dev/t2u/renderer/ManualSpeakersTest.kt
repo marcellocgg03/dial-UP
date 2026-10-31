@@ -178,4 +178,20 @@ class ManualSpeakersTest {
         assertEquals(ManualVerdict.ONLINE, live.round(true))
         assertEquals(ManualVerdict.MISSED, live.round(false))
     }
+
+    @Test
+    @DisplayName("descriptionUrlAllowed accepts only an http URL on the typed address")
+    fun descriptionUrlAllowedChecksTheHost() {
+        val ip = java.net.InetAddress.getByName("192.168.1.40")
+        assertTrue(descriptionUrlAllowed("http://192.168.1.40:1400/xml/device_description.xml", ip))
+        assertTrue(descriptionUrlAllowed("http://192.168.1.40/desc.xml", ip))
+        assertFalse(descriptionUrlAllowed("https://192.168.1.40:1400/xml/device_description.xml", ip))
+        assertFalse(descriptionUrlAllowed("http://192.168.1.41:1400/xml/device_description.xml", ip))
+        assertFalse(descriptionUrlAllowed("http://speaker.local:1400/xml/device_description.xml", ip))
+        assertFalse(descriptionUrlAllowed("http://user@192.168.1.40:1400/xml/device_description.xml", ip))
+        assertFalse(descriptionUrlAllowed("http://192.168.1.40:0/xml/device_description.xml", ip))
+        assertFalse(descriptionUrlAllowed("http://192.168.1.40:99999/x", ip))
+        assertFalse(descriptionUrlAllowed("not a url", ip))
+        assertEquals("http://192.168.1.40:1400/xml/device_description.xml", sonosDescriptionUrl("192.168.1.40"))
+    }
 }

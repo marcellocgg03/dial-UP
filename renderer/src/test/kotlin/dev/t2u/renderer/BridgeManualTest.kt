@@ -329,4 +329,59 @@ class BridgeManualTest {
 
         assertTrue(bridge.speakers.value.isEmpty())
     }
+
+    @Test
+    @DisplayName("an already listed speaker is reported at once even when deaf to unicast")
+    fun anAlreadyListedSpeakerIsReportedAtOnceEvenWhenDeafToUnicast() = h.run<Unit> {
+        val store = ManualSpeakers(h.dataDir).load()
+        val bridge = h.newBridge(manualSsdpPort = h.speakerPort, manual = store)
+        bridge.start()
+        h.awaitUntil("the speaker listed by discovery") { bridge.speakers.value.size == 1 }
+        h.speakerSearchDeaf = true
+        val seen = h.searchesSeen.get()
+
+        val started = System.nanoTime()
+        val result = bridge.addManual(h.loopback)
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+
+        assertTrue(result is ManualAddResult.AlreadyListed, "got $result")
+        assertTrue(tookMs < 500, "answered in $tookMs ms")
+        assertEquals(seen, h.searchesSeen.get(), "no unicast search went out")
+        assertEquals(HARNESS_RENDERER_UDN, store.entries.value.single().udn)
+    }
+
+    @Test
+    @DisplayName("a hidden speaker added through its description stays hidden")
+    fun aHiddenSpeakerAddedThroughItsDescriptionStaysHidden() = h.run<Unit> {
+        h.speakerSearchDeaf = true
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        assertTrue(hidden.add(HiddenSpeaker(HARNESS_RENDERER_UDN, "Living Room Speaker", "127.0.0.1")))
+        val bridge = blindBridge(hidden = hidden, manualDescriptionUrl = fakeDescription, manualSsdpGraceMs = 300)
+        bridge.start()
+
+        val result = bridge.addManual(h.loopback)
+
+        assertEquals(ManualAddResult.Hidden(HARNESS_RENDERER_UDN), result)
+        delay(300)
+        assertTrue(bridge.speakers.value.isEmpty(), "nothing is listed")
+        assertNull(h.dialSearchAt(bridge, h.loopback), "no receiver")
+    }
+
+    @Test
+    @DisplayName("a description that is not a renderer gives NotUsable")
+    fun aDescriptionThatIsNotARendererGivesNotUsable() = h.run<Unit> {
+        h.speakerSearchDeaf = true
+        // an scpd document is XML, names no device with AVTransport and carries no usable UDN
+        val bridge = blindBridge(
+            manualAnswerTimeoutMs = 1_500,
+            manualDescriptionUrl = { _ -> h.fakeRenderer.location.replace("/desc.xml", "/scpd/AVTransport.xml") },
+            manualSsdpGraceMs = 300,
+        )
+        bridge.start()
+
+        val result = bridge.addManual(h.loopback)
+
+        assertTrue(result is ManualAddResult.NotUsable, "got $result")
+        assertTrue(bridge.speakers.value.isEmpty())
+    }
 }
