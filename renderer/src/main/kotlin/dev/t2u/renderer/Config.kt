@@ -101,6 +101,9 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property prefetch prepares the next track while the current one plays (Node PREFETCH).
  * @property gapless hands the prepared next track to the speaker with SetNextAVTransportURI; ignored when [prefetch]
  *   is false, because there is no prepared track to hand over (Node GAPLESS, D-07).
+ * @property clearOnCastEnd GUI-08: when false (the default) a cast that ends, by the last sender leaving or by Stop,
+ *   leaves the speaker as it is; when true the speaker's queue is cleared. Set only from the app's own settings
+ *   (settings.json), never read from config.json; plan 07-07 reads it.
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
  *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
  */
@@ -131,6 +134,7 @@ data class Config(
     val prefetch: Boolean = true,
     val gapless: Boolean = true,
     val playRetryDelaysMs: List<Long> = listOf(2000L, 5000L),
+    val clearOnCastEnd: Boolean = false,
 ) {
     /** Throws [IllegalArgumentException] naming the offending setting. */
     fun validate() {

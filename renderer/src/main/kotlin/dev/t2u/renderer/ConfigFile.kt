@@ -18,8 +18,17 @@ import java.io.File
 /** A config.json larger than this is not read (a config is a few hundred bytes). */
 const val MAX_CONFIG_FILE_BYTES = 64 * 1024
 
-/** The outcome of reading config.json: the config to use, value-free warnings, and whether a file existed. */
-data class ConfigFileResult(val config: Config, val warnings: List<String>, val found: Boolean)
+/**
+ * The outcome of reading config.json: the config to use, value-free warnings, and whether a file existed.
+ * [guiKeys] names (never values) the settings the app's settings.json put on top of the file; the app fills it in, the
+ * file reader leaves it empty.
+ */
+data class ConfigFileResult(
+    val config: Config,
+    val warnings: List<String>,
+    val found: Boolean,
+    val guiKeys: List<String> = emptyList(),
+)
 
 /** Reads [file] (missing: defaults, no warning; over [MAX_CONFIG_FILE_BYTES] or unreadable: defaults, one warning). */
 fun loadConfigFile(file: File, base: Config): ConfigFileResult {

@@ -2,6 +2,8 @@ package dev.t2u.app
 
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
+import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.renderer.OUTPUT_FORMATS
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerializationException
@@ -10,6 +12,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import java.io.File
 import java.io.IOException
 
@@ -47,10 +50,31 @@ data class ParsedSettings(
     val problems: List<String>,
 )
 
-private const val KEY_DIAL_ACCESS = "dialAccess"
-private const val KEY_GAPLESS = "gapless"
+/** The cache size range Config.validate accepts, in MiB. */
+private val CACHE_MB_RANGE = 0..32768
 
-private val KNOWN_KEYS = setOf(KEY_DIAL_ACCESS, KEY_GAPLESS)
+private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
+private const val KEY_DIAL_ACCESS = "dialAccess"
+private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
+private const val KEY_LOG_ENABLED = "logEnabled"
+private const val KEY_GAPLESS = "gapless"
+private const val KEY_CACHE_MB = "cacheMb"
+private const val KEY_OUTPUT_FORMAT = "outputFormat"
+private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
+
+private val KNOWN_KEYS = setOf(
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_LOG_ENABLED,
+    KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
+)
+
+/** The nullable override keys of [data] that are set, in a stable order. Names only. */
+fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
+    if (data.logEnabled != null) add(KEY_LOG_ENABLED)
+    if (data.gapless != null) add(KEY_GAPLESS)
+    if (data.cacheMb != null) add(KEY_CACHE_MB)
+    if (data.outputFormat != null) add(KEY_OUTPUT_FORMAT)
+    if (data.ytdlpChannel != null) add(KEY_YTDLP_CHANNEL)
+}
 
 /**
  * Turns the text of settings.json into [AppSettingsData]. Pure: it never throws. Text that is not a JSON object gives
@@ -64,14 +88,36 @@ fun parseSettings(text: String): ParsedSettings {
     } ?: return ParsedSettings(AppSettingsData(), emptyMap(), listOf("settings.json"))
     val problems = mutableListOf<String>()
     var data = AppSettingsData()
+
+    fun bool(key: String): Boolean? {
+        val e = o[key] ?: return null
+        val b = (e as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+        if (b == null) problems += key
+        return b
+    }
+
+    fun text(key: String, allowed: Set<String>): String? {
+        val e = o[key] ?: return null
+        val t = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it in allowed }
+        if (t == null) problems += key
+        return t
+    }
+
+    bool(KEY_BRIDGE_ENABLED)?.let { data = data.copy(bridgeEnabled = it) }
     o[KEY_DIAL_ACCESS]?.let { e ->
         val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { DialAccessMode.fromWire(it) }
         if (mode != null) data = data.copy(dialAccess = mode) else problems += KEY_DIAL_ACCESS
     }
-    o[KEY_GAPLESS]?.let { e ->
-        val b = (e as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
-        if (b != null) data = data.copy(gapless = b) else problems += KEY_GAPLESS
+    bool(KEY_CLEAR_ON_CAST_END)?.let { data = data.copy(clearOnCastEnd = it) }
+    data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), gapless = bool(KEY_GAPLESS))
+    o[KEY_CACHE_MB]?.let { e ->
+        val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in CACHE_MB_RANGE }
+        if (n != null) data = data.copy(cacheMb = n) else problems += KEY_CACHE_MB
     }
+    data = data.copy(
+        outputFormat = text(KEY_OUTPUT_FORMAT, OUTPUT_FORMATS),
+        ytdlpChannel = text(KEY_YTDLP_CHANNEL, YTDLP_CHANNELS),
+    )
     return ParsedSettings(data, o.filterKeys { it !in KNOWN_KEYS }, problems)
 }
 
@@ -85,11 +131,18 @@ fun readSettingsFile(file: File): AppSettingsData =
         AppSettingsData()
     }
 
-/** The JSON written for [data]: known keys in a stable order, null overrides left out. */
+/** The JSON written for [data]: known keys in a stable order, null overrides and default switches left out. */
 private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>): JsonObject {
     val known = LinkedHashMap<String, JsonElement>()
+    // The two plain switches are written only when they differ from the fresh-install default, so the file stays small.
+    if (!data.bridgeEnabled) known[KEY_BRIDGE_ENABLED] = JsonPrimitive(false)
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
+    if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
+    data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     data.gapless?.let { known[KEY_GAPLESS] = JsonPrimitive(it) }
+    data.cacheMb?.let { known[KEY_CACHE_MB] = JsonPrimitive(it) }
+    data.outputFormat?.let { known[KEY_OUTPUT_FORMAT] = JsonPrimitive(it) }
+    data.ytdlpChannel?.let { known[KEY_YTDLP_CHANNEL] = JsonPrimitive(it) }
     return JsonObject(extras + known)
 }
 

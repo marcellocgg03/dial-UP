@@ -133,7 +133,7 @@ class SettingsTest {
     @Test
     fun problemsNameKeysNeverValues() {
         val p = parseSettings("""{"outputFormat":"SECRETVALUE","cacheMb":99999}""")
-        assertEquals(listOf("outputFormat", "cacheMb"), p.problems)
+        assertEquals(setOf("outputFormat", "cacheMb"), p.problems.toSet())
         assertFalse("SECRETVALUE" in p.problems.toString())
     }
 

@@ -27,7 +27,16 @@ const val CONFIG_FILE = "config.json"
  */
 fun applySettings(base: Config, s: AppSettingsData): Config =
     base.copy(
+        logLevel = when (s.logEnabled) {
+            null -> base.logLevel
+            false -> "off"
+            true -> if (base.logLevel == "off") "info" else base.logLevel
+        },
         gapless = s.gapless ?: base.gapless,
+        cacheMb = s.cacheMb ?: base.cacheMb,
+        outputFormat = s.outputFormat ?: base.outputFormat,
+        ytdlpChannel = s.ytdlpChannel ?: base.ytdlpChannel,
+        clearOnCastEnd = s.clearOnCastEnd,
     )
 
 /**
@@ -39,7 +48,10 @@ fun applySettings(base: Config, s: AppSettingsData): Config =
 fun loadAppConfig(filesDir: File): ConfigFileResult {
     val fromFile = loadConfigOnly(filesDir)
     val settings = readSettingsFile(File(filesDir, SETTINGS_FILE))
-    return fromFile.copy(config = applySettings(fromFile.config, settings))
+    return fromFile.copy(
+        config = applySettings(fromFile.config, settings),
+        guiKeys = settingsOverrideKeys(settings),
+    )
 }
 
 private fun loadConfigOnly(filesDir: File): ConfigFileResult {
@@ -77,6 +89,8 @@ fun configSummary(result: ConfigFileResult): JsonObject {
             "prefetch" to JsonPrimitive(c.prefetch),
             "gapless" to JsonPrimitive(c.gapless),
             "cacheMb" to JsonPrimitive(c.cacheMb),
+            "clearOnCastEnd" to JsonPrimitive(c.clearOnCastEnd),
+            "gui" to JsonArray(result.guiKeys.map { JsonPrimitive(it) }),
             "includeCount" to JsonPrimitive(c.nameFilter.include.size),
             "excludeCount" to JsonPrimitive(c.nameFilter.exclude.size),
             "found" to JsonPrimitive(result.found),
