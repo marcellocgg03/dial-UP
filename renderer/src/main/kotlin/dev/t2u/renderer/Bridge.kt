@@ -40,6 +40,7 @@ import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
+import dev.t2u.upnp.parseIpv4Literal
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -149,6 +150,11 @@ data class BridgeDeps(
     val manualSsdpPort: Int = MANUAL_SSDP_PORT,
     /** GUI-04: how long [Bridge.addManual] waits for the speaker's answer and its description. */
     val manualAnswerTimeoutMs: Long = MANUAL_ANSWER_TIMEOUT_MS,
+    /**
+     * GUI-04, D-06: the speakers added by address. A successful [Bridge.addManual] saves the speaker here and [Bridge.start]
+     * probes every saved entry, so its card returns at every start. Null saves nothing and probes nothing.
+     */
+    val manual: ManualSpeakers? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -360,8 +366,48 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     suspend fun addManual(ip: InetAddress): ManualAddResult {
         val result = probeManual(ip)
+        saveManual(ip, result)
         emit("manual-add", "ip" to ip.hostAddress, "result" to result.javaClass.simpleName)
         return result
+    }
+
+    /** D-06: a speaker that was added or was already listed is remembered; every other outcome leaves nothing behind. */
+    private suspend fun saveManual(ip: InetAddress, result: ManualAddResult) {
+        val store = deps.manual ?: return
+        val udn = when (result) {
+            is ManualAddResult.Added -> result.udn
+            is ManualAddResult.AlreadyListed -> result.udn
+            else -> return
+        }
+        val running = registry?.renderers()?.firstOrNull { it.udn == udn } ?: return
+        store.add(ManualSpeaker(ip.hostAddress.orEmpty(), udn, running.name ?: udn, running.location))
+    }
+
+    /**
+     * D-06: asks every saved speaker directly, as the first add did. Each address passes [parseIpv4Literal] and
+     * [manualTargetAllowed] again (T-07-31), so a damaged or edited file cannot aim the bridge at a public address. The replies
+     * reach the registry like any search reply; a speaker that does not answer simply has no card until it does.
+     */
+    private fun probeSavedSpeakers(client: Ssdp) {
+        val saved = deps.manual?.entries?.value.orEmpty()
+        if (saved.isEmpty()) return
+        handlerScope.launch {
+            for (entry in saved) {
+                val ip = parseIpv4Literal(entry.ip)
+                if (ip == null || !manualTargetAllowed(ip)) {
+                    emit("manual-probe", "ip" to entry.ip, "result" to "Refused")
+                    continue
+                }
+                try {
+                    withContext(Dispatchers.IO) { client.searchAt(InetSocketAddress(ip, deps.manualSsdpPort), RENDERER_ST, 1) }
+                    emit("manual-probe", "ip" to entry.ip, "result" to "Sent")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    failure("manual-probe", t)
+                }
+            }
+        }
     }
 
     private suspend fun probeManual(ip: InetAddress): ManualAddResult {
@@ -529,6 +575,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)
             client.start()
             ssdp = client
+            probeSavedSpeakers(client)
 
             handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
             handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }

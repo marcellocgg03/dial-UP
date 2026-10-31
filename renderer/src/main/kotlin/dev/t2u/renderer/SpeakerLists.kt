@@ -141,3 +141,119 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
     }
 }
+
+private val prettyManualJson = Json { prettyPrint = true }
+
+/** GUI-04 (plan 07-13, D-06): a speaker the author added by typing its IPv4 address, kept so it is probed at every start. */
+data class ManualSpeaker(val ip: String, val udn: String, val name: String, val location: String)
+
+/**
+ * The speakers added by address, in `<dataDir>/manual.json` as a JSON object keyed by UDN:
+ * {"uuid": {"ip": "192.168.1.40", "name": "Kitchen", "location": "http://192.168.1.40:1400/xml/device_description.xml"}}.
+ * The bridge probes every entry at start (through the same guards as the first add) so the card is back without adding it again.
+ * [warn] receives one line per problem and is never used for control flow; nothing here throws on a bad file.
+ */
+class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
+    private val file = File(dataDir, "manual.json")
+    private val lock = Any()
+    private val items = LinkedHashMap<String, ManualSpeaker>()
+    private val writeMutex = Mutex()
+
+    private val _entries = MutableStateFlow<List<ManualSpeaker>>(emptyList())
+
+    /** The saved speakers in the order they were added; follows every add and remove. */
+    val entries: StateFlow<List<ManualSpeaker>> = _entries.asStateFlow()
+
+    /** Reads manual.json. A missing file is empty; anything unreadable is ignored with a warning. */
+    fun load(): ManualSpeakers {
+        val loaded = LinkedHashMap<String, ManualSpeaker>()
+        try {
+            val data = Json.parseToJsonElement(file.readText())
+            if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
+            for ((udn, value) in data) {
+                val ip = manualStringField(value, "ip")
+                val name = manualStringField(value, "name")
+                val location = manualStringField(value, "location")
+                when {
+                    ip == null || name == null || location == null || udn.isEmpty() || location.isEmpty() ->
+                        warn("Ignoring entry '$udn' in $file: it needs a UDN and a string ip, name and location")
+                    else -> {
+                        val entry = ManualSpeaker(ip, udn, name, location)
+                        loaded.entries.removeIf { it.value.ip == ip }
+                        loaded[udn] = entry
+                    }
+                }
+            }
+        } catch (_: java.io.FileNotFoundException) {
+            // nothing saved yet
+        } catch (_: java.nio.file.NoSuchFileException) {
+        } catch (e: Exception) {
+            warn("Ignoring unreadable $file: ${e.message}")
+            loaded.clear()
+        }
+        synchronized(lock) {
+            items.clear()
+            items.putAll(loaded)
+            publish()
+        }
+        return this
+    }
+
+    /** Saves [entry], replacing an entry with the same UDN or the same address, and writes the file. */
+    suspend fun add(entry: ManualSpeaker): Boolean {
+        synchronized(lock) {
+            items.entries.removeIf { it.key == entry.udn || it.value.ip == entry.ip }
+            items[entry.udn] = entry
+            publish()
+        }
+        persist()
+        return true
+    }
+
+    /** Forgets [udn] and writes the file. False when it was not saved. */
+    suspend fun remove(udn: String): Boolean {
+        val removed = synchronized(lock) {
+            val had = items.remove(udn) != null
+            if (had) publish()
+            had
+        }
+        if (removed) persist()
+        return removed
+    }
+
+    private fun manualStringField(entry: kotlinx.serialization.json.JsonElement, key: String): String? {
+        val field = (entry as? JsonObject)?.get(key) as? JsonPrimitive ?: return null
+        return if (field.isString) field.content else null
+    }
+
+    /** Call with [lock] held. */
+    private fun publish() {
+        _entries.value = items.values.toList()
+    }
+
+    private suspend fun persist() {
+        // Several writes share one temp file, so run them one at a time; the snapshot is taken inside the mutex, so the last
+        // writer always writes every entry.
+        writeMutex.withLock {
+            val current = synchronized(lock) { items.values.toList() }
+            try {
+                withContext(Dispatchers.IO) {
+                    val json = JsonObject(
+                        current.associate { e ->
+                            e.udn to JsonObject(
+                                mapOf(
+                                    "ip" to JsonPrimitive(e.ip),
+                                    "name" to JsonPrimitive(e.name),
+                                    "location" to JsonPrimitive(e.location),
+                                ),
+                            )
+                        },
+                    )
+                    writeAtomically(file, prettyManualJson.encodeToString(JsonObject.serializer(), json))
+                }
+            } catch (e: IOException) {
+                warn("Could not save $file: ${e.message}")
+            }
+        }
+    }
+}

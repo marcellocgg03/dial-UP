@@ -348,6 +348,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 cacheMb = { appSettings.data.value.cacheMb ?: loaded.config.cacheMb },
                 // GUI-03 / D-08: the hidden speakers, kept across bridges and readable while the bridge is off
                 hidden = SpeakerStores.of(h.context).hidden,
+                // GUI-04 / D-06: the speakers added by address, saved on a successful add and probed at every start
+                manual = SpeakerStores.of(h.context).manual,
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,

@@ -4,6 +4,7 @@ package dev.t2u.app
 
 import android.content.Context
 import dev.t2u.renderer.HiddenSpeakers
+import dev.t2u.renderer.ManualSpeakers
 import java.io.File
 
 /**
@@ -12,7 +13,7 @@ import java.io.File
  * the Config dataDir.
  */
 object SpeakerStores {
-    class Instance(val hidden: HiddenSpeakers)
+    class Instance(val hidden: HiddenSpeakers, val manual: ManualSpeakers)
 
     @Volatile private var instance: Instance? = null
 
@@ -24,7 +25,11 @@ object SpeakerStores {
             val hidden = HiddenSpeakers(dir) { line ->
                 ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "hidden", "message" to line))
             }.load()
-            return Instance(hidden).also { instance = it }
+            // GUI-04 / D-06: the speakers added by address, probed at every bridge start
+            val manual = ManualSpeakers(dir) { line ->
+                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "manual", "message" to line))
+            }.load()
+            return Instance(hidden, manual).also { instance = it }
         }
     }
 }
