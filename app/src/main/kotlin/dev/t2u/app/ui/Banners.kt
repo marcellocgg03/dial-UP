@@ -38,7 +38,12 @@ fun Banners(banners: List<Banner>, onGrantNotifications: () -> Unit, onGrantBatt
                     text = "Allow unrestricted battery use; the bridge does not start without it",
                     onGrant = onGrantBattery,
                 )
-                Banner.NOTIFICATIONS -> Unit
+                Banner.NOTIFICATIONS -> BannerCard(
+                    tag = "banner-notifications",
+                    buttonTag = "grant-notifications",
+                    text = "Allow notifications so the bridge's status and its Stop button are visible",
+                    onGrant = onGrantNotifications,
+                )
             }
         }
     }

@@ -14,7 +14,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import dev.t2u.app.model.GrantAction
 import dev.t2u.app.model.PermissionState
+import dev.t2u.app.model.notificationGrantAction
 import dev.t2u.app.model.shouldStartService
 import dev.t2u.app.ui.MainScreen
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,14 @@ class MainActivity : ComponentActivity() {
         refreshPermissions()
     }
 
+    /** Whether the permission dialog was shown at least once in this Activity; it decides REQUEST against OPEN_SETTINGS. */
+    private var askedNotifications = false
+
+    private val notificationsLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Log.i(TAG, "POST_NOTIFICATIONS answered granted=$granted")
+        refreshPermissions()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -44,7 +54,7 @@ class MainActivity : ComponentActivity() {
             MainScreen(
                 model = AppModel.of(applicationContext),
                 permissions = permissionState.asStateFlow(),
-                onGrantNotifications = {},
+                onGrantNotifications = ::grantNotifications,
                 onGrantBattery = ::grantBattery,
             )
         }
@@ -63,6 +73,31 @@ class MainActivity : ComponentActivity() {
     private fun notificationsGranted(): Boolean =
         Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * The notifications banner's Grant: the system dialog, or after a denial for good the app's notification
+     * settings page, because a request then returns at once without asking (RESEARCH Pitfall 6).
+     */
+    private fun grantNotifications() {
+        val action = notificationGrantAction(
+            askedBefore = askedNotifications,
+            rationale = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS),
+        )
+        Log.i(TAG, "notifications grant: $action")
+        when (action) {
+            GrantAction.REQUEST -> {
+                askedNotifications = true
+                notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            GrantAction.OPEN_SETTINGS -> try {
+                startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+                )
+            } catch (e: ActivityNotFoundException) {
+                Log.w(TAG, "no activity for the notification settings intent", e)
+            }
+        }
+    }
 
     /** The battery-optimisation exemption through the system dialog, started from the banner's Grant button. */
     @android.annotation.SuppressLint("BatteryLife")

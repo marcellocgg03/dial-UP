@@ -17,3 +17,15 @@ fun bannerState(sdk: Int, notificationsGranted: Boolean, exempt: Boolean): List<
     if (sdk >= 33 && !notificationsGranted) add(Banner.NOTIFICATIONS)
     if (!exempt) add(Banner.BATTERY)
 }
+
+/** What the notifications banner's Grant button does. */
+enum class GrantAction { REQUEST, OPEN_SETTINGS }
+
+/**
+ * After two denials Android stops showing the permission dialog and the request returns at once (RESEARCH
+ * Pitfall 6). A request that was made before and now has no rationale to show is that case, so Grant opens the
+ * app's notification settings instead. The first ask, and an ask where the system still offers a rationale,
+ * request the permission.
+ */
+fun notificationGrantAction(askedBefore: Boolean, rationale: Boolean): GrantAction =
+    if (askedBefore && !rationale) GrantAction.OPEN_SETTINGS else GrantAction.REQUEST
