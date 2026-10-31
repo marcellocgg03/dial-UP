@@ -120,4 +120,154 @@ class SettingsPresenterTest {
         assertTrue(p.state.value.clearOnCastEnd)
         assertNull(p.state.value.message)
     }
+
+    @Test
+    fun `the cache steps are the stepped choice`() {
+        assertEquals(listOf(0, 64, 128, 256, 512, 1024, 2048, 4096), CACHE_STEPS)
+    }
+
+    @Test
+    fun `cache size 256 selects the step with no warning`() = runTest {
+        val p = presenter()
+        val ui = p.state.value
+        assertEquals(256, ui.cacheMb)
+        assertFalse(ui.cacheCustom)
+        assertNull(ui.cacheWarning)
+    }
+
+    @Test
+    fun `cache size 0 selects 0 and warns`() = runTest {
+        val p = presenter(FakeSettingsPort(base().copy(cacheMb = 0)))
+        assertEquals(0, p.state.value.cacheMb)
+        assertFalse(p.state.value.cacheCustom)
+        val w = p.state.value.cacheWarning
+        assertTrue(w != null && "only the file just built is kept" in w, w)
+    }
+
+    @Test
+    fun `a config json cache size outside the steps shows as custom`() = runTest {
+        val p = presenter(FakeSettingsPort(base().copy(cacheMb = 300)))
+        assertEquals(300, p.state.value.cacheMb)
+        assertTrue(p.state.value.cacheCustom)
+        assertNull(p.state.value.cacheWarning)
+    }
+
+    @Test
+    fun `choosing a cache size stores it, clears the warning and asks for no restart`() = runTest {
+        val settings = FakeSettingsPort(base().copy(cacheMb = 0))
+        val p = presenter(settings)
+        assertTrue(p.state.value.cacheWarning != null)
+
+        assertFalse(p.setCacheMb(512))
+        runCurrent()
+        assertEquals(512, settings.data.value.cacheMb)
+        assertEquals(512, p.state.value.cacheMb)
+        assertNull(p.state.value.cacheWarning)
+        assertFalse(p.restart.visible.value)
+    }
+
+    @Test
+    fun `a cache size outside the steps is ignored`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertFalse(p.setCacheMb(300))
+        assertNull(settings.data.value.cacheMb)
+        assertEquals(0, settings.updates)
+    }
+
+    @Test
+    fun `gapless and forced format store the value and need a restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+
+        assertTrue(p.setGapless(false))
+        runCurrent()
+        assertEquals(false, settings.data.value.gapless)
+        assertFalse(p.state.value.gapless)
+        assertTrue(p.restart.visible.value)
+
+        assertTrue(p.setOutputFormat("mp3"))
+        runCurrent()
+        assertEquals("mp3", settings.data.value.outputFormat)
+        assertEquals("mp3", p.state.value.outputFormat)
+    }
+
+    @Test
+    fun `the log switch stores the value and needs no restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertFalse(p.setLogEnabled(false))
+        runCurrent()
+        assertEquals(false, settings.data.value.logEnabled)
+        assertFalse(p.state.value.logEnabled)
+        assertFalse(p.restart.visible.value)
+    }
+
+    @Test
+    fun `a format outside the list is ignored`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertFalse(p.setOutputFormat("wav"))
+        assertNull(settings.data.value.outputFormat)
+        assertEquals(0, settings.updates)
+        assertFalse(p.restart.visible.value)
+    }
+
+    @Test
+    fun `a change that needs a restart shows no card while the bridge is off`() = runTest {
+        val p = presenter(bridge = FakeBridgePort(running = false))
+        assertTrue(p.setGapless(false))
+        runCurrent()
+        assertFalse(p.restart.visible.value)
+        assertFalse(p.state.value.gapless)
+    }
+
+    @Test
+    fun `clear cache with the bridge running reports the count and refreshes the usage`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        assertEquals(2, p.state.value.cacheUsage?.files)
+
+        p.clearCache()
+        runCurrent()
+        assertEquals("Cleared 3 files", p.state.value.message)
+        assertEquals(0, p.state.value.cacheUsage?.files)
+        assertEquals(1, bridge.clearCalls)
+    }
+
+    @Test
+    fun `clear cache says one file in the singular`() = runTest {
+        val bridge = FakeBridgePort().also { it.cleared = 1 }
+        val p = presenter(bridge = bridge)
+        p.clearCache()
+        runCurrent()
+        assertEquals("Cleared 1 file", p.state.value.message)
+    }
+
+    @Test
+    fun `clear cache with the bridge off is disabled and does not call the bridge`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(bridge = bridge)
+        assertFalse(p.state.value.bridgeRunning)
+        assertNull(p.state.value.cacheUsage)
+
+        p.clearCache()
+        runCurrent()
+        assertEquals(0, bridge.clearCalls)
+        assertNull(p.state.value.message)
+    }
+
+    @Test
+    fun `the usage appears when the bridge comes up`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(bridge = bridge)
+        bridge.setRunning(true)
+        runCurrent()
+        assertTrue(p.state.value.bridgeRunning)
+        assertEquals(2, p.state.value.cacheUsage?.files)
+    }
+
+    private fun base() = EffectiveSettings(
+        logEnabled = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
+    )
 }
