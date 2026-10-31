@@ -228,6 +228,11 @@ data class RendererDeps(
     val playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
     /** The wait between two reads of the slow-clear watch (plan 03-23); a test replaces it to step the watch by hand. */
     val pause: suspend (Long) -> Unit = { delay(it) },
+    /**
+     * GUI-08: whether a cast that ends (the last sender leaving) empties the speaker. Read at clear time, so a switch of
+     * the setting applies to a running bridge (D-09). The default reads the fixed [config] flag.
+     */
+    val clearOnCastEnd: () -> Boolean = { config.clearOnCastEnd },
 )
 
 /** What the speaker is playing, for the status UI and the notification. */
@@ -1366,8 +1371,17 @@ class Renderer(
         return stopped
     }
 
-    /** CAST-06: the last sender is gone, so leave the speaker with nothing loaded (see [clearSpeaker]). */
+    /**
+     * CAST-06 / GUI-08: the last sender is gone. With the "clear the speaker when a cast ends" setting on, leave the speaker
+     * with nothing loaded (see [clearSpeaker]); with it off (the default) the player has already stopped and stopped polling,
+     * and the speaker keeps the track. Standard cast end only: a card's Clear button calls [clearSpeaker] directly and is not
+     * gated by the setting.
+     */
     override suspend fun doClear() {
+        if (!deps.clearOnCastEnd()) {
+            note("info", "cast ended: the speaker keeps its track, clear-when-cast-ends is off")
+            return
+        }
         clearSpeaker()
     }
 

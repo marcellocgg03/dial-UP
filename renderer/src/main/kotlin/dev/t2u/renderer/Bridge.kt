@@ -128,6 +128,11 @@ data class BridgeDeps(
     val currentNetwork: (() -> BridgeNetwork?)? = null,
     /** Tests only: builds the SSDP responder for a network. Null builds the production responder. */
     val responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
+    /**
+     * GUI-08: whether a cast that ends empties the speaker, read at clear time so the setting applies live (D-09). Null
+     * means the fixed [Config.clearOnCastEnd] decides; the app passes a supplier over its settings.
+     */
+    val clearOnCastEnd: (() -> Boolean)? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -348,6 +353,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                         receivers,
                         deps.scope,
                         deps.events,
+                        clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
                         // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
                         playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
                     ),

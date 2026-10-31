@@ -328,6 +328,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 launcher = FfmpegRunner(payloads, h.context.cacheDir, h.evidence),
                 http = lanHttpClient(),
                 accessMode = { appSettings.dialAccess.value },
+                // GUI-08 / D-09: read at clear time, so switching the setting applies to the running bridge
+                clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,
