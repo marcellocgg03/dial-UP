@@ -8,6 +8,9 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,7 +32,11 @@ class YtDlpUpdaterTest {
             return current
         }
 
+        /** Plan 07-09: runs at the start of every update, so a test can hold the gateway busy. */
+        @Volatile var onUpdate: (() -> Unit)? = null
+
         override fun update(channel: String): String {
+            onUpdate?.invoke()
             updateThreads += Thread.currentThread().name
             updates += channel
             failure(updates.size)?.let { throw it }
@@ -302,5 +309,95 @@ class YtDlpUpdaterTest {
         assertEquals(List(10) { 60_000L }, steps.subList(1, 11))
         assertEquals(1, g.updates.size)
         assertEquals(1, events.count { it["status"] == "POSTPONED" })
+    }
+
+    // ----- plan 07-09: Update now from the app (GUI-07) -------------------------------------------------
+
+    @Test
+    fun aManualUpdateRunsOnceAndReportsVersions() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val u = YtDlpUpdater(g, { "nightly" }, { events += it }, dispatcher = dispatcher)
+        val outcome = runBlocking { u.updateNow() }
+        assertEquals(listOf("nightly"), g.updates.toList())
+        assertEquals(true, outcome.ok)
+        assertEquals("manual", outcome.trigger)
+        assertEquals("nightly", outcome.channel)
+        assertEquals("2026.01.01", outcome.before)
+        assertEquals("2026.02.02", outcome.after)
+        assertEquals(listOf("manual"), events.map { it["trigger"] })
+    }
+
+    @Test
+    fun aManualUpdateDuringAScheduledOneIsRefusedAsBusy() {
+        val g = FakeGateway()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        g.onUpdate = {
+            entered.countDown()
+            release.await(10, TimeUnit.SECONDS)
+        }
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val pauses = Pauses(stopAfter = 2)
+        val u = updater(g, pauses, events)
+        val loop = thread(name = "scheduled-run") { runLoop(u) }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "the scheduled update reached the gateway")
+            val outcome = runBlocking { u.updateNow() }
+            assertEquals(false, outcome.ok)
+            assertEquals("BUSY", outcome.status)
+            assertEquals("manual", outcome.trigger)
+            assertEquals(1, g.updates.size)
+            assertTrue(events.any { it["status"] == "BUSY" }, "the refusal is in the event log: $events")
+        } finally {
+            release.countDown()
+            loop.join(10_000)
+        }
+        assertEquals(1, g.updates.size)
+    }
+
+    @Test
+    fun aManualUpdateDuringALookupIsRefusedAsBusy() {
+        val g = FakeGateway()
+        val u = YtDlpUpdater(g, { "stable" }, {}, dispatcher = dispatcher, busy = { true })
+        val outcome = runBlocking { u.updateNow() }
+        assertEquals("BUSY", outcome.status)
+        assertEquals(false, outcome.ok)
+        assertTrue(g.updates.isEmpty())
+    }
+
+    @Test
+    fun aSuccessfulManualUpdateMovesTheNextScheduledRunAFullIntervalAway() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val clock = Clock(stopAfter = 5)
+        var manual: YtDlpUpdateOutcome? = null
+        val u = YtDlpUpdater(
+            g, { "stable" }, { events += it },
+            pause = { ms ->
+                // inside the first pause (the 30 s start delay) the author taps Update now
+                if (clock.waits.isEmpty()) manual = runBlocking { updaterRef.updateNow() }
+                clock.pause(ms)
+            },
+            dispatcher = dispatcher,
+            elapsedMs = { clock.now },
+            maxPauseMs = 900_000L,
+        ).also { updaterRef = it }
+        runLoop(u)
+        assertEquals(true, manual?.ok)
+        // the start-delay deadline passed during the pause, but the manual update moved it a day away: no scheduled run
+        assertEquals(1, g.updates.size)
+        assertEquals(listOf("manual"), events.map { it["trigger"] })
+    }
+
+    private lateinit var updaterRef: YtDlpUpdater
+
+    @Test
+    fun versionReturnsTheGatewaysVersionAndNullWhenItThrows() {
+        val g = FakeGateway()
+        val u = YtDlpUpdater(g, { "stable" }, {}, dispatcher = dispatcher)
+        assertEquals("2026.01.01", runBlocking { u.version() })
+        g.versionFailure = IllegalStateException("no python yet")
+        assertNull(runBlocking { u.version() })
     }
 }
