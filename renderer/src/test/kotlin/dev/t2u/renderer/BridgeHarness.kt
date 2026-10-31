@@ -227,6 +227,8 @@ internal class BridgeHarness(
         manualSsdpPort: Int? = null,
         // null: leave BridgeDeps' own default (5 s) in place
         manualAnswerTimeoutMs: Long? = null,
+        // null: no saved manual speakers (GUI-04, D-06), so nothing is probed at start and nothing is saved
+        manual: ManualSpeakers? = null,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -248,6 +250,7 @@ internal class BridgeHarness(
             hidden = hidden,
             manualSsdpPort = manualSsdpPort ?: MANUAL_SSDP_PORT,
             manualAnswerTimeoutMs = manualAnswerTimeoutMs ?: MANUAL_ANSWER_TIMEOUT_MS,
+            manual = manual,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

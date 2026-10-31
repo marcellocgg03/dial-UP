@@ -26,12 +26,18 @@ class BridgeManualTest {
     fun tearDown() = h.close()
 
     /** A bridge whose multicast discovery goes to a port nobody listens on, so only a manual add can find the speaker. */
-    private fun blindBridge(manualAnswerTimeoutMs: Long? = null, manualSsdpPort: Int? = null, hidden: HiddenSpeakers? = null): Bridge =
+    private fun blindBridge(
+        manualAnswerTimeoutMs: Long? = null,
+        manualSsdpPort: Int? = null,
+        hidden: HiddenSpeakers? = null,
+        manual: ManualSpeakers? = null,
+    ): Bridge =
         h.newBridge(
             searchTarget = InetSocketAddress(h.loopback, h.freePort()),
             manualSsdpPort = manualSsdpPort ?: h.speakerPort,
             manualAnswerTimeoutMs = manualAnswerTimeoutMs,
             hidden = hidden,
+            manual = manual,
         )
 
     @Test
@@ -147,5 +153,41 @@ class BridgeManualTest {
         val listed = result as? ManualAddResult.AlreadyListed ?: throw AssertionError("expected AlreadyListed, got $result")
         assertEquals(HARNESS_RENDERER_UDN, listed.udn)
         assertEquals(1, bridge.speakers.value.size)
+    }
+
+    @Test
+    @DisplayName("an added speaker is saved and probed at the next start")
+    fun anAddedSpeakerIsSavedAndProbedAtTheNextStart() = h.run<Unit> {
+        val first = blindBridge(manual = ManualSpeakers(h.dataDir).load())
+        first.start()
+        assertTrue(first.addManual(h.loopback) is ManualAddResult.Added)
+
+        val saved = ManualSpeakers(h.dataDir).load().entries.value.single()
+        assertEquals("127.0.0.1", saved.ip)
+        assertEquals(HARNESS_RENDERER_UDN, saved.udn)
+        assertEquals(first.speakers.value.single().name, saved.name)
+        assertTrue(saved.location.startsWith("http://127.0.0.1:"), "location ${saved.location}")
+        first.stop()
+
+        // a second bridge on the same data directory, with a freshly loaded store and blind discovery, lists it without an add
+        val second = blindBridge(manual = ManualSpeakers(h.dataDir).load())
+        second.start()
+        h.awaitUntil("the saved speaker listed again") { second.speakers.value.size == 1 }
+        assertEquals(HARNESS_RENDERER_UDN, second.speakers.value.single().udn)
+    }
+
+    @Test
+    @DisplayName("a failed add saves nothing")
+    fun aFailedAddSavesNothing() = h.run<Unit> {
+        val manualFile = java.io.File(h.dataDir, "manual.json")
+        val store = ManualSpeakers(h.dataDir).load()
+        val silent = blindBridge(manualAnswerTimeoutMs = 400, manualSsdpPort = h.freePort(), manual = store)
+        silent.start()
+
+        assertEquals(ManualAddResult.NoAnswer, silent.addManual(h.loopback))
+        assertEquals(ManualAddResult.Refused, silent.addManual(InetAddress.getByAddress(byteArrayOf(8, 8, 8, 8))))
+
+        assertTrue(store.entries.value.isEmpty())
+        assertFalse(manualFile.exists(), "no file was written")
     }
 }
