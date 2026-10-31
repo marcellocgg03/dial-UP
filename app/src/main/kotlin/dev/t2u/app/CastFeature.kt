@@ -65,11 +65,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * ([Bridge.networkLost]); after a 2 s debounce [rebindAction] decides, and a new address waits up to 20 s for a validated
  * Wi-Fi network and then moves the running bridge in place ([Bridge.rebindNetwork]), so receivers, lounge sessions and
  * the playing track survive. Only `reload-config` still restarts it. A start that throws, or finds no Wi-Fi, is logged
- * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists, also with the rebind switch off.
+ * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on (GUI-10).
  */
 class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
-    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "net-rebind", "housekeeping")
+    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "housekeeping")
 
     private val lifecycle = Mutex()
     private var host: SpikeHost? = null
@@ -86,13 +86,6 @@ class CastFeature : SpikeFeature, CastCountSource {
         set(value) {
             settingsState.value = value
         }
-
-    /**
-     * Carry-over (c) test switch: when false a Wi-Fi change no longer rebinds the bridge (`net-rebind mode=off`).
-     * In memory only, so every service start begins with it on; a switch left off across a restart would silently
-     * stop the bridge from following the Wi-Fi. `reload-config` ignores it.
-     */
-    @Volatile private var rebindEnabled = true
 
     /** The current bridge, as a flow so the status UI follows a rebuilt bridge (Wi-Fi start, reload-config) without reopening (plan 07-03). */
     private val bridgeState = MutableStateFlow<Bridge?>(null)
@@ -247,7 +240,6 @@ class CastFeature : SpikeFeature, CastCountSource {
             scheduleRebind("config")
             CommandReply(true, """{"ok":true,"note":"restarting the bridge; playback is interrupted"}""")
         }
-        "net-rebind" -> netRebindCommand(args["mode"])
         "housekeeping" -> {
             // trigger adb is never deduped; the reply does not wait for the run
             host?.scope?.launch { housekeeping("adb") }
@@ -272,27 +264,11 @@ class CastFeature : SpikeFeature, CastCountSource {
         updater?.runIfDue()
     }
 
-    private fun netRebindCommand(mode: String?): CommandReply {
-        when (mode) {
-            null -> Unit
-            "on", "off" -> {
-                val on = mode == "on"
-                if (on != rebindEnabled) {
-                    rebindEnabled = on
-                    host?.evidence?.event("net", mapOf("rebindSwitch" to mode, "source" to "adb"))
-                }
-            }
-            else -> return CommandReply(false, """{"error":"mode must be on or off"}""")
-        }
-        return CommandReply(true, """{"ok":true,"netRebind":"${if (rebindEnabled) "on" else "off"}"}""")
-    }
-
     override fun state(): JsonObject {
         val base = bridge?.state() ?: JsonObject(mapOf("running" to JsonPrimitive(false)))
         val extra = mapOf(
             "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
             "denied" to JsonPrimitive(denied.get()),
-            "netRebind" to JsonPrimitive(if (rebindEnabled) "on" else "off"),
         )
         val config = configSummaryJson
         return JsonObject(if (config == null) base + extra else base + extra + ("config" to config))
@@ -427,23 +403,17 @@ class CastFeature : SpikeFeature, CastCountSource {
     // ----- rebind on Wi-Fi change ----------------------------------------------------------------
 
     /**
-     * Called by [NetworkMonitor] on every Wi-Fi address change. With the switch on the renderers freeze at once, before
-     * the speaker's broken stream can be mirrored to the phone; the move itself waits for the debounce.
+     * Called by [NetworkMonitor] on every Wi-Fi address change. The renderers freeze at once, before the speaker's broken
+     * stream can be mirrored to the phone; the move itself waits for the debounce.
      */
     private fun onNetworkChange(reason: String) {
         val h = host ?: return
-        if (rebindEnabled) {
-            h.scope.launch { bridge?.networkLost() }
-        }
+        h.scope.launch { bridge?.networkLost() }
         scheduleRebind(reason)
     }
 
     private fun scheduleRebind(reason: String) {
         val h = host ?: return
-        if (!rebindEnabled && reason != "config") {
-            h.evidence.event("net", mapOf("rebind" to false, "reason" to reason, "skipped" to "disabled"))
-            return
-        }
         retryJob?.cancel()
         rebindJob?.cancel()
         rebindJob = h.scope.launch {
@@ -455,10 +425,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     /** Call with [lifecycle] held, after the debounce. A burst of events reaches here once, with the last reason. */
     private suspend fun applyRebind(h: SpikeHost, reason: String) {
         val oldIp = lastIp
-        when (rebindAction(reason, rebindEnabled, bridge != null, h.wifiIpv4()?.hostAddress)) {
-            RebindAction.SKIP_DISABLED ->
-                h.evidence.event("net", mapOf("rebind" to false, "reason" to reason, "skipped" to "disabled"))
-
+        when (rebindAction(reason, bridge != null, h.wifiIpv4()?.hostAddress)) {
             RebindAction.MARK_LOST_ONLY ->
                 // no Wi-Fi address now: the bridge stays, frozen, and the next address change moves it
                 h.evidence.event("net", mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp))

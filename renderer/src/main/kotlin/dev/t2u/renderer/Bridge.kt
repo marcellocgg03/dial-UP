@@ -566,9 +566,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * silence it reopens the listen sockets (a socket-level repair, never a bridge rebind) and probes once more.
      * Returns true when the run happened; false when the bridge is not running or the run failed (also logged).
      *
-     * It skips (touching nothing) while the network is marked down (rebind switch on) and while the system reports no Wi-Fi
-     * ([BridgeDeps.currentNetwork]; this works with the rebind switch off, where [networkLost] is never called): probing
-     * and reopening sockets during an outage the bridge was not told about is what broke Session E step 5.
+     * It skips (touching nothing) while the network is marked down ([networkLost]) and while the system reports no Wi-Fi
+     * ([BridgeDeps.currentNetwork]; this still matters when [networkLost] has not been called yet): probing and reopening
+     * sockets during an outage the bridge was not told about is what broke Session E step 5.
      */
     suspend fun housekeeping(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false

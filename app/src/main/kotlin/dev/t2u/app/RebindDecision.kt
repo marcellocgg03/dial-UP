@@ -1,12 +1,9 @@
 package dev.t2u.app
 
 // Plan 05-10: what CastFeature does once the 2 s network debounce ends. One pure function so the decision table is
-// tested on the JVM. GPL-3.0-only.
+// tested on the JVM. GPL-3.0-only. The Wi-Fi rebind is always on (GUI-10, plan 07-09): the old off switch is gone.
 
 enum class RebindAction {
-    /** The net-rebind switch is off: nothing is frozen, moved or restarted (the no-rebind experiment stays pure). */
-    SKIP_DISABLED,
-
     /** No Wi-Fi address right now: keep the bridge as it is (renderers are frozen) and wait for the next address change. */
     MARK_LOST_ONLY,
 
@@ -28,11 +25,10 @@ enum class RebindAction {
  * or a [NetworkMonitor] event name (`lost`, `available`, `linkPropertiesChanged`)
  * @param wifiIp the Wi-Fi IPv4 address when the debounce ended, null when there is none
  */
-fun rebindAction(reason: String, rebindEnabled: Boolean, hasBridge: Boolean, wifiIp: String?): RebindAction {
+fun rebindAction(reason: String, hasBridge: Boolean, wifiIp: String?): RebindAction {
     if (reason == "config") return if (hasBridge) RebindAction.RESTART else RebindAction.START
-    // the one start path that does not follow a Wi-Fi change, so the switch (which governs following changes) is ignored
+    // the one start path that does not follow a Wi-Fi change
     if (reason == "retry") return if (!hasBridge && wifiIp != null) RebindAction.START else RebindAction.NOTHING
-    if (!rebindEnabled) return RebindAction.SKIP_DISABLED
     if (wifiIp == null) return RebindAction.MARK_LOST_ONLY
     return if (hasBridge) RebindAction.REBIND_IN_PLACE else RebindAction.START
 }
