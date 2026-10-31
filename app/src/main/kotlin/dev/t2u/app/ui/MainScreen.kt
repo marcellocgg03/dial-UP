@@ -51,27 +51,31 @@ fun MainScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = remember(scope) { SettingsModel(context, scope).presenter() }
+    val settingsUi by settings.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
     DialUpTheme {
         Scaffold(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },
             bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = tab == TAB_SPEAKERS,
-                        onClick = { tab = TAB_SPEAKERS },
-                        icon = { Icon(Icons.Filled.Home, contentDescription = null) },
-                        label = { Text("Speakers") },
-                        modifier = Modifier.testTag("tab-speakers"),
-                    )
-                    NavigationBarItem(
-                        selected = tab == TAB_SETTINGS,
-                        onClick = { tab = TAB_SETTINGS },
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                        label = { Text("Settings") },
-                        modifier = Modifier.testTag("tab-settings"),
-                    )
+                Column {
+                    RestartCard(model, settings.restart, settingsUi.clearOnCastEnd)
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = tab == TAB_SPEAKERS,
+                            onClick = { tab = TAB_SPEAKERS },
+                            icon = { Icon(Icons.Filled.Home, contentDescription = null) },
+                            label = { Text("Speakers") },
+                            modifier = Modifier.testTag("tab-speakers"),
+                        )
+                        NavigationBarItem(
+                            selected = tab == TAB_SETTINGS,
+                            onClick = { tab = TAB_SETTINGS },
+                            icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                            label = { Text("Settings") },
+                            modifier = Modifier.testTag("tab-settings"),
+                        )
+                    }
                 }
             },
         ) { padding ->
