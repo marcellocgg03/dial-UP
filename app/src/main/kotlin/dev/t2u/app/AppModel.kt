@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -62,7 +63,10 @@ class AppModel private constructor(context: Context) {
      */
     suspend fun controlNow(udn: String, action: SpeakerAction): Boolean =
         try {
-            withTimeoutOrNull(CONTROL_TIMEOUT_MS) { cast.value?.currentBridge()?.renderer(udn)?.perform(action) } ?: false
+            // Off the caller's dispatcher: the presenter calls this from the UI scope.
+            withContext(Dispatchers.Default) {
+                withTimeoutOrNull(CONTROL_TIMEOUT_MS) { cast.value?.currentBridge()?.renderer(udn)?.perform(action) } ?: false
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

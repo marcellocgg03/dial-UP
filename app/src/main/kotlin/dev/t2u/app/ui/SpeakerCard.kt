@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
@@ -26,6 +27,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.t2u.app.model.CardButtons
+import dev.t2u.app.model.PlayPause
+import dev.t2u.app.model.buttonsFor
+import dev.t2u.app.model.playPauseAction
 import dev.t2u.app.model.positionAt
 import dev.t2u.app.model.progressFraction
 import dev.t2u.app.model.progressText
@@ -41,7 +46,12 @@ import kotlinx.coroutines.delay
  * any kind (notes, T-02-36).
  */
 @Composable
-fun SpeakerCard(speaker: SpeakerUi, modifier: Modifier = Modifier, onAction: (SpeakerAction) -> Unit = {}) {
+fun SpeakerCard(
+    speaker: SpeakerUi,
+    modifier: Modifier = Modifier,
+    buttons: CardButtons = buttonsFor(speaker, busy = false),
+    onAction: (SpeakerAction) -> Unit = {},
+) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
     // One tick a second, only while this speaker plays and the card is composed (T-07-08). The clock is the renderer's epoch clock.
@@ -78,16 +88,29 @@ fun SpeakerCard(speaker: SpeakerUi, modifier: Modifier = Modifier, onAction: (Sp
                 }
             }
         }
-        if (speaker.online && (speaker.status == PlayerStatus.PLAYING || speaker.status == PlayerStatus.PAUSED)) {
-            val pause = speaker.status == PlayerStatus.PLAYING
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            IconButton(onClick = { onAction(SpeakerAction.PREVIOUS) }, enabled = buttons.previous, modifier = Modifier.testTag("btn-prev-$udn")) {
+                Icon(SkipPreviousIcon, contentDescription = "Previous")
+            }
+            val pause = buttons.playPause == PlayPause.PAUSE
             IconButton(
-                onClick = { onAction(if (pause) SpeakerAction.PAUSE else SpeakerAction.PLAY) },
+                onClick = { playPauseAction(buttons.playPause)?.let(onAction) },
+                enabled = buttons.playPause != PlayPause.DISABLED,
                 modifier = Modifier.testTag("btn-playpause-$udn"),
             ) {
-                Icon(
-                    if (pause) PauseIcon else Icons.Filled.PlayArrow,
-                    contentDescription = if (pause) "Pause" else "Play",
-                )
+                Icon(if (pause) PauseIcon else Icons.Filled.PlayArrow, contentDescription = if (pause) "Pause" else "Play")
+            }
+            IconButton(onClick = { onAction(SpeakerAction.STOP) }, enabled = buttons.stop, modifier = Modifier.testTag("btn-stop-$udn")) {
+                Icon(StopIcon, contentDescription = "Stop")
+            }
+            IconButton(onClick = { onAction(SpeakerAction.NEXT) }, enabled = buttons.next, modifier = Modifier.testTag("btn-next-$udn")) {
+                Icon(SkipNextIcon, contentDescription = "Next")
+            }
+            IconButton(onClick = { onAction(SpeakerAction.CLEAR) }, enabled = buttons.clear, modifier = Modifier.testTag("btn-clear-$udn")) {
+                Icon(Icons.Filled.Delete, contentDescription = "Clear speaker")
             }
         }
         val position = speaker.position
