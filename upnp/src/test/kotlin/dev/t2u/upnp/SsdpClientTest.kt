@@ -131,6 +131,30 @@ class SsdpClientTest {
     }
 
     @Test
+    @DisplayName("searchAt sends one M-SEARCH to the given address")
+    fun searchAtSendsOneSearchToTheGivenAddress() {
+        // the client's own target is a dead address; only searchAt may reach the speaker (unicast, from a loopback socket)
+        FakeSpeaker(loopback, listOf(reply("200 OK"))).use { speaker ->
+            val events = Collected()
+            val ssdp = Ssdp(listOf(loopback), events, InetSocketAddress(loopback, 9))
+            try {
+                ssdp.start()
+                ssdp.searchAt(speaker.address, RENDERER_ST, 1)
+                assertTrue(awaitTrue { speaker.requests.isNotEmpty() })
+                Thread.sleep(100)
+                assertEquals(1, speaker.requests.size)
+                val text = speaker.requests.single()
+                assertTrue(text.startsWith("M-SEARCH * HTTP/1.1\r\n"))
+                assertTrue(text.contains("ST: $RENDERER_ST\r\n"))
+                assertTrue(text.contains("MX: 1\r\n"))
+                assertTrue(awaitTrue { events.alive.isNotEmpty() }, "the unicast reply reaches onAlive like any search reply")
+            } finally {
+                ssdp.stop()
+            }
+        }
+    }
+
+    @Test
     @DisplayName("a 200 reply becomes onAlive and a 404 reply is ignored")
     fun status200OnlyBecomesAlive() {
         FakeSpeaker(loopback, listOf(reply("404 Not Found"), reply("200 OK"))).use { speaker ->

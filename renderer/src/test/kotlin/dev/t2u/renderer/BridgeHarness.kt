@@ -96,6 +96,9 @@ internal class BridgeHarness(
     /** Answers every M-SEARCH with a MediaRenderer reply whose LOCATION is the fake speaker. */
     private val speakerSocket = DatagramSocket(InetSocketAddress(loopback, 0)).also { it.soTimeout = 200 }
 
+    /** The fake speaker's datagram port: what a manual add (plan 07-12) sends its unicast search to instead of 1900. */
+    val speakerPort: Int get() = speakerSocket.localPort
+
     @Suppress("unused")
     private val speakerThread = Thread {
         val buf = ByteArray(4096)
@@ -193,11 +196,12 @@ internal class BridgeHarness(
      * harness's speaker and notify sockets stay the search and notify targets, so a bridge moved to another loopback
      * address still finds the speaker.
      */
-    fun network(ip: InetAddress): BridgeNetwork = BridgeNetwork(
+    fun network(ip: InetAddress, searchTarget: InetSocketAddress? = null): BridgeNetwork = BridgeNetwork(
         wifiIp = ip,
         iface = null,
         ssdpListen = listOf(ListenSpec("loop", ip, 0, null, false)),
-        ssdpSearchTarget = InetSocketAddress(loopback, speakerSocket.localPort),
+        // null: the fake speaker's socket; a test passes a dead port to make multicast discovery blind (plan 07-12)
+        ssdpSearchTarget = searchTarget ?: InetSocketAddress(loopback, speakerSocket.localPort),
         notifyTarget = InetSocketAddress(loopback, notifySocket.localPort),
     )
 
@@ -217,8 +221,14 @@ internal class BridgeHarness(
         cacheMb: (() -> Int)? = null,
         // null: no hidden-speakers store (GUI-03), so nothing is ever hidden
         hidden: HiddenSpeakers? = null,
+        // null: discovery searches go to the fake speaker; a dead port makes discovery blind (GUI-04)
+        searchTarget: InetSocketAddress? = null,
+        // null: leave BridgeDeps' own default (1900) in place
+        manualSsdpPort: Int? = null,
+        // null: leave BridgeDeps' own default (5 s) in place
+        manualAnswerTimeoutMs: Long? = null,
     ): Bridge {
-        val network = network(loopback)
+        val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
         val deps = BridgeDeps(
             config, resolver, launcher, lanHttpClient(), { accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
@@ -236,6 +246,8 @@ internal class BridgeHarness(
             clearOnCastEnd = clearOnCastEnd,
             cacheMb = cacheMb,
             hidden = hidden,
+            manualSsdpPort = manualSsdpPort ?: MANUAL_SSDP_PORT,
+            manualAnswerTimeoutMs = manualAnswerTimeoutMs ?: MANUAL_ANSWER_TIMEOUT_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)
