@@ -215,6 +215,8 @@ internal class BridgeHarness(
         clearOnCastEnd: (() -> Boolean)? = null,
         // null: leave BridgeDeps' own default (config.json cacheMb) in place
         cacheMb: (() -> Int)? = null,
+        // null: no hidden-speakers store (GUI-03), so nothing is ever hidden
+        hidden: HiddenSpeakers? = null,
     ): Bridge {
         val network = network(loopback)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -233,6 +235,7 @@ internal class BridgeHarness(
             responderFactory = responderFactory,
             clearOnCastEnd = clearOnCastEnd,
             cacheMb = cacheMb,
+            hidden = hidden,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

@@ -173,6 +173,7 @@ class RendererRegistryTest {
         val now: AtomicLong = AtomicLong(1_000_000),
         val friendlyName: String? = null,
         var initBehaviour: suspend (String) -> Boolean = { true },
+        hidden: (String) -> Boolean = { false },
     ) {
         val events = Events()
         val ports = PortRegistry(dataDir, 3000).load()
@@ -189,6 +190,7 @@ class RendererRegistryTest {
             },
             events,
             { now.get() },
+            hidden = hidden,
         )
 
         suspend fun alive(
@@ -810,5 +812,69 @@ class RendererRegistryTest {
         h.alive()
         assertEquals(1, h.created.size)
         assertTrue(h.events.retries.isEmpty())
+    }
+    // ---- Plan 07-11: hidden speakers (GUI-03, D-08) ----
+
+    @Test
+    @DisplayName("a setup in flight does not bring a hidden speaker back")
+    fun aSetupInFlightDoesNotBringAHiddenSpeakerBack() = runBlocking {
+        val gate = CompletableDeferred<Boolean>()
+        val hiddenSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val h = Harness(initBehaviour = { gate.await() }, hidden = { it in hiddenSet })
+        val setup = launch(Dispatchers.Default) { h.alive() }
+        val end = System.currentTimeMillis() + 3000
+        while (h.created.isEmpty() || h.created.single().initCalls.get() == 0) {
+            check(System.currentTimeMillis() < end) { "the setup never reached init" }
+            delay(5)
+        }
+
+        hiddenSet.add("Kitchen") // the author taps Hide while the speaker is still coming up
+        gate.complete(true)
+        setup.join()
+
+        assertEquals(0, h.registry.count.value)
+        assertTrue(h.registry.renderersFlow.value.isEmpty())
+        assertEquals(1, h.created.single().destroyCalls.get(), "the half-built renderer is destroyed")
+        assertEquals(3000, h.ports.claim("Other"), "its port is free again")
+        val skipped = h.events.named("skipped")
+        assertTrue(skipped.any { it["reason"] == "hidden" }, skipped.toString())
+        assertTrue(h.events.named("added").isEmpty())
+    }
+
+    @Test
+    @DisplayName("an alive from a hidden speaker is refused once in the log, and a failed setup of one is not retried")
+    fun aHiddenSpeakerIsRefusedAndNotRetried() = runBlocking {
+        val hiddenSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        hiddenSet.add("Kitchen")
+        val h = Harness(initBehaviour = { throw java.io.IOException("boom") }, hidden = { it in hiddenSet })
+        repeat(5) { h.alive() }
+        assertEquals(0, h.created.size)
+        assertEquals(1, h.events.named("skipped").size)
+
+        // a speaker whose setup failed before it was hidden is not retried by the timer
+        hiddenSet.clear()
+        val g = Harness(initBehaviour = { throw java.io.IOException("boom") }, hidden = { it in hiddenSet })
+        g.alive()
+        assertEquals(1, g.created.size)
+        hiddenSet.add("Kitchen")
+        g.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        assertEquals(0, g.registry.retryDue())
+        assertEquals(1, g.created.size)
+    }
+
+    @Test
+    @DisplayName("hide removes the running renderer, frees its port and reports whether there was one")
+    fun hideRemovesTheRunningRenderer() = runBlocking {
+        val h = Harness()
+        h.alive()
+        assertEquals(1, h.registry.count.value)
+
+        assertTrue(h.registry.hide("Kitchen", stop = true, clear = false))
+
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, h.created.single().destroyCalls.get())
+        assertEquals(1, h.events.named("hidden").size)
+        assertFalse(h.registry.hide("Kitchen", stop = true, clear = false))
+        assertFalse(h.registry.hide("Nobody", stop = true, clear = false))
     }
 }
