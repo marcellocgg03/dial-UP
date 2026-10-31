@@ -39,12 +39,10 @@ get_dump() {
     cat "$UI_DUMP_FILE"
     return
   fi
-  # The phone dozes within seconds on wireless adb and a dump of a dozing screen has no app nodes,
-  # so wake it first (a no-op when it is already awake) and give the window a moment to draw.
-  if adb_ shell dumpsys power 2>/dev/null | grep -q 'mWakefulness=\(Dozing\|Asleep\)'; then
-    adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
-    sleep 1
-  fi
+  # The phone dozes within seconds on wireless adb and a dump of a dozing or locked screen has no app
+  # nodes, so wake it and drop the (non-secure) keyguard first; both are no-ops on an awake phone.
+  adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  adb_ shell wm dismiss-keyguard >/dev/null 2>&1 || true
   adb_ shell uiautomator dump "$REMOTE_DUMP" >/dev/null 2>&1 || {
     echo "ui: uiautomator dump failed (device unreachable or screen off?)" >&2
     exit 1
@@ -162,6 +160,7 @@ main() {
       ;;
     front)
       adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+      adb_ shell wm dismiss-keyguard >/dev/null 2>&1 || true
       adb_ shell am start -n dev.dialup/dev.dialup.app.MainActivity >/dev/null
       sleep 1
       ;;
