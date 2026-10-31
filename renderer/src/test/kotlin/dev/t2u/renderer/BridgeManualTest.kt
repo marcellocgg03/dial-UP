@@ -250,4 +250,34 @@ class BridgeManualTest {
         assertTrue(h.searchesSeen.get() - before >= 3, "unicast searches seen: ${h.searchesSeen.get() - before}")
         assertTrue(bridge.speakers.value.single().online, "it never went offline")
     }
+
+    @Test
+    @DisplayName("Remove forgets a manual speaker")
+    fun removeForgetsAManualSpeaker() = h.run<Unit> {
+        val (bridge, store) = upManualBridge()
+
+        assertTrue(bridge.removeManual(HARNESS_RENDERER_UDN))
+
+        assertTrue(store.entries.value.isEmpty())
+        assertTrue(ManualSpeakers(h.dataDir).load().entries.value.isEmpty(), "gone from manual.json")
+        h.awaitUntil("the speaker gone from the list") { bridge.speakers.value.isEmpty() }
+        assertNull(h.dialSearchAt(bridge, h.loopback), "no longer advertised")
+        assertFalse(bridge.removeManual(HARNESS_RENDERER_UDN), "a second remove finds nothing")
+        val seen = h.searchesSeen.get()
+        delay(700)
+        assertEquals(seen, h.searchesSeen.get(), "no more unicast searches to the removed address")
+    }
+
+    @Test
+    @DisplayName("Remove of an offline manual speaker")
+    fun removeOfAnOfflineManualSpeaker() = h.run<Unit> {
+        val (bridge, store) = upManualBridge()
+        h.speakerSilent = true
+        h.awaitUntil("the speaker offline", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == false }
+
+        assertTrue(bridge.removeManual(HARNESS_RENDERER_UDN))
+
+        assertTrue(store.entries.value.isEmpty())
+        h.awaitUntil("no greyed card remains") { bridge.speakers.value.isEmpty() }
+    }
 }
