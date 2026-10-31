@@ -22,6 +22,7 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverDeps
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.YouTubeCastReceiver
+import dev.t2u.media.CacheInfo
 import dev.t2u.media.FileBuilder
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.MediaServer
@@ -133,6 +134,11 @@ data class BridgeDeps(
      * means the fixed [Config.clearOnCastEnd] decides; the app passes a supplier over its settings.
      */
     val clearOnCastEnd: (() -> Boolean)? = null,
+    /**
+     * GUI-08: the cache cap in MiB, read by the file cache at every prune so a size changed in the app applies without a
+     * restart (D-09). Null, or a supplier that throws, means [Config.cacheMb] decides.
+     */
+    val cacheMb: (() -> Int)? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -247,6 +253,28 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         emit("bridge-error", "where" to where, "error" to t.javaClass.name, "message" to t.message)
     }
 
+    /** The cache cap in MiB now: the app's supplier when it answers, else config.json (a throwing supplier counts as none). */
+    private fun cacheCapMb(base: Config): Int = try {
+        deps.cacheMb?.invoke() ?: base.cacheMb
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        base.cacheMb
+    }
+
+    /**
+     * GUI-08: deletes every finished file in the cache that no stream pins (T-07-21) and returns how many went; 0 when this
+     * bridge has no file builder. A `cache` event records the count.
+     */
+    fun clearCache(): Int {
+        val cleared = mediaServer?.clearCache() ?: 0
+        emit("cache", "cleared" to cleared)
+        return cleared
+    }
+
+    /** GUI-08: files, bytes and cap of the cache now; null when this bridge has no file builder. */
+    fun cacheInfo(): CacheInfo? = mediaServer?.cacheInfo()
+
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
     fun start() {
         check(started.compareAndSet(false, true)) { "already started" }
@@ -271,7 +299,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     flacBits = base.flacBits,
                     ffmpegLogLevel = base.ffmpegLogLevel,
                     // read by the cache at every prune, so the deferred cache slider needs no restart
-                    cacheLimitBytes = { base.cacheMb.toLong() * 1_048_576L },
+                    cacheLimitBytes = { cacheCapMb(base).toLong() * 1_048_576L },
                     onEvent = { fields -> emit("filebuild", *fields.map { it.key to it.value }.toTypedArray()) },
                 )
             } else {

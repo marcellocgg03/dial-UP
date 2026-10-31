@@ -8,6 +8,7 @@ import android.os.SystemClock
 import dev.t2u.app.model.BridgeStatus
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
+import dev.t2u.media.CacheInfo
 import dev.t2u.media.CachingResolver
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.YtDlpUpdater
@@ -105,6 +106,20 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     /** The bridge now, for the controls that act on one speaker (plan 07-08); null while there is none. */
     fun currentBridge(): Bridge? = bridgeState.value
+
+    /**
+     * GUI-08: empties the running bridge's cache of every file no stream pins (T-07-21) and logs `cache-clear` with the
+     * count. Null while there is no bridge. Blocking file work: call off the main thread.
+     */
+    fun clearCache(): Int? {
+        val b = bridge ?: return null
+        val cleared = b.clearCache()
+        host?.evidence?.event("cache-clear", mapOf("cleared" to cleared, "source" to "ui"))
+        return cleared
+    }
+
+    /** GUI-08: files, bytes and cap of the running bridge's cache; null without a bridge or without a file builder. */
+    fun cacheInfo(): CacheInfo? = bridge?.cacheInfo()
 
     /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup running (RESEARCH Pitfall 4). */
     @Volatile private var resolver: CachingResolver? = null
@@ -332,6 +347,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 accessMode = { appSettings.dialAccess.value },
                 // GUI-08 / D-09: read at clear time, so switching the setting applies to the running bridge
                 clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
+                // GUI-08 / D-09: the cache cap read at every prune: the app's value when set, else config.json or the default
+                cacheMb = { appSettings.data.value.cacheMb ?: loaded.config.cacheMb },
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,

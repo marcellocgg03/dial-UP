@@ -213,6 +213,8 @@ internal class BridgeHarness(
         responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
         // null: leave BridgeDeps' own default (the config's flag) in place
         clearOnCastEnd: (() -> Boolean)? = null,
+        // null: leave BridgeDeps' own default (config.json cacheMb) in place
+        cacheMb: (() -> Int)? = null,
     ): Bridge {
         val network = network(loopback)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -230,6 +232,7 @@ internal class BridgeHarness(
             currentNetwork = currentNetwork,
             responderFactory = responderFactory,
             clearOnCastEnd = clearOnCastEnd,
+            cacheMb = cacheMb,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)
