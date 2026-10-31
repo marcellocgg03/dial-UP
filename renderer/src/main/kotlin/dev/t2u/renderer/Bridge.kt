@@ -139,6 +139,11 @@ data class BridgeDeps(
      * restart (D-09). Null, or a supplier that throws, means [Config.cacheMb] decides.
      */
     val cacheMb: (() -> Int)? = null,
+    /**
+     * GUI-03: the speakers the author hid. Null means nothing is ever hidden (and [Bridge.hide] does nothing); the app passes
+     * its process-level store, which also lives while the bridge is off.
+     */
+    val hidden: HiddenSpeakers? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -275,6 +280,33 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** GUI-08: files, bytes and cap of the cache now; null when this bridge has no file builder. */
     fun cacheInfo(): CacheInfo? = mediaServer?.cacheInfo()
 
+    /** Whether a cast that ends empties the speaker now: the app's supplier when it answers, else the fixed config flag. */
+    private fun clearOnCastEndNow(): Boolean = try {
+        deps.clearOnCastEnd?.invoke() ?: (effective ?: deps.config).clearOnCastEnd
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        (effective ?: deps.config).clearOnCastEnd
+    }
+
+    /**
+     * GUI-03, D-08: drops the speaker [udn] as a DIAL target at once and keeps it out until [unhide]. The speaker joins the
+     * hidden set first, so every guard (alive, retry, a setup in flight) refuses it before the receiver goes; then a playing
+     * speaker is stopped (and emptied only when clear-when-cast-ends is on, RESEARCH A7) and its receiver stopped, which sends
+     * ssdp:byebye, closes its DIAL port and ends the lounge session. The other speakers are not touched. False when there is
+     * no such running speaker or no hidden store.
+     */
+    suspend fun hide(udn: String): Boolean {
+        val reg = registry ?: return false
+        val store = deps.hidden ?: return false
+        if (stopped.get()) return false
+        val speaker = reg.renderers().firstOrNull { it.udn == udn } ?: return false
+        if (!store.add(HiddenSpeaker(udn, speaker.name ?: udn, speaker.address))) return false
+        reg.hide(udn, stop = true, clear = clearOnCastEndNow())
+        emit("hidden", "udn" to udn, "name" to speaker.name)
+        return true
+    }
+
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
     fun start() {
         check(started.compareAndSet(false, true)) { "already started" }
@@ -387,7 +419,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     ),
                 )
             }
-            val reg = RendererRegistry(config, ports, factory, deps.events)
+            val reg = RendererRegistry(config, ports, factory, deps.events, hidden = { deps.hidden?.contains(it) == true })
             registry = reg
 
             val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)

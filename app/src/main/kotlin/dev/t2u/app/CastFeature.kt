@@ -346,6 +346,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
                 // GUI-08 / D-09: the cache cap read at every prune: the app's value when set, else config.json or the default
                 cacheMb = { appSettings.data.value.cacheMb ?: loaded.config.cacheMb },
+                // GUI-03 / D-08: the hidden speakers, kept across bridges and readable while the bridge is off
+                hidden = SpeakerStores.of(h.context).hidden,
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,

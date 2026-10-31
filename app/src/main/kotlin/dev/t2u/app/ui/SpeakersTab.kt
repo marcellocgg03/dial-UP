@@ -47,6 +47,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                     speaker,
                     buttons = buttonsFor(speaker, speaker.udn in busy),
                     onAction = { presenter.press(speaker.udn, it) },
+                    onHide = { model.hide(speaker.udn) },
                 )
             }
         }

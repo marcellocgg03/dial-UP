@@ -53,6 +53,20 @@ class AppModel private constructor(context: Context) {
     val status: StateFlow<BridgeStatus> =
         cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
+    /**
+     * GUI-03: Hide from a card's menu. The running bridge drops the speaker as a cast target at once (stopping it first when it
+     * plays) and keeps it out. Fire-and-forget: a failure is dropped, a tap must never crash the app.
+     */
+    fun hide(udn: String): Job = scope.launch {
+        try {
+            cast.value?.currentBridge()?.hide(udn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the speaker simply stays where it is
+        }
+    }
+
     /** Fire-and-forget [controlNow] for a card tap; it never throws into the UI. */
     fun control(udn: String, action: SpeakerAction): Job = scope.launch { controlNow(udn, action) }
 

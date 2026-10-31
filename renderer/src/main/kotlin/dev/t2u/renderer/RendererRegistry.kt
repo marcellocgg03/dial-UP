@@ -50,6 +50,8 @@ class RendererRegistry(
     private val events: EventSink = NoEvents,
     private val clock: () -> Long = System::currentTimeMillis,
     private val clearBudgetMs: Long = CLEAR_BUDGET_MS,
+    /** GUI-03: true for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
+    private val hidden: (String) -> Boolean = { false },
 ) {
     companion object {
         /** index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. */
@@ -215,6 +217,10 @@ class RendererRegistry(
             logGuardOnce(udn, "excluded server $excluded", location)
             return
         }
+        if (hidden(udn)) {
+            logGuardOnce(udn, "hidden", location)
+            return
+        }
 
         val age = maxAge(headers["CACHECONTROL"], config.defaultMaxAge)
 
@@ -253,15 +259,28 @@ class RendererRegistry(
             holdsPort = true
             renderer = factory.create(udn, location, src.address.hostAddress.orEmpty(), age, port)
             if (renderer.init()) {
+                // The author may have hidden the speaker while it was coming up: checked under the lock that registers it.
                 lock.withLock {
-                    running[udn] = renderer
-                    skipped.remove(udn)
-                    publish()
-                    registered = true
+                    if (!hidden(udn)) {
+                        running[udn] = renderer
+                        skipped.remove(udn)
+                        publish()
+                        registered = true
+                    }
                 }
-                ports.remember(udn, port)
-                log("added", udn, renderer.name, location, port)
-                if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, port, retryAttempt, "added")
+                if (registered) {
+                    ports.remember(udn, port)
+                    log("added", udn, renderer.name, location, port)
+                    if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, port, retryAttempt, "added")
+                } else {
+                    withContext(NonCancellable) {
+                        runCatching { renderer.destroy() }
+                        ports.release(port)
+                    }
+                    holdsPort = false
+                    log("skipped", udn, renderer.name, location, reason = "hidden")
+                    if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
+                }
             } else {
                 ports.release(port)
                 holdsPort = false
@@ -309,7 +328,7 @@ class RendererRegistry(
             val picked = skipped.entries
                 .filter { (udn, skip) ->
                     skip.until != Long.MAX_VALUE && !isWaiting(skip, now) && skip.src != null &&
-                        udn !in pending && udn !in running
+                        udn !in pending && udn !in running && !hidden(udn)
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
             picked.forEach { pending.add(it.first) }
@@ -365,6 +384,20 @@ class RendererRegistry(
             ports.release(r.port)
         }
         log(event, udn, r.name, r.location, r.port, reason)
+    }
+
+    /**
+     * GUI-03: takes the running speaker [udn] out of the cast menus. The caller has already put it in the hidden set, so
+     * every guard refuses it from now on. With [clear] the speaker is first emptied (bounded by `clearBudgetMs`), else with
+     * [stop] a playing speaker is told to Stop (bounded the same way); then the renderer is destroyed (ssdp:byebye, DIAL
+     * server closed, the lounge session ended) and its port freed. Nothing else is touched: the other speakers keep playing.
+     * False when no such speaker is running.
+     */
+    suspend fun hide(udn: String, stop: Boolean, clear: Boolean): Boolean {
+        lock.withLock { running[udn] } ?: return false
+        if (clear) clearOne(udn) else if (stop) stopOne(udn)
+        removeRenderer(udn, "hidden")
+        return true
     }
 
     /** index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. */

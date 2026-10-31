@@ -828,7 +828,7 @@ class RendererRegistryTest {
             delay(5)
         }
 
-        hiddenSet.add("Kitchen") // the author taps Hide while the speaker is still coming up
+        hiddenSet.add("kitchen") // the author taps Hide while the speaker is still coming up
         gate.complete(true)
         setup.join()
 
@@ -845,7 +845,7 @@ class RendererRegistryTest {
     @DisplayName("an alive from a hidden speaker is refused once in the log, and a failed setup of one is not retried")
     fun aHiddenSpeakerIsRefusedAndNotRetried() = runBlocking {
         val hiddenSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        hiddenSet.add("Kitchen")
+        hiddenSet.add("kitchen")
         val h = Harness(initBehaviour = { throw java.io.IOException("boom") }, hidden = { it in hiddenSet })
         repeat(5) { h.alive() }
         assertEquals(0, h.created.size)
@@ -856,7 +856,7 @@ class RendererRegistryTest {
         val g = Harness(initBehaviour = { throw java.io.IOException("boom") }, hidden = { it in hiddenSet })
         g.alive()
         assertEquals(1, g.created.size)
-        hiddenSet.add("Kitchen")
+        hiddenSet.add("kitchen")
         g.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
         assertEquals(0, g.registry.retryDue())
         assertEquals(1, g.created.size)
@@ -869,12 +869,12 @@ class RendererRegistryTest {
         h.alive()
         assertEquals(1, h.registry.count.value)
 
-        assertTrue(h.registry.hide("Kitchen", stop = true, clear = false))
+        assertTrue(h.registry.hide("kitchen", stop = true, clear = false))
 
         assertEquals(0, h.registry.count.value)
         assertEquals(1, h.created.single().destroyCalls.get())
         assertEquals(1, h.events.named("hidden").size)
-        assertFalse(h.registry.hide("Kitchen", stop = true, clear = false))
+        assertFalse(h.registry.hide("kitchen", stop = true, clear = false))
         assertFalse(h.registry.hide("Nobody", stop = true, clear = false))
     }
 }
