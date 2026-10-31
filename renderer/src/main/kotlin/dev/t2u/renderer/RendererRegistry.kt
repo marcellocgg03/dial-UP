@@ -9,6 +9,7 @@ package dev.t2u.renderer
 // Concurrency: the maps are guarded by one Mutex that is never held across init() or destroy(), and
 // the pending set guarantees one init per UDN however many alives arrive at once.
 
+import dev.t2u.lounge.Player
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.NoEvents
 import dev.t2u.upnp.isPrivateLanAddress
@@ -395,16 +396,34 @@ class RendererRegistry(
      * parallel with the others, and before its own destroy (a destroyed renderer no longer clears). A clear that
      * hangs or throws never keeps a speaker from being destroyed. Clear only on an explicit service Stop: a
      * rebind, a goodbye and a stale speaker leave the speaker alone ([onByebye] and [prune] never clear).
+     *
+     * With [stopSpeakers] and no [clearSpeakers], each speaker that is playing is told to Stop (D-03: switching the bridge
+     * off ends playback) and keeps its track loaded; [stopOne] is bounded the same way. A speaker on another source gets no
+     * Stop (T-03-26, [Player.stop] reaches doStop's another-source check).
      */
-    suspend fun removeAll(clearSpeakers: Boolean = false) {
+    suspend fun removeAll(clearSpeakers: Boolean = false, stopSpeakers: Boolean = false) {
         val udns = lock.withLock { running.keys.toList() }
         coroutineScope {
             udns.map { udn ->
                 async {
-                    if (clearSpeakers) clearOne(udn)
+                    if (clearSpeakers) clearOne(udn) else if (stopSpeakers) stopOne(udn)
                     runCatching { removeRenderer(udn) }
                 }
             }.awaitAll()
+        }
+    }
+
+    private suspend fun stopOne(udn: String) {
+        val r = lock.withLock { running[udn] } ?: return
+        val player = r as? Player ?: return
+        try {
+            if (withTimeoutOrNull(clearBudgetMs) { player.stop() } == null) {
+                log("stop-timeout", udn, r.name, r.location, r.port, "the speaker did not finish stopping in $clearBudgetMs ms")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("stop-failed", udn, r.name, r.location, r.port, e.message ?: e.javaClass.simpleName)
         }
     }
 

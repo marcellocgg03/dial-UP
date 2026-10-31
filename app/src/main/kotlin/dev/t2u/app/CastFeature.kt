@@ -177,9 +177,11 @@ class CastFeature : SpikeFeature, CastCountSource {
     }
 
     /**
-     * Stop in the notification ends here: every speaker this app loaded is emptied first (CAST-06), then every
-     * receiver says byebye and goodbye before the service goes. The clear is bounded to about 4 s and runs in
-     * parallel across speakers, so the worst case stays inside the 10 s join below.
+     * Every explicit stop ends here: the header switch (plan 07-04 persists it first), the notification Stop and adb stop.
+     * D-03: playback ends, so every speaker playing our stream gets a Stop; it is emptied as well (CAST-06) only when the
+     * "clear the speaker when a cast ends" setting is on (GUI-08). Then every receiver says byebye and goodbye before the
+     * service goes. The stop or clear is bounded to about 4 s and runs in parallel across speakers, so the worst case
+     * stays inside the 10 s join below.
      */
     override fun stop() {
         host?.let { HousekeepingAlarm.cancel(it.context) }
@@ -191,7 +193,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         rebindJob?.cancel()
         retryJob?.cancel()
         // sockets are never touched on the main thread
-        val t = Thread({ runBlocking { lifecycle.withLock { stopBridge(clearSpeakers = true) } } }, "t2u-cast-stop").apply { isDaemon = true }
+        val t = Thread({ runBlocking { lifecycle.withLock { stopBridge(clearSpeakers = settings?.data?.value?.clearOnCastEnd == true, stopSpeakers = true) } } }, "t2u-cast-stop").apply { isDaemon = true }
         t.start()
         t.join(10_000)
     }
@@ -348,14 +350,17 @@ class CastFeature : SpikeFeature, CastCountSource {
         scheduleWarmUp(h, b)
     }
 
-    /** Call with [lifecycle] held. [clearSpeakers]: empty every speaker's transport URI first (CAST-06). */
-    private suspend fun stopBridge(clearSpeakers: Boolean) {
+    /**
+     * Call with [lifecycle] held. [stopSpeakers]: stop every playing speaker first (D-03). [clearSpeakers]: also empty
+     * every speaker's transport URI (CAST-06, only with the GUI-08 setting on). Neither: the speakers are not touched.
+     */
+    private suspend fun stopBridge(clearSpeakers: Boolean, stopSpeakers: Boolean = false) {
         val b = bridge
         bridge = null
         countJob?.cancel()
         countJob = null
         try {
-            b?.stop(clearSpeakers)
+            b?.stop(clearSpeakers, stopSpeakers)
         } finally {
             count.value = CastCount(0, 0)
         }

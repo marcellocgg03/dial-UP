@@ -960,12 +960,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * With [clearSpeakers] every speaker this app loaded is emptied first (CAST-06; in parallel, each bounded, see
      * [RendererRegistry.removeAll]). Clear only on an explicit service Stop: a Wi-Fi rebind (the bridge comes
      * straight back), a start that failed, a goodbye and a stale speaker leave the speaker alone.
+     *
+     * D-03: switching the bridge off ends playback. With [stopSpeakers] every speaker that is playing gets a Stop and keeps
+     * its track loaded; only [clearSpeakers] (the GUI-08 setting) also empties it. Neither flag: the speakers are not
+     * touched (the reload-config restart, where the bridge comes straight back).
      */
-    suspend fun stop(clearSpeakers: Boolean = false) {
+    suspend fun stop(clearSpeakers: Boolean = false, stopSpeakers: Boolean = false) {
         if (!stopped.compareAndSet(false, true)) return
         withContext(NonCancellable) {
             step("handlers") { handlerJob.cancelAndJoin() }
-            step("receivers") { registry?.removeAll(clearSpeakers) }
+            step("receivers") { registry?.removeAll(clearSpeakers, stopSpeakers) }
             step("ssdp-client") { withContext(Dispatchers.IO) { ssdp?.stop() } }
             step("ssdp-responder") { withContext(Dispatchers.IO) { responder?.stop() } }
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }
