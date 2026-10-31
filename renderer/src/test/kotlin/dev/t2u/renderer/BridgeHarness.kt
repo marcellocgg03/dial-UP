@@ -99,6 +99,12 @@ internal class BridgeHarness(
     /** While true the fake speaker counts an M-SEARCH but does not answer it: the speaker is unplugged (plan 07-14). */
     @Volatile var speakerSilent = false
 
+    /**
+     * While true the fake speaker counts an M-SEARCH but never answers it, while its HTTP description stays up: a real Sonos
+     * does this to a unicast search (plan 07-17, device run GUI-C 2a).
+     */
+    @Volatile var speakerSearchDeaf = false
+
     /** The fake speaker's datagram port: what a manual add (plan 07-12) sends its unicast search to instead of 1900. */
     val speakerPort: Int get() = speakerSocket.localPort
 
@@ -116,7 +122,7 @@ internal class BridgeHarness(
             }
             if (!String(packet.data, 0, packet.length, Charsets.UTF_8).startsWith("M-SEARCH")) continue
             searchesSeen.incrementAndGet()
-            if (speakerSilent) continue
+            if (speakerSilent || speakerSearchDeaf) continue
             val reply = (
                 "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
                     "USN: uuid:$HARNESS_RENDERER_UDN::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
@@ -235,6 +241,10 @@ internal class BridgeHarness(
         manual: ManualSpeakers? = null,
         // null: leave BridgeDeps' own default (60 s) in place
         manualProbeIntervalMs: Long? = null,
+        // null: leave BridgeDeps' own default (http://<ip>:1400/xml/device_description.xml) in place (plan 07-17)
+        manualDescriptionUrl: ((String) -> String)? = null,
+        // null: leave BridgeDeps' own default (1.5 s) in place
+        manualSsdpGraceMs: Long? = null,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -258,6 +268,8 @@ internal class BridgeHarness(
             manualAnswerTimeoutMs = manualAnswerTimeoutMs ?: MANUAL_ANSWER_TIMEOUT_MS,
             manual = manual,
             manualProbeIntervalMs = manualProbeIntervalMs ?: MANUAL_PROBE_INTERVAL_MS,
+            manualDescriptionUrl = manualDescriptionUrl ?: ::sonosDescriptionUrl,
+            manualSsdpGraceMs = manualSsdpGraceMs ?: MANUAL_SSDP_GRACE_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

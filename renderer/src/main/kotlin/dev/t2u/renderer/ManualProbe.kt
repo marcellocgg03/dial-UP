@@ -10,6 +10,7 @@ import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.parseIpv4Literal
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URI
 
 /** The UDP port a speaker listens on for SSDP searches. */
 const val MANUAL_SSDP_PORT = 1900
@@ -19,6 +20,30 @@ const val MANUAL_PROBE_INTERVAL_MS = 60_000L
 
 /** How long an add waits for the speaker to answer the probe and its description to load. */
 const val MANUAL_ANSWER_TIMEOUT_MS = 5_000L
+
+/** Plan 07-17: how long an add waits for an answer to the unicast search before it asks for the HTTP description instead. */
+const val MANUAL_SSDP_GRACE_MS = 1_500L
+
+/** Plan 07-17: the HTTP port a Sonos speaker serves its UPnP description on. */
+const val MANUAL_DESCRIPTION_PORT = 1400
+
+/** Plan 07-17: where a Sonos speaker at [host] serves its device description; [host] is the typed IPv4 literal. */
+fun sonosDescriptionUrl(host: String): String = "http://$host:$MANUAL_DESCRIPTION_PORT/xml/device_description.xml"
+
+/**
+ * Plan 07-17, T-07-45: whether the fallback may request [url] for the typed address [ip]. Only a plain http URL whose host is
+ * exactly the typed literal, with no user-info and a real port, passes. The text is parsed with [URI], which never resolves a name.
+ */
+fun descriptionUrlAllowed(url: String, ip: InetAddress): Boolean {
+    val uri = try {
+        URI(url)
+    } catch (_: Exception) {
+        return false
+    }
+    if (uri.scheme != "http" || uri.userInfo != null) return false
+    if (uri.host == null || uri.host != ip.hostAddress) return false
+    return uri.port == -1 || uri.port in 1..65535
+}
 
 /**
  * The typed text as a private LAN IPv4 address, or null. Only plain dotted decimal is read (no name, no hex or octal or

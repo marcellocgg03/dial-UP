@@ -32,6 +32,8 @@ class BridgeManualTest {
         hidden: HiddenSpeakers? = null,
         manual: ManualSpeakers? = null,
         manualProbeIntervalMs: Long? = null,
+        manualDescriptionUrl: ((String) -> String)? = null,
+        manualSsdpGraceMs: Long? = null,
     ): Bridge =
         h.newBridge(
             searchTarget = InetSocketAddress(h.loopback, h.freePort()),
@@ -40,6 +42,8 @@ class BridgeManualTest {
             hidden = hidden,
             manual = manual,
             manualProbeIntervalMs = manualProbeIntervalMs,
+            manualDescriptionUrl = manualDescriptionUrl,
+            manualSsdpGraceMs = manualSsdpGraceMs,
         )
 
     @Test
@@ -279,5 +283,50 @@ class BridgeManualTest {
 
         assertTrue(store.entries.value.isEmpty())
         h.awaitUntil("no greyed card remains") { bridge.speakers.value.isEmpty() }
+    }
+
+    // ------------------------------------------------------------------------------------------ plan 07-17: HTTP description fallback
+
+    /** The fake speaker's description URL, whatever host the bridge asks for (it only listens on loopback). */
+    private val fakeDescription: (String) -> String = { h.fakeRenderer.location }
+
+    @Test
+    @DisplayName("a speaker deaf to unicast search is added through its description")
+    fun aSpeakerDeafToUnicastSearchIsAddedThroughItsDescription() = h.run<Unit> {
+        h.speakerSearchDeaf = true
+        val store = ManualSpeakers(h.dataDir).load()
+        val bridge = blindBridge(manual = store, manualDescriptionUrl = fakeDescription, manualSsdpGraceMs = 300)
+        bridge.start()
+        delay(300)
+        assertTrue(bridge.speakers.value.isEmpty())
+
+        val result = bridge.addManual(h.loopback)
+
+        val added = result as? ManualAddResult.Added ?: throw AssertionError("expected Added, got $result")
+        assertEquals(HARNESS_RENDERER_UDN, added.udn)
+        assertTrue(h.searchesSeen.get() >= 1, "the unicast search was tried first")
+        h.awaitUntil("the speaker listed") { bridge.speakers.value.size == 1 }
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a DIAL cast target")
+        val saved = store.entries.value.single()
+        assertEquals(HARNESS_RENDERER_UDN, saved.udn)
+        assertEquals(h.fakeRenderer.location, saved.location)
+        assertTrue(h.events.any { it.first == "manual-add" && it.second["via"] == "http" }, "manual-add via http: ${h.events.takeLast(5)}")
+    }
+
+    @Test
+    @DisplayName("the fallback refuses a description URL on another host")
+    fun theFallbackRefusesADescriptionUrlOnAnotherHost() = h.run<Unit> {
+        h.speakerSearchDeaf = true
+        // localhost reaches the fake renderer, so a request that was sent would make this an Added
+        val bridge = blindBridge(
+            manualAnswerTimeoutMs = 1_200,
+            manualDescriptionUrl = { _ -> h.fakeRenderer.location.replace("127.0.0.1", "localhost") },
+            manualSsdpGraceMs = 300,
+        )
+        bridge.start()
+
+        assertEquals(ManualAddResult.NoAnswer, bridge.addManual(h.loopback))
+
+        assertTrue(bridge.speakers.value.isEmpty())
     }
 }

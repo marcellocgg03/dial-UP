@@ -40,6 +40,7 @@ import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
+import dev.t2u.upnp.fetchDescription
 import dev.t2u.upnp.parseIpv4Literal
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
@@ -75,6 +76,7 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -160,6 +162,14 @@ data class BridgeDeps(
      * the registry (no longer a cast target) and comes back when it answers. Tests shorten it.
      */
     val manualProbeIntervalMs: Long = MANUAL_PROBE_INTERVAL_MS,
+    /**
+     * GUI-04, D-06, plan 07-17: where [Bridge.addManual] fetches the device description of the typed address when the unicast
+     * search got no reply (a Sonos speaker ignores it). The argument is the typed IPv4 literal; the result must keep that host
+     * ([descriptionUrlAllowed]) or nothing is requested. Tests point it at the fake speaker.
+     */
+    val manualDescriptionUrl: (String) -> String = ::sonosDescriptionUrl,
+    /** Plan 07-17: how long [Bridge.addManual] waits for a reply to the unicast search before it falls back to the description. */
+    val manualSsdpGraceMs: Long = MANUAL_SSDP_GRACE_MS,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -177,6 +187,9 @@ private const val MANUAL_REPLY_CAP = 64
 
 /** How often [Bridge.addManual] looks for the answer. */
 private const val MANUAL_POLL_MS = 100L
+
+/** Plan 07-17: the shortest time the description fetch of an add is given, whatever is left of the probe budget. */
+private const val MANUAL_DESCRIBE_MIN_MS = 1_000L
 
 /** A receiver younger than this is kept in the move list even while it is still "stopped" (its start has not run yet). */
 private const val TRACK_GRACE_MS = 120_000L
@@ -367,14 +380,21 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * [BridgeDeps.manualSsdpPort]; the reply reaches the registry like any search reply (so its guards apply: the LOCATION host
      * must equal the sender and be private LAN, excluded servers and hidden speakers are refused), and the card exists only
      * when that setup succeeds. Nothing is sent unless [manualTargetAllowed] accepts [ip] (T-07-29). Only a reply whose source
-     * address is [ip] counts (T-07-30). Waits at most [BridgeDeps.manualAnswerTimeoutMs]. Never saves anything (plan 07-13).
+     * address is [ip] counts (T-07-30). A Sonos speaker ignores a unicast M-SEARCH, so when no reply came within
+     * [BridgeDeps.manualSsdpGraceMs] the bridge fetches the device description from the typed address (plan 07-17: one GET to
+     * [BridgeDeps.manualDescriptionUrl], host must equal [ip]) and hands it to the registry as synthetic alive headers, so the
+     * same guards apply. Waits at most [BridgeDeps.manualAnswerTimeoutMs] in total. A speaker the bridge already lists is
+     * reported at once. Added and AlreadyListed results are saved (plan 07-13), every other result saves nothing.
      */
     suspend fun addManual(ip: InetAddress): ManualAddResult {
-        val result = probeManual(ip)
-        saveManual(ip, result)
-        emit("manual-add", "ip" to ip.hostAddress, "result" to result.javaClass.simpleName)
-        return result
+        val outcome = probeManual(ip)
+        saveManual(ip, outcome.result)
+        emit("manual-add", "ip" to ip.hostAddress, "result" to outcome.result.javaClass.simpleName, "via" to outcome.via)
+        return outcome.result
     }
+
+    /** What [probeManual] came to and which probe path produced the answer: `ssdp` (unicast search) or `http` (description). */
+    private class ProbeOutcome(val result: ManualAddResult, val via: String)
 
     /** D-06: a speaker that was added or was already listed is remembered; every other outcome leaves nothing behind. */
     private suspend fun saveManual(ip: InetAddress, result: ManualAddResult) {
@@ -474,12 +494,17 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         return true
     }
 
-    private suspend fun probeManual(ip: InetAddress): ManualAddResult {
-        if (!manualTargetAllowed(ip)) return ManualAddResult.Refused
+    /**
+     * The probe behind [addManual]: SSDP first (one unicast search, the reply reaches the registry through [clientEvents]), then,
+     * when nothing replied within [BridgeDeps.manualSsdpGraceMs], the HTTP description of the typed address ([describeManual]).
+     * Both paths end in the same loop over [replySources] and the registry, so Hidden, Added and NotUsable are decided in one place.
+     */
+    private suspend fun probeManual(ip: InetAddress): ProbeOutcome {
+        if (!manualTargetAllowed(ip)) return ProbeOutcome(ManualAddResult.Refused, "ssdp")
         val reg = registry
         val client = ssdp
         if (!started.get() || stopped.get() || reg == null || client == null) {
-            return ManualAddResult.NotUsable("The bridge is not running")
+            return ProbeOutcome(ManualAddResult.NotUsable("The bridge is not running"), "ssdp")
         }
         val host = ip.hostAddress.orEmpty()
         val listedBefore = reg.renderers().firstOrNull { it.address == host }?.udn
@@ -492,26 +517,38 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } catch (t: Throwable) {
             failure("manual-add-search", t)
         }
-        val deadline = System.nanoTime() + deps.manualAnswerTimeoutMs * 1_000_000L
+        val startedAt = System.nanoTime()
+        val deadline = startedAt + deps.manualAnswerTimeoutMs * 1_000_000L
+        val graceEnd = startedAt + minOf(deps.manualSsdpGraceMs, deps.manualAnswerTimeoutMs) * 1_000_000L
+        var via = "ssdp"
+        var fallbackTried = false
         while (true) {
             val reply = replySources[host]
             if (reply != null) {
-                if (deps.hidden?.contains(reply.udn) == true) return ManualAddResult.Hidden(reply.udn)
+                if (deps.hidden?.contains(reply.udn) == true) return ProbeOutcome(ManualAddResult.Hidden(reply.udn), via)
                 val running = reg.renderers().firstOrNull { it.udn == reply.udn }
                 if (running != null) {
                     val name = running.name ?: running.udn
-                    return if (listedBefore == running.udn) {
+                    val result = if (listedBefore == running.udn) {
                         ManualAddResult.AlreadyListed(running.udn, name)
                     } else {
                         ManualAddResult.Added(running.udn, name)
                     }
+                    return ProbeOutcome(result, via)
                 }
             }
-            if (stopped.get()) return ManualAddResult.NotUsable("The bridge stopped")
+            if (stopped.get()) return ProbeOutcome(ManualAddResult.NotUsable("The bridge stopped"), via)
+            if (!fallbackTried && reply == null && System.nanoTime() >= graceEnd) {
+                fallbackTried = true
+                via = "http"
+                val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                describeManual(reg, ip, remainingMs.coerceAtLeast(MANUAL_DESCRIBE_MIN_MS))?.let { return ProbeOutcome(it, via) }
+                continue
+            }
             if (System.nanoTime() >= deadline) break
             delay(MANUAL_POLL_MS)
         }
-        return if (replySources.containsKey(host)) {
+        val result = if (replySources.containsKey(host)) {
             ManualAddResult.NotUsable(
                 "It answered, but it is not a speaker that can play audio here: no AVTransport, filtered out by name, " +
                     "or its description names another address",
@@ -519,6 +556,59 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } else {
             ManualAddResult.NoAnswer
         }
+        return ProbeOutcome(result, via)
+    }
+
+    /**
+     * Plan 07-17, D-06: the HTTP fallback for a speaker that ignores a unicast search (a Sonos speaker). Fetches the device
+     * description at [BridgeDeps.manualDescriptionUrl] for [ip], only when [descriptionUrlAllowed] accepts the URL (T-07-45), and
+     * feeds it to the registry as the alive headers an SSDP reply would have carried: `LOCATION` is the URL just fetched, so the
+     * registry's host-equals-sender, private LAN, hidden and excluded-server guards apply unchanged (T-07-46). The `SERVER` header
+     * is left empty because [fetchDescription] does not expose response headers; a device that is not a MediaRenderer is stopped
+     * here or by the registry's setup. Returns a final result when the description decides it (not a speaker), otherwise null and
+     * the caller's loop reads the registry. Never throws except for cancellation.
+     */
+    private suspend fun describeManual(reg: RendererRegistry, ip: InetAddress, timeoutMs: Long): ManualAddResult? {
+        val host = ip.hostAddress.orEmpty()
+        val url = deps.manualDescriptionUrl(host)
+        if (!descriptionUrlAllowed(url, ip)) {
+            emit("manual-add-describe", "ip" to host, "result" to "Refused")
+            return null
+        }
+        val desc = try {
+            fetchDescription(deps.http, url, timeoutMs)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalArgumentException) {
+            // it served a document, but not a device description
+            emit("manual-add-describe", "ip" to host, "result" to "NotADevice")
+            return ManualAddResult.NotUsable("It answered, but its description is not a UPnP device description")
+        } catch (t: Throwable) {
+            failure("manual-add-describe", t)
+            return null
+        }
+        val udn = desc.udn.removePrefix("uuid:").removePrefix("UUID:").trim()
+        if (udn.isEmpty() || !desc.services.containsKey("urn:upnp-org:serviceId:AVTransport")) {
+            emit("manual-add-describe", "ip" to host, "result" to "NotARenderer")
+            return ManualAddResult.NotUsable("It answered, but it is not a speaker that can play audio here: no AVTransport")
+        }
+        val headers = mapOf(
+            "ST" to RENDERER_ST,
+            "USN" to "uuid:$udn::$RENDERER_ST",
+            "LOCATION" to url,
+            "CACHECONTROL" to "max-age=1800",
+            "SERVER" to "",
+        )
+        val port = URI(url).port.let { if (it == -1) 80 else it }
+        udnFromUsn(headers["USN"])?.let { noteReply(host, it) }
+        try {
+            reg.onAlive(headers, InetSocketAddress(ip, port))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("manual-add-describe", t)
+        }
+        return null
     }
 
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
