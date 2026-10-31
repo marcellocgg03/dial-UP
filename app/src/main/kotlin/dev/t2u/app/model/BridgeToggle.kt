@@ -39,3 +39,20 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
  * service is not already running (D-04, T-07-09, T-07-11).
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
+
+/** What an in-app restart of the bridge does first. */
+enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }
+
+/** A restart cuts playback like a switch-off does, so it asks first while anything is loading, playing or paused (D-03, T-07-42). */
+fun restartStep(casting: Int): RestartStep = if (casting > 0) RestartStep.CONFIRM_FIRST else RestartStep.RESTART_NOW
+
+/**
+ * Off, wait for the service to be gone, then on. Switching on runs even when the wait timed out, so a restart
+ * never leaves the bridge off by its own doing. Returns whether the old service stopped in time.
+ */
+suspend fun restartSequence(setEnabled: (Boolean) -> Unit, awaitStopped: suspend () -> Boolean): Boolean {
+    setEnabled(false)
+    val stopped = awaitStopped()
+    setEnabled(true)
+    return stopped
+}

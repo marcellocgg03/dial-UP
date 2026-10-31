@@ -21,8 +21,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.t2u.app.AppModel
+import dev.t2u.app.BatteryGate
 import dev.t2u.app.BridgeControl
 import dev.t2u.app.model.ToggleAction
 import dev.t2u.app.model.confirmText
@@ -39,6 +42,10 @@ fun Header(model: AppModel) {
     val context = LocalContext.current
     val status by model.status.collectAsStateWithLifecycle()
     val settings by model.settings.data.collectAsStateWithLifecycle()
+    val serviceUp by model.serviceRunning.collectAsStateWithLifecycle()
+    // the exemption dialog returns without a reliable result, so read it again whenever the app comes back
+    var exempt by remember { mutableStateOf(BatteryGate.isOpen(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { exempt = BatteryGate.isOpen(context) }
     var confirming by remember { mutableStateOf(0) }
 
     TopAppBar(
@@ -46,7 +53,7 @@ fun Header(model: AppModel) {
             Column {
                 Text("DialUP")
                 Text(
-                    text = statusLine(status),
+                    text = statusLine(status, settings.bridgeEnabled, exempt, serviceUp),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("status-line"),
                 )

@@ -5,7 +5,10 @@ package dev.t2u.app
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import dev.t2u.app.model.restartSequence
 import dev.t2u.app.model.shouldStartService
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The only code that starts or stops the bridge service from the UI (plan 07-04). The switch is one persisted
@@ -31,4 +34,18 @@ object BridgeControl {
             ServiceHub.service?.stopSelf()
         }
     }
+
+    /**
+     * Restarts the bridge: off, wait up to 15 s for the old service to be gone, then on. Only call it after
+     * [dev.t2u.app.model.restartStep] said RESTART_NOW or the author confirmed (plan 07-10's RestartPrompt does
+     * that): a restart ends playback like a switch-off does (D-03). The off-then-on order avoids starting the
+     * service while the old instance is still being destroyed. Returns false when the old service did not stop in time.
+     */
+    suspend fun restart(context: Context): Boolean =
+        restartSequence(
+            setEnabled = { setEnabled(context, it, "restart") },
+            awaitStopped = { withTimeoutOrNull(RESTART_STOP_TIMEOUT_MS) { ServiceHub.serviceFlow.first { it == null } } != null },
+        )
+
+    private const val RESTART_STOP_TIMEOUT_MS = 15_000L
 }

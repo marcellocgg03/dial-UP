@@ -7,18 +7,27 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
- * Starts the bridge after a phone reboot (D-03), through the same battery gate as every other start
- * (D-04). Without the exemption it writes one logcat line and starts nothing; the author is asked
- * for the exemption the next time the app is opened (D-15, no hint notification).
+ * Starts the bridge after a phone reboot (D-03), through the same gate as every other start: the author's
+ * switch must be on and the battery exemption held ([bootStartDecision]). Without them it writes one logcat
+ * line and starts nothing; the author is asked for the exemption the next time the app is opened (D-15, no
+ * hint notification).
  *
- * No "stopped by user" flag is stored, so a notification Stop followed by a reboot starts the bridge
- * again (Open Question 4). A force-stopped app gets no BOOT_COMPLETED until it is opened (D-01
- * accepts this). The receiver is not exported and ignores every action but BOOT_COMPLETED.
+ * The switch is persisted (plan 07-04, D-04), and a Stop from the notification, adb or the app turns it off,
+ * so a Stop followed by a reboot leaves the bridge off. This reverses the Phase 5 note that a Stop followed
+ * by a reboot starts the bridge again (Phase 5 Open Question 4, RESEARCH A1, UI-06). A force-stopped app gets
+ * no BOOT_COMPLETED until it is opened (D-01 accepts this). The receiver is not exported and ignores every
+ * action but BOOT_COMPLETED.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        if (!BatteryGate.isOpen(context)) {
+        val enabled = AppSettings.of(context).data.value.bridgeEnabled
+        if (!enabled) {
+            Log.i(TAG, "boot: the bridge is switched off in the app; not started")
+            return
+        }
+        val exempt = BatteryGate.isOpen(context)
+        if (!bootStartDecision(enabled, exempt)) {
             Log.i(TAG, "boot: the bridge was not started because the battery exemption is missing; opening the app asks for it")
             return
         }

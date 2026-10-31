@@ -39,6 +39,13 @@ fun startReasonOf(intentIsNull: Boolean, action: String?, reasonExtra: String?):
 @Suppress("UNUSED_PARAMETER")
 fun gateDecision(exempt: Boolean, enabled: Boolean, reason: StartReason): Boolean = exempt && enabled
 
+/**
+ * Whether BOOT_COMPLETED may start the bridge: the author's switch is on and the exemption is held (D-04,
+ * RESEARCH Pitfall 2). It is checked before the service is started, so the system never gets a foreground-service
+ * start the service would immediately deny.
+ */
+fun bootStartDecision(enabled: Boolean, exempt: Boolean): Boolean = enabled && exempt
+
 /** The Android side of the gate. */
 object BatteryGate {
     fun isOpen(context: Context): Boolean =

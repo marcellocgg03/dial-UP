@@ -60,8 +60,8 @@ object ServiceHub {
  *
  * Sticky on purpose since Phase 5 (D-01): a system kill shows as an exit-info entry followed by
  * `service-start reason=sticky`. The notification Stop action and a denied start return
- * START_NOT_STICKY, so they are not restarted. A denied start (no battery exemption, D-04 and D-12)
- * shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
+ * START_NOT_STICKY, so they are not restarted; Stop also persists the switch off (plan 07-04). A denied start
+ * (no battery exemption, D-12, or the switch off, D-04) shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
  * from the first onStartCommand, which knows the start reason ([startReasonOf]).
  */
 class BridgeService : Service(), SpikeHost {
@@ -151,6 +151,9 @@ class BridgeService : Service(), SpikeHost {
         if (startForegroundFailed) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
             evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
+            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on (D-04, RESEARCH A1)
+            AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
+            evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
             stopSelf()
             return START_NOT_STICKY
         }
