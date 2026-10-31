@@ -6,6 +6,7 @@ import android.content.Context
 import dev.t2u.app.model.BridgeStatus
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
+import dev.t2u.renderer.ManualSpeaker
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.renderer.parseManualIp
@@ -89,11 +90,29 @@ class AppModel private constructor(context: Context) {
         }
     }
 
+    /** GUI-04, D-07: the speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
+    val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
+
+    /**
+     * GUI-04, D-07: Remove on a manual speaker's card. Through the running bridge when there is one (it also takes the speaker out
+     * of the cast menus); with the bridge off straight on the store. Fire-and-forget: a failure leaves the speaker listed.
+     */
+    fun removeManual(udn: String): Job = scope.launch {
+        try {
+            val bridge = cast.value?.currentBridge()
+            if (bridge == null || !bridge.removeManual(udn)) SpeakerStores.of(appContext).manual.remove(udn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the speaker stays listed
+        }
+    }
+
     /**
      * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
      * sent (T-07-29); with the bridge off the answer is [ManualAddResult.NotUsable] saying to switch it on, because the probe runs
      * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
-     * reported as [ManualAddResult.NotUsable]; cancellation propagates. Nothing is saved here (plan 07-13).
+     * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added (plan 07-13).
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null

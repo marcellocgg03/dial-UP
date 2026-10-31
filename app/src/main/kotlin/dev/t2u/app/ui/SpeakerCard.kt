@@ -61,6 +61,7 @@ fun SpeakerCard(
     buttons: CardButtons = buttonsFor(speaker, busy = false),
     onAction: (SpeakerAction) -> Unit = {},
     onHide: () -> Unit = {},
+    onRemove: () -> Unit = {},
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
@@ -98,21 +99,33 @@ fun SpeakerCard(
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // GUI-03: the overflow menu. Plan 07-14 adds Remove for manual speakers to the same menu.
+            // GUI-03: the overflow menu. D-07: a manual speaker also has Remove; Hide is offered only while the speaker answers.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Hide from cast menus") },
-                        onClick = {
-                            menuOpen = false
-                            onHide()
-                        },
-                        modifier = Modifier.testTag("menu-hide-$udn"),
-                    )
+                    if (speaker.online) {
+                        DropdownMenuItem(
+                            text = { Text("Hide from cast menus") },
+                            onClick = {
+                                menuOpen = false
+                                onHide()
+                            },
+                            modifier = Modifier.testTag("menu-hide-$udn"),
+                        )
+                    }
+                    if (speaker.manual) {
+                        DropdownMenuItem(
+                            text = { Text("Remove") },
+                            onClick = {
+                                menuOpen = false
+                                onRemove()
+                            },
+                            modifier = Modifier.testTag("menu-remove-$udn"),
+                        )
+                    }
                 }
             }
         }
