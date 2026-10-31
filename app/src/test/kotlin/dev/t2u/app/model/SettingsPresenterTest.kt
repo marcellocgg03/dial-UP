@@ -6,6 +6,7 @@ import dev.t2u.app.AppSettingsData
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YtDlpUpdateOutcome
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -270,4 +271,104 @@ class SettingsPresenterTest {
     private fun base() = EffectiveSettings(
         logEnabled = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
     )
+
+    private fun outcome(ok: Boolean = true, before: String? = "2026.08.19", after: String? = "2026.10.20", status: String = "DONE", error: String? = null) =
+        YtDlpUpdateOutcome(ok, "ui", "stable", before, after, status, 10, error)
+
+    @Test
+    fun `the update starts idle, runs, then shows the outcome`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val bridge = FakeBridgePort().also { it.gate = gate; it.outcome = outcome() }
+        val p = presenter(bridge = bridge)
+        assertEquals(UpdateUi.Idle, p.state.value.update)
+
+        p.updateNow()
+        runCurrent()
+        assertEquals(UpdateUi.Running, p.state.value.update)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(UpdateUi.Done(outcome()), p.state.value.update)
+    }
+
+    @Test
+    fun `a second update while one runs is ignored`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val bridge = FakeBridgePort().also { it.gate = gate; it.outcome = outcome() }
+        val p = presenter(bridge = bridge)
+        p.updateNow()
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        assertEquals(1, bridge.updateCalls)
+    }
+
+    @Test
+    fun `with the bridge off the update is unavailable and the bridge is not called`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(bridge = bridge)
+        assertEquals(UpdateUi.Unavailable, p.state.value.update)
+        p.updateNow()
+        runCurrent()
+        assertEquals(0, bridge.updateCalls)
+        assertEquals(UpdateUi.Unavailable, p.state.value.update)
+    }
+
+    @Test
+    fun `the update message says what happened`() {
+        assertEquals("Updated 2026.08.19 \u2192 2026.10.20", updateMessage(outcome()))
+        assertEquals("Already up to date (2026.10.20)", updateMessage(outcome(before = "2026.10.20", after = "2026.10.20")))
+        assertEquals(
+            "An update or a lookup is running; try again in a minute",
+            updateMessage(outcome(ok = false, status = "BUSY", before = null, after = null)),
+        )
+        assertEquals("Update failed: no network", updateMessage(outcome(ok = false, status = "FAILED", error = "no network")))
+    }
+
+    @Test
+    fun `choosing the nightly channel stores it and needs no restart, master is ignored`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertEquals("stable", p.state.value.ytdlpChannel)
+
+        assertFalse(p.setYtdlpChannel("nightly"))
+        runCurrent()
+        assertEquals("nightly", settings.data.value.ytdlpChannel)
+        assertEquals("nightly", p.state.value.ytdlpChannel)
+        assertFalse(p.restart.visible.value)
+
+        assertFalse(p.setYtdlpChannel("master"))
+        assertEquals("nightly", settings.data.value.ytdlpChannel)
+        assertEquals(1, settings.updates)
+    }
+
+    @Test
+    fun `the version is the bridge's while running and a dash while off`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        assertEquals("2026.08.19", p.state.value.ytdlpVersion)
+
+        bridge.setRunning(false)
+        runCurrent()
+        assertEquals("-", p.state.value.ytdlpVersion)
+
+        val off = presenter(bridge = FakeBridgePort(running = false))
+        assertEquals("-", off.state.value.ytdlpVersion)
+    }
+
+    @Test
+    fun `the version is read again after an update`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome() }
+        val p = presenter(bridge = bridge)
+        bridge.version = "2026.10.20"
+        p.updateNow()
+        runCurrent()
+        assertEquals("2026.10.20", p.state.value.ytdlpVersion)
+    }
+
+    @Test
+    fun `the bundled components text names what an app update brings`() {
+        assertTrue("Python 3.12.11" in BUNDLED_COMPONENTS && "ffmpeg 7.1.1" in BUNDLED_COMPONENTS && "QuickJS" in BUNDLED_COMPONENTS)
+        assertTrue("app update" in BUNDLED_COMPONENTS)
+    }
 }
