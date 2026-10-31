@@ -5,8 +5,10 @@ package dev.t2u.app
 import android.content.Context
 import dev.t2u.app.model.BridgeStatus
 import dev.t2u.renderer.HiddenSpeaker
+import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
+import dev.t2u.renderer.parseManualIp
 import dev.t2u.renderer.perform
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +89,24 @@ class AppModel private constructor(context: Context) {
         }
     }
 
+    /**
+     * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
+     * sent (T-07-29); with the bridge off the answer is [ManualAddResult.NotUsable] saying to switch it on, because the probe runs
+     * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
+     * reported as [ManualAddResult.NotUsable]; cancellation propagates. Nothing is saved here (plan 07-13).
+     */
+    suspend fun addManual(text: String): ManualAddResult? {
+        val ip = parseManualIp(text) ?: return null
+        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(BRIDGE_OFF_ADD)
+        return try {
+            withContext(Dispatchers.Default) { bridge.addManual(ip) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ManualAddResult.NotUsable("Could not add the speaker: ${e.javaClass.simpleName}")
+        }
+    }
+
     /** Fire-and-forget [controlNow] for a card tap; it never throws into the UI. */
     fun control(udn: String, action: SpeakerAction): Job = scope.launch { controlNow(udn, action) }
 
@@ -109,6 +129,9 @@ class AppModel private constructor(context: Context) {
 
     companion object {
         private const val CONTROL_TIMEOUT_MS = 20_000L
+
+        /** What the add dialog and the Add button say while the bridge is off. */
+        const val BRIDGE_OFF_ADD = "Switch the bridge on to add a speaker"
 
         @Volatile private var instance: AppModel? = null
 

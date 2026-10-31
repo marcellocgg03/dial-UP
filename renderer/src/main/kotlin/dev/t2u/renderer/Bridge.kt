@@ -40,6 +40,7 @@ import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
+import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -144,6 +145,10 @@ data class BridgeDeps(
      * its process-level store, which also lives while the bridge is off.
      */
     val hidden: HiddenSpeakers? = null,
+    /** GUI-04: the UDP port a speaker added by address is searched at. 1900 on a real network; tests point it at the fake speaker. */
+    val manualSsdpPort: Int = MANUAL_SSDP_PORT,
+    /** GUI-04: how long [Bridge.addManual] waits for the speaker's answer and its description. */
+    val manualAnswerTimeoutMs: Long = MANUAL_ANSWER_TIMEOUT_MS,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -155,6 +160,12 @@ private const val DROP_LOG_WINDOW_MS = 60_000L
  * sends it.
  */
 const val HOUSEKEEPING_INTERVAL_MS = 300_000L
+
+/** How many sources the per-address reply record holds (GUI-04, T-07-32); the oldest goes when a new source arrives at the cap. */
+private const val MANUAL_REPLY_CAP = 64
+
+/** How often [Bridge.addManual] looks for the answer. */
+private const val MANUAL_POLL_MS = 100L
 
 /** A receiver younger than this is kept in the move list even while it is still "stopped" (its start has not run yet). */
 private const val TRACK_GRACE_MS = 120_000L
@@ -229,6 +240,18 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     @Volatile private var lastDialAt: Long? = null
 
     private val dropLogged = ConcurrentHashMap<String, Long>()
+
+    /** The last search reply from each source address: its UDN and when it came. [addManual] reads it; capped, cleared on stop. */
+    private class SourceReply(val udn: String, val at: Long)
+
+    private val replySources = ConcurrentHashMap<String, SourceReply>()
+
+    private fun noteReply(address: String, udn: String) {
+        if (replySources.size >= MANUAL_REPLY_CAP && !replySources.containsKey(address)) {
+            replySources.entries.minByOrNull { it.value.at }?.let { replySources.remove(it.key) }
+        }
+        replySources[address] = SourceReply(udn, System.currentTimeMillis())
+    }
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
 
@@ -326,6 +349,66 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             }
         }
         return true
+    }
+
+    /**
+     * GUI-04, D-06: adds the speaker at [ip] by asking it directly. One unicast M-SEARCH goes to [ip] on
+     * [BridgeDeps.manualSsdpPort]; the reply reaches the registry like any search reply (so its guards apply: the LOCATION host
+     * must equal the sender and be private LAN, excluded servers and hidden speakers are refused), and the card exists only
+     * when that setup succeeds. Nothing is sent unless [manualTargetAllowed] accepts [ip] (T-07-29). Only a reply whose source
+     * address is [ip] counts (T-07-30). Waits at most [BridgeDeps.manualAnswerTimeoutMs]. Never saves anything (plan 07-13).
+     */
+    suspend fun addManual(ip: InetAddress): ManualAddResult {
+        val result = probeManual(ip)
+        emit("manual-add", "ip" to ip.hostAddress, "result" to result.javaClass.simpleName)
+        return result
+    }
+
+    private suspend fun probeManual(ip: InetAddress): ManualAddResult {
+        if (!manualTargetAllowed(ip)) return ManualAddResult.Refused
+        val reg = registry
+        val client = ssdp
+        if (!started.get() || stopped.get() || reg == null || client == null) {
+            return ManualAddResult.NotUsable("The bridge is not running")
+        }
+        val host = ip.hostAddress.orEmpty()
+        val listedBefore = reg.renderers().firstOrNull { it.address == host }?.udn
+        // an answer from before this probe must not count
+        replySources.remove(host)
+        try {
+            withContext(Dispatchers.IO) { client.searchAt(InetSocketAddress(ip, deps.manualSsdpPort), RENDERER_ST, 1) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("manual-add-search", t)
+        }
+        val deadline = System.nanoTime() + deps.manualAnswerTimeoutMs * 1_000_000L
+        while (true) {
+            val reply = replySources[host]
+            if (reply != null) {
+                if (deps.hidden?.contains(reply.udn) == true) return ManualAddResult.Hidden(reply.udn)
+                val running = reg.renderers().firstOrNull { it.udn == reply.udn }
+                if (running != null) {
+                    val name = running.name ?: running.udn
+                    return if (listedBefore == running.udn) {
+                        ManualAddResult.AlreadyListed(running.udn, name)
+                    } else {
+                        ManualAddResult.Added(running.udn, name)
+                    }
+                }
+            }
+            if (stopped.get()) return ManualAddResult.NotUsable("The bridge stopped")
+            if (System.nanoTime() >= deadline) break
+            delay(MANUAL_POLL_MS)
+        }
+        return if (replySources.containsKey(host)) {
+            ManualAddResult.NotUsable(
+                "It answered, but it is not a speaker that can play audio here: no AVTransport, filtered out by name, " +
+                    "or its description names another address",
+            )
+        } else {
+            ManualAddResult.NoAnswer
+        }
     }
 
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
@@ -498,6 +581,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     private fun clientEvents(reg: RendererRegistry) = object : SsdpClientEvents {
         override fun onAlive(headers: Map<String, String>, src: InetSocketAddress) {
             if (stopped.get()) return
+            udnFromUsn(headers["USN"])?.let { noteReply(src.address.hostAddress.orEmpty(), it) }
             handlerScope.launch {
                 try {
                     reg.onAlive(headers, src)
@@ -1056,6 +1140,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }
             _castCount.value = BridgeCount(0, 0)
             _speakers.value = emptyList()
+            replySources.clear()
             emit("bridge", "event" to "stopped")
         }
     }

@@ -26,6 +26,24 @@ fun isPrivateLanAddress(a: InetAddress): Boolean = when (a) {
 }
 
 /**
+ * Plain dotted-decimal IPv4 only (GUI-04, T-07-29): four parts, each 0..255 in decimal with no leading zero, no hex or octal
+ * spelling, no empty part, no whitespace. Built with getByAddress, so DNS is never consulted. Null for anything else.
+ */
+fun parseIpv4Literal(text: String): Inet4Address? {
+    val parts = text.split('.')
+    if (parts.size != 4) return null
+    val bytes = ByteArray(4)
+    for ((i, p) in parts.withIndex()) {
+        // plain decimal only: no hex, no octal-looking leading zeros, no empty parts
+        if (p.isEmpty() || p.length > 3 || !p.all { it in '0'..'9' } || (p.length > 1 && p[0] == '0')) return null
+        val v = p.toInt()
+        if (v > 255) return null
+        bytes[i] = v.toByte()
+    }
+    return InetAddress.getByAddress(bytes) as? Inet4Address
+}
+
+/**
  * Application interceptor (it runs before DNS and before any connect). Plain-HTTP requests must name
  * an IP literal that [isPrivateLanAddress] accepts; names (including localhost) are refused without a
  * lookup. HTTPS passes unchanged. The guard holds no state, so concurrent calls cannot influence each other.
@@ -59,17 +77,7 @@ class PrivateLanGuard : Interceptor {
                 null
             }
         }
-        val parts = host.split('.')
-        if (parts.size != 4) return null
-        val bytes = ByteArray(4)
-        for ((i, p) in parts.withIndex()) {
-            // plain decimal only: no hex, no octal-looking leading zeros, no empty parts
-            if (p.isEmpty() || p.length > 3 || !p.all { it in '0'..'9' } || (p.length > 1 && p[0] == '0')) return null
-            val v = p.toInt()
-            if (v > 255) return null
-            bytes[i] = v.toByte()
-        }
-        return InetAddress.getByAddress(bytes)
+        return parseIpv4Literal(host)
     }
 }
 

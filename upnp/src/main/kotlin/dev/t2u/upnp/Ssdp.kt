@@ -107,6 +107,22 @@ class Ssdp(
     }
 
     /**
+     * GUI-04: one unicast M-SEARCH from every search socket to [target], the way a speaker that multicast discovery cannot
+     * reach is asked directly (UPnP 1.1: a device answers a unicast search). The reply comes back to the socket that sent
+     * it and reaches `onAlive` like any search reply. Unlike [search], a loopback socket may send here: the target is not multicast.
+     */
+    fun searchAt(target: InetSocketAddress, st: String, mx: Int = 1) {
+        val bytes = buildSearch(st, mx)
+        for (s in sockets) {
+            try {
+                s.socket.send(DatagramPacket(bytes, bytes.size, target))
+            } catch (t: Throwable) {
+                events.onError("search-at:${s.bind.hostAddress}", t)
+            }
+        }
+    }
+
+    /**
      * A datagram the app received on the responder's port-1900 listener: NOTIFY with NTS ssdp:alive
      * becomes onAlive, ssdp:byebye becomes onByebye, anything else is ignored.
      */

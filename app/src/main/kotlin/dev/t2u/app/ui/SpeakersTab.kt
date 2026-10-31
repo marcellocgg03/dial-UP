@@ -4,7 +4,6 @@ package dev.t2u.app.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,19 +45,26 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val running by model.serviceRunning.collectAsStateWithLifecycle()
     val hidden by model.hidden.collectAsStateWithLifecycle()
     var hiddenExpanded by rememberSaveable { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
     val noCards = !running || speakers.isEmpty()
-    if (noCards && hidden.isEmpty()) {
-        if (!running) Message("The bridge is off", "bridge-off", modifier) else Message("Looking for speakers on the Wi-Fi", "speakers-empty", modifier)
-        return
-    }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item(key = "add-speaker") {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = { adding = true }, enabled = running, modifier = Modifier.testTag("btn-add-speaker")) {
+                    Text("Add speaker")
+                }
+                if (!running) {
+                    Text(AppModel.BRIDGE_OFF_ADD, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
+                }
+            }
+        }
         if (noCards) {
             item(key = "empty-note") {
                 val (text, tag) = if (!running) "The bridge is off" to "bridge-off" else "Looking for speakers on the Wi-Fi" to "speakers-empty"
@@ -92,6 +99,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
             }
         }
     }
+    if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
 }
 
 /** One hidden speaker: its name and address, and a Restore button (GUI-03). */
@@ -107,12 +115,5 @@ private fun HiddenRow(speaker: HiddenSpeaker, onRestore: () -> Unit) {
             if (speaker.address.isNotEmpty()) Text(speaker.address, style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = onRestore, modifier = Modifier.testTag("btn-restore-${speaker.udn}")) { Text("Restore") }
-    }
-}
-
-@Composable
-private fun Message(text: String, tag: String, modifier: Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag(tag))
     }
 }
