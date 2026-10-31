@@ -5,6 +5,7 @@ package dev.t2u.app.model
 import dev.t2u.app.AppSettingsData
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
+import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YtDlpUpdateOutcome
 import dev.t2u.renderer.OUTPUT_FORMATS
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +62,33 @@ val CACHE_STEPS: List<Int> = listOf(0, 64, 128, 256, 512, 1024, 2048, 4096)
 const val CACHE_ZERO_WARNING =
     "With 0 MB only the file just built is kept: a prepared next track in MP4 or FLAC may be rebuilt and gapless changes can suffer"
 
+/** Where the yt-dlp Update now button stands. */
+sealed interface UpdateUi {
+    data object Idle : UpdateUi
+    data object Running : UpdateUi
+    data class Done(val outcome: YtDlpUpdateOutcome) : UpdateUi
+
+    /** The bridge is off, so there is no updater to ask. */
+    data object Unavailable : UpdateUi
+}
+
+/**
+ * Python, ffmpeg and QuickJS are inside youtubedl-android 0.18.1 and cannot be updated at run time, only yt-dlp can (RESEARCH
+ * Pitfall 11); the tab says so instead of offering an updater for them.
+ */
+const val BUNDLED_COMPONENTS =
+    "Python 3.12.11, ffmpeg 7.1.1 and QuickJS come with youtubedl-android 0.18.1 inside the app and are updated by an app update"
+
+private const val BUSY_STATUS = "BUSY"
+
+/** The one line the result of an Update now press becomes. The arrow is U+2192. */
+fun updateMessage(o: YtDlpUpdateOutcome): String = when {
+    o.status == BUSY_STATUS -> "An update or a lookup is running; try again in a minute"
+    !o.ok -> "Update failed: ${o.error ?: o.status}"
+    o.before != null && o.after != null && o.before != o.after -> "Updated ${o.before} \u2192 ${o.after}"
+    else -> "Already up to date (${o.after ?: o.before ?: "unknown version"})"
+}
+
 /** What the Settings tab shows. */
 data class SettingsUi(
     val phoneOnly: Boolean = true,
@@ -75,6 +103,10 @@ data class SettingsUi(
     val cacheUsage: CacheInfo? = null,
     val outputFormat: String = "auto",
     val bridgeRunning: Boolean = false,
+    /** The installed yt-dlp version; "-" while the bridge is off or the version cannot be read. */
+    val ytdlpVersion: String = "-",
+    val ytdlpChannel: String = "stable",
+    val update: UpdateUi = UpdateUi.Unavailable,
     /** A one-line result of the last action (cleared cache and so on); null when there is none. */
     val message: String? = null,
 )
@@ -112,13 +144,25 @@ class SettingsPresenter(
                         cacheCustom = e.cacheMb !in CACHE_STEPS,
                         cacheWarning = if (e.cacheMb == 0) CACHE_ZERO_WARNING else null,
                         outputFormat = e.outputFormat,
+                        ytdlpChannel = e.ytdlpChannel,
                     )
                 }
             }
         }
         scope.launch {
             bridge.running.collectLatest { up ->
-                ui.update { it.copy(bridgeRunning = up, cacheUsage = if (up) it.cacheUsage else null) }
+                ui.update {
+                    it.copy(
+                        bridgeRunning = up,
+                        cacheUsage = if (up) it.cacheUsage else null,
+                        ytdlpVersion = if (up) it.ytdlpVersion else "-",
+                        update = when {
+                            !up -> UpdateUi.Unavailable
+                            it.update == UpdateUi.Unavailable -> UpdateUi.Idle
+                            else -> it.update
+                        },
+                    )
+                }
                 if (up) refreshUsage()
             }
         }
@@ -126,7 +170,8 @@ class SettingsPresenter(
 
     private suspend fun refreshUsage() {
         val info = bridge.cacheInfo()
-        ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info) else it }
+        val version = bridge.ytdlpVersion()
+        ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info, ytdlpVersion = version ?: it.ytdlpVersion) else it }
     }
 
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
@@ -184,6 +229,35 @@ class SettingsPresenter(
         scope.launch {
             val n = bridge.clearCache()
             if (n != null) ui.update { it.copy(message = clearedMessage(n)) }
+            refreshUsage()
+        }
+    }
+
+    /** stable or nightly; anything else is ignored. The updater reads it at each attempt, so no restart. */
+    fun setYtdlpChannel(channel: String): Boolean {
+        if (channel !in YTDLP_CHANNELS) return false
+        settings.update { it.copy(ytdlpChannel = channel) }
+        return changed(SettingKey.CHANNEL)
+    }
+
+    /** Runs one yt-dlp update now. One at a time; unavailable while the bridge is off. */
+    fun updateNow() {
+        var start = false
+        ui.update {
+            if (it.bridgeRunning && it.update != UpdateUi.Running) {
+                start = true
+                it.copy(update = UpdateUi.Running)
+            } else {
+                it
+            }
+        }
+        if (!start) return
+        scope.launch {
+            val outcome = bridge.updateNow() ?: YtDlpUpdateOutcome(
+                ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
+                status = "UNAVAILABLE", ms = 0, error = "the bridge is not running",
+            )
+            ui.update { if (it.bridgeRunning) it.copy(update = UpdateUi.Done(outcome)) else it }
             refreshUsage()
         }
     }

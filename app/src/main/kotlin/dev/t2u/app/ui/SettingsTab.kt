@@ -4,6 +4,7 @@ package dev.t2u.app.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -30,6 +32,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.t2u.app.model.CACHE_STEPS
 import dev.t2u.app.model.SettingsPresenter
 import dev.t2u.app.model.SettingsUi
+import dev.t2u.app.model.UpdateUi
+import dev.t2u.app.model.BUNDLED_COMPONENTS
+import dev.t2u.app.model.updateMessage
 
 private val FORMATS = listOf(
     "auto" to "Automatic",
@@ -91,7 +96,44 @@ fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
             tag = "setting-format",
             optionTag = { "format-option-${FORMATS[it].first}" },
         )
+        HorizontalDivider()
+        YtDlpSection(ui, presenter)
     }
+}
+
+private val CHANNELS = listOf("stable", "nightly")
+
+@Composable
+private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
+    val running = ui.update == UpdateUi.Running
+    ListItem(
+        headlineContent = { Text("yt-dlp") },
+        supportingContent = {
+            Column {
+                Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
+                Text(BUNDLED_COMPONENTS, style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    onClick = presenter::updateNow,
+                    enabled = ui.bridgeRunning && !running,
+                    modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
+                ) { Text("Update now") }
+                if (!ui.bridgeRunning) Text("Start the bridge to update yt-dlp", style = MaterialTheme.typography.bodySmall)
+                if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+                (ui.update as? UpdateUi.Done)?.let {
+                    Text(updateMessage(it.outcome), modifier = Modifier.padding(top = 8.dp).testTag("update-result"))
+                }
+            }
+        },
+        trailingContent = {
+            Choice(
+                current = ui.ytdlpChannel.replaceFirstChar { it.uppercase() },
+                options = CHANNELS.map { it.replaceFirstChar { c -> c.uppercase() } },
+                onPick = { i -> presenter.setYtdlpChannel(CHANNELS[i]) },
+                tag = "setting-channel",
+                optionTag = { "channel-option-${CHANNELS[it]}" },
+            )
+        },
+    )
 }
 
 @Composable
