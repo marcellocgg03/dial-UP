@@ -13,18 +13,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.t2u.app.AppModel
+import dev.t2u.app.model.statusLine
 
-/** The app bar: the name and one line saying whether the bridge runs. */
+/** The app bar: the name and one line saying whether the bridge runs and who may cast to it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Header(model: AppModel) {
-    val running by model.serviceRunning.collectAsStateWithLifecycle()
+    val status by model.status.collectAsStateWithLifecycle()
     TopAppBar(
         title = {
             Column {
                 Text("DialUP")
                 Text(
-                    text = if (running) "Running" else "Bridge off",
+                    text = statusLine(status),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("status-line"),
                 )
