@@ -4,6 +4,7 @@ package dev.t2u.app
 
 import android.content.Context
 import dev.t2u.app.model.BridgeStatus
+import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.renderer.perform
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.stateIn
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppModel private constructor(context: Context) {
+    private val appContext: Context = context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val settings: Settings = AppSettings.of(context)
@@ -64,6 +66,24 @@ class AppModel private constructor(context: Context) {
             throw e
         } catch (_: Exception) {
             // the speaker simply stays where it is
+        }
+    }
+
+    /** GUI-03: the hidden speakers; the store lives with the process, so the list is right while the bridge is off too. */
+    val hidden: StateFlow<List<HiddenSpeaker>> = SpeakerStores.of(context).hidden.entries
+
+    /**
+     * GUI-03: Restore. Through the running bridge when there is one, which also searches for the speaker at once; with the
+     * bridge off straight on the store, and the bridge's next start finds the speaker. Fire-and-forget.
+     */
+    fun unhide(udn: String): Job = scope.launch {
+        try {
+            val bridge = cast.value?.currentBridge()
+            if (bridge == null || !bridge.unhide(udn)) SpeakerStores.of(appContext).hidden.remove(udn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the speaker stays hidden
         }
     }
 

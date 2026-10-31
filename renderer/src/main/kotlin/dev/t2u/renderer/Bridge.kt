@@ -307,6 +307,27 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         return true
     }
 
+    /**
+     * GUI-03: brings the hidden speaker [udn] back. It leaves the hidden set, then the bridge searches for speakers at once so
+     * the speaker returns without waiting for the next periodic search. False when it was not hidden (or there is no store).
+     */
+    suspend fun unhide(udn: String): Boolean {
+        val store = deps.hidden ?: return false
+        if (!store.remove(udn)) return false
+        emit("unhidden", "udn" to udn)
+        if (started.get() && !stopped.get()) {
+            try {
+                // the field is read at the moment of use; a client a rebind just stopped answers with nothing
+                withContext(Dispatchers.IO) { ssdp?.search(RENDERER_ST, 3) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                failure("unhide-search", t)
+            }
+        }
+        return true
+    }
+
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
     fun start() {
         check(started.compareAndSet(false, true)) { "already started" }

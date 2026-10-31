@@ -2,46 +2,68 @@
 // Original Kotlin code for Tube2U[PnP] for Android.
 package dev.t2u.app.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.t2u.app.AppModel
 import dev.t2u.app.model.SpeakersPresenter
 import dev.t2u.app.model.buttonsFor
+import dev.t2u.renderer.HiddenSpeaker
 
 /**
  * The Speakers list (GUI-01): one card per speaker the running bridge can cast to. With the service down it says so instead of
- * showing a list that no longer follows anything. Each item is a [SpeakerCard].
+ * showing a list that no longer follows anything. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
+ * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too.
  */
 @Composable
 fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val speakers by model.speakers.collectAsStateWithLifecycle()
     val running by model.serviceRunning.collectAsStateWithLifecycle()
+    val hidden by model.hidden.collectAsStateWithLifecycle()
+    var hiddenExpanded by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
-    when {
-        !running -> Message("The bridge is off", "bridge-off", modifier)
-        speakers.isEmpty() -> Message("Looking for speakers on the Wi-Fi", "speakers-empty", modifier)
-        else -> LazyColumn(
-            modifier = modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+    val noCards = !running || speakers.isEmpty()
+    if (noCards && hidden.isEmpty()) {
+        if (!running) Message("The bridge is off", "bridge-off", modifier) else Message("Looking for speakers on the Wi-Fi", "speakers-empty", modifier)
+        return
+    }
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (noCards) {
+            item(key = "empty-note") {
+                val (text, tag) = if (!running) "The bridge is off" to "bridge-off" else "Looking for speakers on the Wi-Fi" to "speakers-empty"
+                Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag(tag))
+            }
+        } else {
             items(speakers, key = { it.udn }) { speaker ->
                 SpeakerCard(
                     speaker,
@@ -51,6 +73,40 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 )
             }
         }
+        if (hidden.isNotEmpty()) {
+            item(key = "hidden-header") {
+                Text(
+                    (if (hiddenExpanded) "Hidden (${hidden.size}) ▴" else "Hidden (${hidden.size}) ▾"),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { hiddenExpanded = !hiddenExpanded }
+                        .padding(vertical = 12.dp)
+                        .testTag("section-hidden"),
+                )
+            }
+            if (hiddenExpanded) {
+                items(hidden, key = { "hidden-${it.udn}" }) { speaker ->
+                    HiddenRow(speaker, onRestore = { model.unhide(speaker.udn) })
+                }
+            }
+        }
+    }
+}
+
+/** One hidden speaker: its name and address, and a Restore button (GUI-03). */
+@Composable
+private fun HiddenRow(speaker: HiddenSpeaker, onRestore: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().testTag("hidden-row-${speaker.udn}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(speaker.name.ifEmpty { speaker.udn }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (speaker.address.isNotEmpty()) Text(speaker.address, style = MaterialTheme.typography.bodySmall)
+        }
+        TextButton(onClick = onRestore, modifier = Modifier.testTag("btn-restore-${speaker.udn}")) { Text("Restore") }
     }
 }
 

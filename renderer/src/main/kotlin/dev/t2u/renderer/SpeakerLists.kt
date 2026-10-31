@@ -21,6 +21,9 @@ import java.io.IOException
 
 private val prettyHiddenJson = Json { prettyPrint = true }
 
+/** T-07-27: the hidden set never holds more than this many speakers (a damaged or runaway file cannot grow it). */
+const val MAX_HIDDEN = 128
+
 /** A speaker the author hid: its UDN and what it was called and where it was when it was hidden. */
 data class HiddenSpeaker(val udn: String, val name: String, val address: String)
 
@@ -49,10 +52,15 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
             val data = Json.parseToJsonElement(file.readText())
             if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
             for ((udn, value) in data) {
-                val entry = value as? JsonObject
-                val name = (entry?.get("name") as? JsonPrimitive)?.content.orEmpty()
-                val address = (entry?.get("address") as? JsonPrimitive)?.content.orEmpty()
-                loaded[udn] = HiddenSpeaker(udn, name, address)
+                val name = stringField(value, "name")
+                val address = stringField(value, "address")
+                when {
+                    name == null || address == null ->
+                        warn("Ignoring entry '$udn' in $file: it needs a string name and a string address")
+                    loaded.size >= MAX_HIDDEN ->
+                        warn("Ignoring entry '$udn' in $file: more than $MAX_HIDDEN hidden speakers")
+                    else -> loaded[udn] = HiddenSpeaker(udn, name, address)
+                }
             }
         } catch (_: java.io.FileNotFoundException) {
             // nothing hidden yet
@@ -72,11 +80,20 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
     /** True when [udn] is hidden. Safe from any thread. */
     fun contains(udn: String): Boolean = udn in snapshot
 
-    /** Hides [entry] (a second add of the same UDN refreshes its name and address) and writes the file. True when it is hidden afterwards. */
+    /** Hides [entry] (a second add of the same UDN refreshes its name and address) and writes the file. False, with a warning, when [MAX_HIDDEN] other speakers are hidden already. */
     suspend fun add(entry: HiddenSpeaker): Boolean {
-        synchronized(lock) {
-            items[entry.udn] = entry
-            publish()
+        val accepted = synchronized(lock) {
+            if (entry.udn !in items && items.size >= MAX_HIDDEN) {
+                false
+            } else {
+                items[entry.udn] = entry
+                publish()
+                true
+            }
+        }
+        if (!accepted) {
+            warn("Not hiding '${entry.udn}': $MAX_HIDDEN speakers are hidden already")
+            return false
         }
         persist()
         return true
@@ -91,6 +108,11 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
         if (removed) persist()
         return removed
+    }
+
+    private fun stringField(entry: kotlinx.serialization.json.JsonElement, key: String): String? {
+        val field = (entry as? JsonObject)?.get(key) as? JsonPrimitive ?: return null
+        return if (field.isString) field.content else null
     }
 
     /** Call with [lock] held. */
