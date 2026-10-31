@@ -143,14 +143,14 @@ main() {
     dump)
       get_dump
       ;;
-    has | text | count | tap-text)
+    has | text | count)
       need_arg "$sub" "${2:-}"
       get_dump | query "$sub" "$2"
       ;;
-    tap)
-      need_arg tap "${2:-}"
+    tap | tap-text)
+      need_arg "$sub" "${2:-}"
       local xy
-      xy="$(get_dump | query tap "$2")"
+      xy="$(get_dump | query "$sub" "$2")"
       if [ -n "${UI_DUMP_FILE:-}" ]; then
         printf '%s\n' "$xy"
       else
