@@ -45,6 +45,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -355,17 +361,63 @@ class Renderer(
     @Volatile override var lastSeen: Long = deps.clock()
         private set
 
-    @Volatile override var name: String? = null
-        private set
+    private val _name = MutableStateFlow<String?>(null)
+
+    override var name: String?
+        get() = _name.value
+        private set(value) {
+            _name.value = value
+        }
 
     @Volatile var description: DeviceDescription? = null
         private set
 
-    @Volatile var nowPlaying: NowPlaying? = null
-        private set
+    // The status UI follows these through [ui]; the property syntax and the private setters stay as they were (plan 07-03).
+    private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
+    private val _lastError = MutableStateFlow<String?>(null)
 
-    @Volatile var lastError: String? = null
-        private set
+    var nowPlaying: NowPlaying?
+        get() = _nowPlaying.value
+        private set(value) {
+            _nowPlaying.value = value
+        }
+
+    var lastError: String?
+        get() = _lastError.value
+        private set(value) {
+            _lastError.value = value
+        }
+
+    /** What the sender-facing player state says that no other flow carries: the nav buttons, the queue and the position. */
+    private data class Live(val hasPrevious: Boolean, val hasNext: Boolean, val queueHasCurrent: Boolean, val position: SpeakerPosition?)
+
+    private val _live = MutableStateFlow(Live(hasPrevious = false, hasNext = false, queueHasCurrent = false, position = null))
+
+    private fun snapshot(status: PlayerStatus, name: String?, track: NowPlaying?, error: String?, live: Live) = SpeakerUi(
+        udn = udn,
+        name = name ?: address,
+        address = address,
+        status = status,
+        track = track,
+        error = error,
+        hasPrevious = live.hasPrevious,
+        hasNext = live.hasNext,
+        queueHasCurrent = live.queueHasCurrent,
+        position = live.position,
+    )
+
+    /**
+     * The UI snapshot of this speaker (plan 07-03, GUI-01): one StateFlow that changes with the player status, the track, the
+     * last error and the sender-facing state, and ends with [destroy] (it runs on the renderer's own scope). No SOAP call
+     * feeds it; the poll and the player events already hold everything it shows.
+     */
+    val ui: StateFlow<SpeakerUi> = combine(statusFlow, _name, _nowPlaying, _lastError, _live) { status, name, track, error, live ->
+        snapshot(status, name, track, error, live)
+    }.distinctUntilChanged().stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        snapshot(PlayerStatus.IDLE, null, null, null, _live.value),
+    )
 
     private val soap = SoapClient(deps.http)
 
@@ -509,6 +561,17 @@ class Renderer(
     init {
         events = deps.events
         deps.playlistRequestHandlerFactory?.let { queue.requestHandler = it() }
+        addStateListener { event ->
+            val state = event.current
+            val nav = getNavInfo()
+            val idle = state.status == PlayerStatus.IDLE || state.status == PlayerStatus.STOPPED
+            _live.value = Live(
+                hasPrevious = nav.hasPrevious,
+                hasNext = nav.hasNext,
+                queueHasCurrent = state.queue.current != null,
+                position = if (idle) null else SpeakerPosition(state.position, state.duration, deps.clock()),
+            )
+        }
     }
 
     override fun clockMs(): Long = deps.clock()

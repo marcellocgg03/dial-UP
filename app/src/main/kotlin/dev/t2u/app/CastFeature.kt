@@ -14,17 +14,22 @@ import dev.t2u.media.YtDlpSourceDownloader
 import dev.t2u.renderer.Bridge
 import dev.t2u.renderer.BridgeDeps
 import dev.t2u.renderer.BridgeNetwork
+import dev.t2u.renderer.SpeakerUi
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
 import dev.t2u.upnp.lanHttpClient
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -77,7 +82,21 @@ class CastFeature : SpikeFeature, CastCountSource {
      */
     @Volatile private var rebindEnabled = true
 
-    @Volatile private var bridge: Bridge? = null
+    /** The current bridge, as a flow so the status UI follows a rebuilt bridge (Wi-Fi start, reload-config) without reopening (plan 07-03). */
+    private val bridgeState = MutableStateFlow<Bridge?>(null)
+
+    private var bridge: Bridge?
+        get() = bridgeState.value
+        set(value) {
+            bridgeState.value = value
+        }
+
+    /** The running bridge's speakers with their live state; empty while there is no bridge. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val speakers: Flow<List<SpeakerUi>> = bridgeState.flatMapLatest { it?.speakers ?: flowOf(emptyList()) }
+
+    /** The bridge now, for the controls that act on one speaker (plan 07-08); null while there is none. */
+    fun currentBridge(): Bridge? = bridgeState.value
 
     /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup running (RESEARCH Pitfall 4). */
     @Volatile private var resolver: CachingResolver? = null

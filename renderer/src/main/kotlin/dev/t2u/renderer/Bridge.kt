@@ -219,6 +219,17 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** Derived from the renderers' player status on every change, never counted by events (RESEARCH Pitfall 11). */
     val castCount: StateFlow<BridgeCount> = _castCount.asStateFlow()
 
+    private val _speakers = MutableStateFlow<List<SpeakerUi>>(emptyList())
+
+    /**
+     * One entry per speaker the bridge can cast to (a device without AVTransport or one the name filter excludes is never in
+     * the registry), each following its [Renderer.ui]. Empty until the first speaker is up and again after [stop] (plan 07-03).
+     */
+    val speakers: StateFlow<List<SpeakerUi>> = _speakers.asStateFlow()
+
+    /** The running renderer with this UDN, for the card controls of the status UI; null when there is none (plan 07-03). */
+    fun renderer(udn: String): Renderer? = registry?.renderers().orEmpty().filterIsInstance<Renderer>().firstOrNull { it.udn == udn }
+
     private fun emit(kind: String, vararg fields: Pair<String, Any?>) {
         try {
             deps.events.event(kind, mapOf(*fields))
@@ -350,6 +361,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             ssdp = client
 
             handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
+            handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
             // reads the field, so a later replacement of the client is followed (plan 05-07)
             reg.launchSchedules(handlerScope) { ssdp?.search(RENDERER_ST, 3) }
             handlerScope.launch {
@@ -492,6 +504,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 )
             }
         }
+    }.distinctUntilChanged()
+
+    /** The status UI's list: every renderer's [Renderer.ui] combined, rebuilt whenever a speaker joins or leaves the registry. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun speakersFlow(reg: RendererRegistry): Flow<List<SpeakerUi>> = reg.renderersFlow.flatMapLatest { list ->
+        val renderers = list.filterIsInstance<Renderer>()
+        if (renderers.isEmpty()) flowOf(emptyList()) else combine(renderers.map { it.ui }) { it.toList() }
     }.distinctUntilChanged()
 
     // ------------------------------------------------------------------------------------------ commands
@@ -945,6 +964,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             step("ssdp-responder") { withContext(Dispatchers.IO) { responder?.stop() } }
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }
             _castCount.value = BridgeCount(0, 0)
+            _speakers.value = emptyList()
             emit("bridge", "event" to "stopped")
         }
     }

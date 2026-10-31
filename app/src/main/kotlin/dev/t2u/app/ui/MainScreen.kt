@@ -2,7 +2,6 @@
 // Original Kotlin code for Tube2U[PnP] for Android.
 package dev.t2u.app.ui
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -23,8 +22,7 @@ fun MainScreen(model: AppModel) {
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },
         ) { padding ->
-            // the speaker list comes with plan 07-03
-            Box(Modifier.padding(padding).fillMaxSize())
+            SpeakersTab(model, Modifier.padding(padding))
         }
     }
 }

@@ -4,6 +4,7 @@ package dev.t2u.app
 
 import android.content.Context
 import dev.t2u.app.model.BridgeStatus
+import dev.t2u.renderer.SpeakerUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,6 +33,10 @@ class AppModel private constructor(context: Context) {
 
     /** The cast feature while the service runs, else null (plan 07-03 reads speakers from it). */
     val cast: StateFlow<CastFeature?> = ServiceHub.cast
+
+    /** The running bridge's speakers with their live state; empty while the bridge is off and across a bridge rebuild. */
+    val speakers: StateFlow<List<SpeakerUi>> =
+        cast.flatMapLatest { it?.speakers ?: flowOf(emptyList()) }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** How many speakers are being cast to; 0 while the bridge is off. */
     val casting: StateFlow<Int> =
