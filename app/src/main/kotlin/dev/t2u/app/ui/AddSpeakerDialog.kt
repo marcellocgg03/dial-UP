@@ -32,10 +32,18 @@ import dev.t2u.app.AppModel
 import dev.t2u.renderer.ManualAddResult
 import kotlinx.coroutines.launch
 
-/** What the dialog says about the outcome of an add (GUI-04, D-06). [typed] is the address as the author typed it. */
+/**
+ * What the dialog says about the outcome of an add (GUI-04, D-06). [typed] is the address as the author typed it; a null
+ * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere (T-07-29).
+ */
 internal fun manualResultText(result: ManualAddResult?, typed: String): String = when (result) {
+    null -> "Enter the speaker's IPv4 address on this Wi-Fi, for example 192.168.1.40"
     is ManualAddResult.Added -> "Added ${result.name}"
-    else -> "Could not add that speaker"
+    is ManualAddResult.AlreadyListed -> "${result.name} is already listed"
+    is ManualAddResult.Hidden -> "That speaker is hidden; restore it from Hidden"
+    ManualAddResult.NoAnswer -> "No answer from $typed"
+    is ManualAddResult.NotUsable -> result.reason
+    ManualAddResult.Refused -> "That is not an address on this Wi-Fi"
 }
 
 /**
