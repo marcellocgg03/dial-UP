@@ -51,21 +51,3 @@ object BatteryGate {
     fun isOpen(context: Context): Boolean =
         context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
 }
-
-/** One step of the open flow in [MainActivity] (D-12 to D-14). */
-enum class LaunchStep { ASK_NOTIFICATIONS, ASK_EXEMPTION, START_SERVICE, FINISH_WITHOUT_SERVICE }
-
-/**
- * The steps an open runs. Notifications are asked once (the first-launch marker) and only on API 33+
- * when not yet granted. The exemption is asked on every open until it is granted; once it is, the
- * service is started instead (D-13, D-14).
- */
-fun launchSteps(markerExists: Boolean, sdk: Int, notificationsGranted: Boolean, exempt: Boolean): List<LaunchStep> =
-    buildList {
-        if (!markerExists && sdk >= 33 && !notificationsGranted) add(LaunchStep.ASK_NOTIFICATIONS)
-        add(if (exempt) LaunchStep.START_SERVICE else LaunchStep.ASK_EXEMPTION)
-    }
-
-/** After the system exemption dialog closes: the service starts only if the exemption is now held, whatever resultCode said (D-12). */
-fun afterExemptionDialog(exempt: Boolean): LaunchStep =
-    if (exempt) LaunchStep.START_SERVICE else LaunchStep.FINISH_WITHOUT_SERVICE
