@@ -36,9 +36,9 @@ class YtDlpUpdaterTest {
         @Volatile var onUpdate: (() -> Unit)? = null
 
         override fun update(channel: String): String {
-            onUpdate?.invoke()
             updateThreads += Thread.currentThread().name
             updates += channel
+            onUpdate?.invoke()
             failure(updates.size)?.let { throw it }
             current = "2026.02.02"
             return "DONE"

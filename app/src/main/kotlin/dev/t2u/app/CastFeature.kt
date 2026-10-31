@@ -11,6 +11,7 @@ import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.CachingResolver
 import dev.t2u.media.MediaRequest
+import dev.t2u.media.YtDlpUpdateOutcome
 import dev.t2u.media.YtDlpUpdater
 import dev.t2u.media.YtDlpSourceDownloader
 import dev.t2u.renderer.Bridge
@@ -30,9 +31,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -121,6 +124,12 @@ class CastFeature : SpikeFeature, CastCountSource {
     /** GUI-08: files, bytes and cap of the running bridge's cache; null without a bridge or without a file builder. */
     fun cacheInfo(): CacheInfo? = bridge?.cacheInfo()
 
+    /** GUI-07: one yt-dlp update now on the chosen channel; BUSY while a scheduled update or a lookup runs. Null without an updater. */
+    suspend fun updateNow(): YtDlpUpdateOutcome? = updater?.updateNow()
+
+    /** GUI-07: the installed yt-dlp version; null when it cannot be read or the service is stopped. */
+    suspend fun ytdlpVersion(): String? = updater?.version()
+
     /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup running (RESEARCH Pitfall 4). */
     @Volatile private var resolver: CachingResolver? = null
 
@@ -167,6 +176,18 @@ class CastFeature : SpikeFeature, CastCountSource {
             appSettings.dialAccess.drop(1).collect { mode ->
                 host.evidence.event("settings", mapOf("dialAccess" to mode.wire, "source" to "change"))
                 bridge?.onAccessModeChanged(mode)
+            }
+        }
+        // GUI-08 / D-09: the log toggle acts on the running service at once. The level is the one a restart would give
+        // (config.json plus the settings), taken from the value that changed because the file may not be written yet.
+        host.scope.launch {
+            appSettings.data.map { it.logEnabled }.distinctUntilChanged().drop(1).collect { enabled ->
+                val data = appSettings.data.value
+                val level = logLevelOf(applySettings(loadAppConfig(host.context.filesDir).config, data).logLevel)
+                // an event written after the level dropped to off would be filtered out, so record the change first then
+                if (level == LogLevel.OFF) host.evidence.event("settings", mapOf("logEnabled" to enabled, "source" to "change"))
+                host.evidence.setLevel(level)
+                if (level != LogLevel.OFF) host.evidence.event("settings", mapOf("logEnabled" to enabled, "source" to "change"))
             }
         }
         val mon = NetworkMonitor(host.context, host.evidence) { reason -> onNetworkChange(reason) }

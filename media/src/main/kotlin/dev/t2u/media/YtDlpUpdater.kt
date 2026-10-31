@@ -97,6 +97,38 @@ class YtDlpUpdater(
         return outcome
     }
 
+    /**
+     * GUI-07: one update on the chosen channel because the author asked for it. It refuses with status BUSY, without
+     * touching the gateway, while a lookup runs ([busy]) or a scheduled update holds [dueMutex] (T-07-19), so two updates
+     * never overlap. A successful one moves the next scheduled run a full [intervalMs] away once [run] has begun.
+     * The outcome (BUSY included) was also delivered to the event sink.
+     */
+    suspend fun updateNow(trigger: String = "manual"): YtDlpUpdateOutcome {
+        if (isBusy() || !dueMutex.tryLock()) {
+            val outcome = YtDlpUpdateOutcome(false, trigger, chosenChannel(), null, null, "BUSY", 0)
+            deliver(outcome.toEvent())
+            return outcome
+        }
+        try {
+            val outcome = updateOnce(trigger)
+            if (outcome.ok && nextDueAt != null) nextDueAt = now() + intervalMs
+            return outcome
+        } finally {
+            dueMutex.unlock()
+        }
+    }
+
+    /** GUI-07: the installed yt-dlp version, read on the updater's own dispatcher; null when it cannot be read. */
+    suspend fun version(): String? = withContext(dispatcher) {
+        try {
+            gateway.version()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     /** Guards the due run: the loop and an alarm tick ([runIfDue]) for one deadline run one update. */
     private val dueMutex = Mutex()
 
