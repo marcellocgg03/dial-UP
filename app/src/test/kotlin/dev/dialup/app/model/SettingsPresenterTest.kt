@@ -60,20 +60,30 @@ class FakeBridgePort(running: Boolean = true) : BridgePort {
     var restartCalls = 0
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
+    /** When set, clearCache, cacheInfo and updateNow throw it (a disk or bridge fault). */
+    var failWith: Throwable? = null
+    var clearGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     fun setRunning(on: Boolean) {
         flow.value = on
     }
 
     override suspend fun clearCache(): Int? {
         clearCalls++
+        clearGate?.await()
+        failWith?.let { throw it }
         return cleared.also { if (it != null) info = info?.copy(files = 0, bytes = 0) }
     }
 
-    override suspend fun cacheInfo(): CacheInfo? = info
+    override suspend fun cacheInfo(): CacheInfo? {
+        failWith?.let { throw it }
+        return info
+    }
 
     override suspend fun updateNow(): YtDlpUpdateOutcome? {
         updateCalls++
         gate?.await()
+        failWith?.let { throw it }
         return outcome
     }
 
@@ -370,5 +380,70 @@ class SettingsPresenterTest {
     fun `the bundled components text names what an app update brings`() {
         assertTrue("Python 3.12.11" in BUNDLED_COMPONENTS && "ffmpeg 7.1.1" in BUNDLED_COMPONENTS && "QuickJS" in BUNDLED_COMPONENTS)
         assertTrue("app update" in BUNDLED_COMPONENTS)
+    }
+
+    @Test
+    fun `a failing clear cache shows a message`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        bridge.failWith = java.io.IOException("disk full /data/secret/path")
+
+        p.clearCache()
+        runCurrent()
+
+        val msg = p.state.value.message
+        assertEquals("Could not clear the cache (IOException)", msg)
+        assertFalse(msg!!.contains("/data"), "no path in the message")
+    }
+
+    @Test
+    fun `a failing update ends as failed, not running`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        bridge.failWith = java.io.IOException("boom")
+
+        p.updateNow()
+        runCurrent()
+
+        val u = p.state.value.update
+        assertTrue(u is UpdateUi.Done, "update must end Done, was $u")
+        u as UpdateUi.Done
+        assertFalse(u.outcome.ok)
+        assertEquals("ERROR", u.outcome.status)
+        assertEquals("IOException", u.outcome.error)
+    }
+
+    @Test
+    fun `a failing usage refresh keeps the last values`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        val usage = p.state.value.cacheUsage
+        val version = p.state.value.ytdlpVersion
+        assertEquals("2026.08.19", version)
+        bridge.failWith = java.io.IOException("boom")
+
+        p.refresh()
+        runCurrent()
+
+        assertEquals(usage, p.state.value.cacheUsage)
+        assertEquals(version, p.state.value.ytdlpVersion)
+    }
+
+    @Test
+    fun `cancellation is not swallowed`() = runTest {
+        val bridge = FakeBridgePort()
+        bridge.clearGate = CompletableDeferred()
+        val job = kotlinx.coroutines.Job()
+        val scope = kotlinx.coroutines.CoroutineScope(job + kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        val p = SettingsPresenter(scope, FakeSettingsPort(), bridge)
+        runCurrent()
+
+        p.clearCache()
+        runCurrent()
+        assertEquals(1, bridge.clearCalls)
+        job.cancel()
+        runCurrent()
+
+        assertNull(p.state.value.message, "a cancelled action writes no message")
     }
 }
