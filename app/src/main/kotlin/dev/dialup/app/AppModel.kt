@@ -4,6 +4,7 @@ package dev.dialup.app
 
 import android.content.Context
 import dev.dialup.app.model.BridgeStatus
+import dev.dialup.app.model.addRefusal
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
@@ -113,13 +114,13 @@ class AppModel private constructor(context: Context) {
 
     /**
      * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
-     * sent (T-07-29); with the bridge off the answer is [ManualAddResult.NotUsable] saying to switch it on, because the probe runs
+     * sent (T-07-29); with no bridge the answer is [ManualAddResult.NotUsable] saying to switch it on, or that the bridge is waiting for Wi-Fi when the service is up, because the probe runs
      * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
      * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added (plan 07-13).
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null
-        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(BRIDGE_OFF_ADD)
+        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(addRefusal(serviceRunning.value, false) ?: BRIDGE_OFF_ADD)
         return try {
             withContext(Dispatchers.Default) { bridge.addManual(ip) }
         } catch (e: CancellationException) {
@@ -154,6 +155,9 @@ class AppModel private constructor(context: Context) {
 
         /** What the add dialog and the Add button say while the bridge is off. */
         const val BRIDGE_OFF_ADD = "Switch the bridge on to add a speaker"
+
+        /** What they say while the service runs but has no bridge yet (no Wi-Fi, a failed start, a restart). */
+        const val BRIDGE_WAITING_ADD = "The bridge is waiting for Wi-Fi; add the speaker once it is running"
 
         @Volatile private var instance: AppModel? = null
 

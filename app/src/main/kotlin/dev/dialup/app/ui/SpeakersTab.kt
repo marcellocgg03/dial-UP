@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
 import dev.dialup.app.model.SpeakersPresenter
+import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.savedManualVisible
 import dev.t2u.renderer.HiddenSpeaker
@@ -64,11 +65,11 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     ) {
         item(key = "add-speaker") {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedButton(onClick = { adding = true }, enabled = running, modifier = Modifier.testTag("btn-add-speaker")) {
+                OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
                     Text("Add speaker")
                 }
-                if (!running) {
-                    Text(AppModel.BRIDGE_OFF_ADD, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
+                addRefusal(running, bridgeUp)?.let { why ->
+                    Text(why, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
                 }
             }
         }

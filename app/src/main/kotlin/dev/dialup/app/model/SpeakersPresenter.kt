@@ -2,6 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
+import dev.dialup.app.AppModel
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
@@ -53,6 +54,16 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
  * [serviceUp] is part of the signature so the rule reads as "service state, bridge state" but does not change the answer.
  */
 fun savedManualVisible(serviceUp: Boolean, bridgeUp: Boolean): Boolean = !bridgeUp
+
+/**
+ * Why Add speaker cannot work now, or null when it can (review WR-04): the switch is off ([serviceUp] false), or the service runs
+ * but has no bridge yet ([serviceUp] true, [bridgeUp] false: waiting for Wi-Fi, a failed start or a restart), or a bridge exists.
+ */
+fun addRefusal(serviceUp: Boolean, bridgeUp: Boolean): String? = when {
+    bridgeUp -> null
+    serviceUp -> AppModel.BRIDGE_WAITING_ADD
+    else -> AppModel.BRIDGE_OFF_ADD
+}
 
 /**
  * Sends card taps to [command] and keeps one command in flight per speaker (RESEARCH Pitfall 9: the Player has no mutex). A press
