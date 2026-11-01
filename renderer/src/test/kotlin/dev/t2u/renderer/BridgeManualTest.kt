@@ -406,7 +406,8 @@ class BridgeManualTest {
         val second = blindBridge(manual = ManualSpeakers(h.dataDir).load(), manualDescriptionUrl = fakeDescription)
         second.start()
 
-        h.awaitUntil("the saved deaf speaker listed again", timeoutMs = 3_000) { second.speakers.value.size == 1 }
+        // a saved speaker is listed greyed from the start, so "set up" means online
+        h.awaitUntil("the saved deaf speaker online again", timeoutMs = 3_000) { second.speakers.value.singleOrNull()?.online == true }
         assertEquals(HARNESS_RENDERER_UDN, second.speakers.value.single().udn)
         assertTrue(second.speakers.value.single().manual)
         assertTrue(h.dialSearchAt(second, h.loopback) != null, "a DIAL cast target")
@@ -422,7 +423,7 @@ class BridgeManualTest {
             manualDescriptionUrl = fakeDescription,
         )
         second.start()
-        h.awaitUntil("the saved deaf speaker listed", timeoutMs = 3_000) { second.speakers.value.size == 1 }
+        h.awaitUntil("the saved deaf speaker online", timeoutMs = 3_000) { second.speakers.value.singleOrNull()?.online == true }
         val requestsBefore = h.fakeRenderer.descriptionRequests.get()
 
         val until = System.nanoTime() + 1_500_000_000L
@@ -434,5 +435,45 @@ class BridgeManualTest {
         assertFalse(h.events.any { it.first == "manual-offline" }, "no manual-offline event")
         val requests = h.fakeRenderer.descriptionRequests.get() - requestsBefore
         assertTrue(requests >= 3, "description requests over the rounds: $requests")
+    }
+
+    @Test
+    @DisplayName("an unplugged saved speaker goes offline and comes back")
+    fun anUnpluggedSavedSpeakerGoesOfflineAndComesBack() = h.run<Unit> {
+        savedDeafSpeaker()
+        val bridge = blindBridge(
+            manual = ManualSpeakers(h.dataDir).load(),
+            manualProbeIntervalMs = 200,
+            manualDescriptionUrl = fakeDescription,
+        )
+        bridge.start()
+        h.awaitUntil("the saved deaf speaker online", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it answers")
+
+        h.speakerSilent = true
+
+        h.awaitUntil("the speaker offline", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == false }
+        val card = bridge.speakers.value.single()
+        assertTrue(card.manual)
+        assertNull(h.dialSearchAt(bridge, h.loopback), "an offline speaker is not advertised")
+
+        h.speakerSilent = false
+
+        h.awaitUntil("the speaker online again", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        h.awaitUntil("a DIAL search reply again", timeoutMs = 2_000) { h.dialSearchAt(bridge, h.loopback) != null }
+    }
+
+    @Test
+    @DisplayName("saved addresses are not evicted from the reply table")
+    fun savedAddressesAreNotEvictedFromTheReplyTable() = h.run<Unit> {
+        savedDeafSpeaker()
+        val bridge = blindBridge(manual = ManualSpeakers(h.dataDir).load(), manualDescriptionUrl = fakeDescription)
+        bridge.start()
+        h.awaitUntil("the saved deaf speaker online", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        assertNotNull(bridge.replySourceAt("127.0.0.1"), "the saved address replied")
+
+        for (i in 1..70) bridge.noteReply("10.9.9.$i", "other-$i")
+
+        assertNotNull(bridge.replySourceAt("127.0.0.1"), "the saved address is still in the table")
     }
 }

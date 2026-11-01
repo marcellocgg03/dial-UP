@@ -109,6 +109,9 @@ class FakeRenderer(
     /** How many times `/desc.xml` was requested, answered or not (plan 07-18: a saved speaker is judged by its description). */
     val descriptionRequests = java.util.concurrent.atomic.AtomicInteger()
 
+    /** While true `/desc.xml` answers 503 with an empty body: the speaker is unplugged (plan 07-18). Every other route is unchanged. */
+    @Volatile var descriptionDown = false
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var port: Int = 0
@@ -156,7 +159,11 @@ class FakeRenderer(
         routing {
             get("/desc.xml") {
                 descriptionRequests.incrementAndGet()
-                call.respondText(description(), ContentType.Text.Xml)
+                if (descriptionDown) {
+                    call.respondText("", status = HttpStatusCode.ServiceUnavailable)
+                } else {
+                    call.respondText(description(), ContentType.Text.Xml)
+                }
             }
             get("/scpd/{svc}.xml") {
                 val svc = call.parameters["svc"] ?: ""

@@ -96,12 +96,19 @@ internal class BridgeHarness(
     /** Answers every M-SEARCH with a MediaRenderer reply whose LOCATION is the fake speaker. */
     private val speakerSocket = DatagramSocket(InetSocketAddress(loopback, 0)).also { it.soTimeout = 200 }
 
-    /** While true the fake speaker counts an M-SEARCH but does not answer it: the speaker is unplugged (plan 07-14). */
-    @Volatile var speakerSilent = false
+    /**
+     * While true the fake speaker counts an M-SEARCH but does not answer it and its HTTP description answers 503: the speaker is
+     * unplugged and answers nothing (plan 07-14, widened in plan 07-18 because a saved speaker is also judged by its description).
+     */
+    @Volatile var speakerSilent: Boolean = false
+        set(value) {
+            field = value
+            fakeRenderer.descriptionDown = value
+        }
 
     /**
      * While true the fake speaker counts an M-SEARCH but never answers it, while its HTTP description stays up: a real Sonos
-     * does this to a unicast search (plan 07-17, device run GUI-C 2a).
+     * does this to a unicast search (plan 07-17, device run GUI-C 2a). SSDP only; [speakerSilent] takes the description down too.
      */
     @Volatile var speakerSearchDeaf = false
 

@@ -51,6 +51,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -191,6 +192,9 @@ private const val MANUAL_POLL_MS = 100L
 /** Plan 07-17: the shortest time the description fetch of an add is given, whatever is left of the probe budget. */
 private const val MANUAL_DESCRIBE_MIN_MS = 1_000L
 
+/** Plan 07-18: the timeout of one saved-speaker liveness fetch (T-07-50). */
+private const val MANUAL_LIVENESS_FETCH_MS = 3_000L
+
 /** A receiver younger than this is kept in the move list even while it is still "stopped" (its start has not run yet). */
 private const val TRACK_GRACE_MS = 120_000L
 
@@ -270,12 +274,21 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     private val replySources = ConcurrentHashMap<String, SourceReply>()
 
-    private fun noteReply(address: String, udn: String) {
+    /**
+     * Records a reply from [address]. A full table evicts its oldest entry whose address is not a saved manual address (plan
+     * 07-18, WR-03: a chatty LAN must not make a saved speaker look silent); when every entry is a saved address nothing is
+     * evicted and the table stays at most [MAX_MANUAL] over the cap. Internal so a test can drive it.
+     */
+    internal fun noteReply(address: String, udn: String) {
         if (replySources.size >= MANUAL_REPLY_CAP && !replySources.containsKey(address)) {
-            replySources.entries.minByOrNull { it.value.at }?.let { replySources.remove(it.key) }
+            val saved = deps.manual?.entries?.value.orEmpty().map { it.ip }.toSet()
+            replySources.entries.filter { it.key !in saved }.minByOrNull { it.value.at }?.let { replySources.remove(it.key) }
         }
         replySources[address] = SourceReply(udn, System.currentTimeMillis())
     }
+
+    /** When [address] last replied, for tests; null when the table holds nothing for it. */
+    internal fun replySourceAt(address: String): Long? = replySources[address]?.at
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
 
@@ -413,11 +426,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * [manualTargetAllowed] again (T-07-31), so a damaged or edited file cannot aim the bridge at a public address. The replies
      * reach the registry like any search reply; a speaker that does not answer simply has no card until it does.
      */
-    private fun probeSavedSpeakers(client: Ssdp) {
+    private fun probeSavedSpeakers(client: Ssdp, reg: RendererRegistry) {
         val saved = deps.manual?.entries?.value.orEmpty()
         if (saved.isEmpty()) return
         handlerScope.launch {
-            for (entry in saved) sendManualProbe(client, entry)
+            // plan 07-18: besides the unicast search, each saved speaker's description is fetched, because a Sonos ignores the search
+            for (entry in saved.take(MAX_MANUAL)) {
+                launch { sendManualProbe(client, entry) }
+                launch { describeSaved(entry, reg) }
+            }
         }
     }
 
@@ -456,11 +473,14 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             while (true) {
                 delay(deps.manualProbeIntervalMs)
                 if (networkDown) continue
-                val roundAt = System.currentTimeMillis()
                 val saved = store.entries.value
                 val udns = saved.map { it.udn }.toSet()
                 liveness.keys.retainAll(udns)
                 offline.retainAll(udns)
+                // plan 07-18: the description fetches finish before the verdicts, so an HTTP answer in this round counts
+                coroutineScope { for (entry in saved.take(MAX_MANUAL)) launch { describeSaved(entry, reg) } }
+                // taken after the fetches: an answer from this round must not count again in the next one
+                val roundAt = System.currentTimeMillis()
                 for (entry in saved) {
                     val replied = (replySources[entry.ip]?.at ?: Long.MIN_VALUE) >= last
                     when (liveness.getOrPut(entry.udn) { ManualLiveness() }.round(replied)) {
@@ -591,6 +611,17 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             emit("manual-add-describe", "ip" to host, "result" to "NotARenderer")
             return ManualAddResult.NotUsable("It answered, but it is not a speaker that can play audio here: no AVTransport")
         }
+        feedDescription(reg, ip, url, udn, "manual-add-describe")
+        return null
+    }
+
+    /**
+     * Hands a fetched description to the registry as the alive headers an SSDP reply would have carried (`LOCATION` is the URL
+     * just fetched, so the registry's own guards apply) and records the answer in [replySources]. Shared by the add-by-IP
+     * fallback ([describeManual]) and the saved-speaker liveness fetch ([describeSaved]). Never throws except for cancellation.
+     */
+    private suspend fun feedDescription(reg: RendererRegistry, ip: InetAddress, url: String, udn: String, eventKind: String) {
+        val host = ip.hostAddress.orEmpty()
         val headers = mapOf(
             "ST" to RENDERER_ST,
             "USN" to "uuid:$udn::$RENDERER_ST",
@@ -605,9 +636,44 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            failure("manual-add-describe", t)
+            failure(eventKind, t)
         }
-        return null
+    }
+
+    /**
+     * Plan 07-18, WR-03, D-07: the liveness signal for a saved manual speaker that never answers a unicast search (a Sonos
+     * speaker). Fetches the speaker's description (the saved `location` when [descriptionUrlAllowed] holds for the re-validated
+     * saved address, otherwise [BridgeDeps.manualDescriptionUrl], T-07-48) and counts it as an answer only when the document's UDN
+     * equals the saved one (T-07-49); the registry then refreshes the running renderer or sets it up. A failure is one
+     * `manual-probe` event and means "no answer". Never throws except for cancellation.
+     */
+    private suspend fun describeSaved(entry: ManualSpeaker, reg: RendererRegistry): Boolean {
+        val ip = parseIpv4Literal(entry.ip)
+        if (ip == null || !manualTargetAllowed(ip)) {
+            emit("manual-probe", "ip" to entry.ip, "result" to "Refused", "via" to "http")
+            return false
+        }
+        val url = entry.location.takeIf { descriptionUrlAllowed(it, ip) } ?: deps.manualDescriptionUrl(entry.ip)
+        if (!descriptionUrlAllowed(url, ip)) {
+            emit("manual-probe", "ip" to entry.ip, "result" to "Refused", "via" to "http")
+            return false
+        }
+        val desc = try {
+            fetchDescription(deps.http, url, MANUAL_LIVENESS_FETCH_MS)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            emit("manual-probe", "ip" to entry.ip, "result" to t.javaClass.simpleName, "via" to "http")
+            return false
+        }
+        val udn = desc.udn.removePrefix("uuid:").removePrefix("UUID:").trim()
+        if (udn != entry.udn) {
+            emit("manual-probe", "ip" to entry.ip, "result" to "OtherDevice", "via" to "http")
+            return false
+        }
+        feedDescription(reg, ip, url, udn, "manual-probe")
+        emit("manual-probe", "ip" to entry.ip, "result" to "Answered", "via" to "http")
+        return true
     }
 
     /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
@@ -729,7 +795,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             client.start()
             ssdp = client
             val probesSentAt = System.currentTimeMillis()
-            probeSavedSpeakers(client)
+            probeSavedSpeakers(client, reg)
             watchManualSpeakers(reg, probesSentAt)
 
             handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
