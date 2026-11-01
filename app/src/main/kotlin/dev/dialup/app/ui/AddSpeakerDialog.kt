@@ -37,10 +37,10 @@ import kotlinx.coroutines.launch
  * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere (T-07-29).
  */
 internal fun manualResultText(result: ManualAddResult?, typed: String): String = when (result) {
-    null -> "Enter the speaker's IPv4 address on this Wi-Fi, for example 192.168.1.40"
+    null -> "Enter the renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40"
     is ManualAddResult.Added -> "Added ${result.name}"
     is ManualAddResult.AlreadyListed -> "${result.name} is already listed"
-    is ManualAddResult.Hidden -> "That speaker is hidden; restore it from Hidden"
+    is ManualAddResult.Hidden -> "That renderer is hidden; restore it from Hidden"
     ManualAddResult.NoAnswer -> "No answer from $typed"
     is ManualAddResult.NotUsable -> result.reason
     ManualAddResult.Refused -> "That is not an address on this Wi-Fi"
@@ -59,7 +59,7 @@ fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
     AlertDialog(
         modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("dialog-add"),
         onDismissRequest = onDismiss,
-        title = { Text("Add speaker") },
+        title = { Text("Add renderer") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -73,8 +73,8 @@ fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     supportingText = {
                         Text(
-                            "The speaker's IPv4 address on this Wi-Fi, for example 192.168.1.40. It is saved under this address; " +
-                                "if the speaker gets a new address, add it again.",
+                            "The renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40. It is saved under this address; " +
+                                "if the renderer gets a new address, add it again.",
                         )
                     },
                     modifier = Modifier.fillMaxWidth().testTag("field-ip"),
@@ -82,7 +82,7 @@ fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
                 if (busy) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text("Asking the speaker", style = MaterialTheme.typography.bodyMedium)
+                        Text("Asking the renderer", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
                 message?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("add-result")) }

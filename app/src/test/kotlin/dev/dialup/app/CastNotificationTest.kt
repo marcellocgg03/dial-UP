@@ -23,12 +23,12 @@ class CastNotificationTest {
 
     @Test
     fun `text reads casting of total speakers being cast to`() {
-        assertEquals("1 of 4 speakers being cast to", notificationText(CastCount(1, 4)))
+        assertEquals("1 of 4 renderers being cast to", notificationText(CastCount(1, 4)))
     }
 
     @Test
     fun `no speakers reads 0 of 0`() {
-        assertEquals("0 of 0 speakers being cast to", notificationText(CastCount(0, 0)))
+        assertEquals("0 of 0 renderers being cast to", notificationText(CastCount(0, 0)))
     }
 
     @Test

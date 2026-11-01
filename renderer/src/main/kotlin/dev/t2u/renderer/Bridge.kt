@@ -580,7 +580,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         val result = if (replySources.containsKey(host)) {
             ManualAddResult.NotUsable(
-                "It answered, but it is not a speaker that can play audio here: no AVTransport, filtered out by name, " +
+                "It answered, but it is not a renderer that can play audio here: no AVTransport, filtered out by name, " +
                     "or its description names another address",
             )
         } else {
@@ -620,7 +620,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val udn = descriptionUdn(desc.udn)
         if (udn.isEmpty() || !desc.services.containsKey("urn:upnp-org:serviceId:AVTransport")) {
             emit("manual-add-describe", "ip" to host, "result" to "NotARenderer")
-            return ManualAddResult.NotUsable("It answered, but it is not a speaker that can play audio here: no AVTransport")
+            return ManualAddResult.NotUsable("It answered, but it is not a renderer that can play audio here: no AVTransport")
         }
         feedDescription(reg, ip, url, udn, "manual-add-describe")
         return null

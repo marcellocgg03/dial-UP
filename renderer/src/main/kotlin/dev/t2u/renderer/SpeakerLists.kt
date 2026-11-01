@@ -216,7 +216,7 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
             val replaced = items.values.count { it.udn == entry.udn || it.ip == entry.ip }
             when {
                 !validAddress(entry.ip) -> "'${entry.ip}' is not a private LAN IPv4 address"
-                replaced == 0 && items.size >= MAX_MANUAL -> "$MAX_MANUAL speakers are saved already"
+                replaced == 0 && items.size >= MAX_MANUAL -> "$MAX_MANUAL renderers are saved already"
                 else -> {
                     items.entries.removeIf { it.key == entry.udn || it.value.ip == entry.ip }
                     items[entry.udn] = entry

@@ -66,7 +66,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         item(key = "add-speaker") {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
-                    Text("Add speaker")
+                    Text("Add renderer")
                 }
                 addRefusal(running, bridgeUp)?.let { why ->
                     Text(why, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
@@ -75,7 +75,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         }
         if (noCards) {
             item(key = "empty-note") {
-                val (text, tag) = if (!running) "The bridge is off" to "bridge-off" else "Looking for speakers on the Wi-Fi" to "speakers-empty"
+                val (text, tag) = if (!running) "The bridge is off" to "bridge-off" else "Looking for renderers on the Wi-Fi" to "speakers-empty"
                 Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag(tag))
             }
         } else {

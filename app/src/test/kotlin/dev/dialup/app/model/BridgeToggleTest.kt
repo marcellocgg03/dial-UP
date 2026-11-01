@@ -44,14 +44,14 @@ class BridgeToggleTest {
     @Test
     fun `the confirm text names the speakers and says they keep their track`() {
         val text = confirmText(2, clearOnCastEnd = false)
-        assertTrue("2 speakers" in text, text)
+        assertTrue("2 renderers" in text, text)
         assertTrue("keep their track loaded" in text, text)
     }
 
     @Test
     fun `the confirm text says the speakers are cleared when clear on cast end is on`() {
         val text = confirmText(2, clearOnCastEnd = true)
-        assertTrue("2 speakers" in text, text)
+        assertTrue("2 renderers" in text, text)
         assertTrue("cleared" in text, text)
         assertFalse("keep their track loaded" in text, text)
     }
@@ -59,8 +59,8 @@ class BridgeToggleTest {
     @Test
     fun `one speaker uses the singular`() {
         val text = confirmText(1, clearOnCastEnd = false)
-        assertTrue("1 speaker " in text, text)
-        assertFalse("1 speakers" in text, text)
+        assertTrue("1 renderer " in text, text)
+        assertFalse("1 renderers" in text, text)
         assertTrue("keeps its track loaded" in text, text)
         assertTrue("is cleared" in confirmText(1, clearOnCastEnd = true))
     }

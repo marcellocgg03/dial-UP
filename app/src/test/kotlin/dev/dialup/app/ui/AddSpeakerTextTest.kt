@@ -10,11 +10,11 @@ import kotlin.test.assertEquals
 class AddSpeakerTextTest {
     @Test
     fun `each outcome says what happened`() {
-        assertEquals("Enter the speaker's IPv4 address on this Wi-Fi, for example 192.168.1.40", manualResultText(null, "speaker.local"))
+        assertEquals("Enter the renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40", manualResultText(null, "speaker.local"))
         assertEquals("That is not an address on this Wi-Fi", manualResultText(ManualAddResult.Refused, "8.8.8.8"))
         assertEquals("Added Kitchen", manualResultText(ManualAddResult.Added("u", "Kitchen"), "192.168.1.40"))
         assertEquals("Kitchen is already listed", manualResultText(ManualAddResult.AlreadyListed("u", "Kitchen"), "192.168.1.40"))
-        assertEquals("That speaker is hidden; restore it from Hidden", manualResultText(ManualAddResult.Hidden("u"), "192.168.1.40"))
+        assertEquals("That renderer is hidden; restore it from Hidden", manualResultText(ManualAddResult.Hidden("u"), "192.168.1.40"))
         assertEquals("No answer from 192.168.1.99", manualResultText(ManualAddResult.NoAnswer, "192.168.1.99"))
         assertEquals("because", manualResultText(ManualAddResult.NotUsable("because"), "192.168.1.40"))
     }

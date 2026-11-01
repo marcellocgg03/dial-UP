@@ -67,7 +67,7 @@ fun MainScreen(
                             selected = tab == TAB_SPEAKERS,
                             onClick = { tab = TAB_SPEAKERS },
                             icon = { Icon(Icons.Filled.Home, contentDescription = null) },
-                            label = { Text("Speakers") },
+                            label = { Text("Renderers") },
                             modifier = Modifier.testTag("tab-speakers"),
                         )
                         NavigationBarItem(

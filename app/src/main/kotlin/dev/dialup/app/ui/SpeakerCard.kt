@@ -151,7 +151,7 @@ fun SpeakerCard(
                 Icon(SkipNextIcon, contentDescription = "Next")
             }
             IconButton(onClick = { onAction(SpeakerAction.CLEAR) }, enabled = buttons.clear, modifier = Modifier.testTag("btn-clear-$udn")) {
-                Icon(Icons.Filled.Delete, contentDescription = "Clear speaker")
+                Icon(Icons.Filled.Delete, contentDescription = "Clear renderer")
             }
         }
         val position = speaker.position

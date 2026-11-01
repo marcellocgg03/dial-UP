@@ -126,7 +126,7 @@ class AppModel private constructor(context: Context) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            ManualAddResult.NotUsable("Could not add the speaker: ${e.javaClass.simpleName}")
+            ManualAddResult.NotUsable("Could not add the renderer: ${e.javaClass.simpleName}")
         }
     }
 
@@ -154,10 +154,10 @@ class AppModel private constructor(context: Context) {
         private const val CONTROL_TIMEOUT_MS = 20_000L
 
         /** What the add dialog and the Add button say while the bridge is off. */
-        const val BRIDGE_OFF_ADD = "Switch the bridge on to add a speaker"
+        const val BRIDGE_OFF_ADD = "Switch the bridge on to add a renderer"
 
         /** What they say while the service runs but has no bridge yet (no Wi-Fi, a failed start, a restart). */
-        const val BRIDGE_WAITING_ADD = "The bridge is waiting for Wi-Fi; add the speaker once it is running"
+        const val BRIDGE_WAITING_ADD = "The bridge is waiting for Wi-Fi; add the renderer once it is running"
 
         @Volatile private var instance: AppModel? = null
 

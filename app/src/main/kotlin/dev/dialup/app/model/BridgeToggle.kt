@@ -30,7 +30,7 @@ fun toggleAction(requestedOn: Boolean, enabled: Boolean, casting: Int): ToggleAc
  */
 fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
     val one = casting == 1
-    val who = if (one) "1 speaker is" else "$casting speakers are"
+    val who = if (one) "1 renderer is" else "$casting renderers are"
     val outcome = when {
         clearOnCastEnd && one -> "It is cleared when the bridge stops."
         clearOnCastEnd -> "They are cleared when the bridge stops."
