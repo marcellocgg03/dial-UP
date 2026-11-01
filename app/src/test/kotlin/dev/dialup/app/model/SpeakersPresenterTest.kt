@@ -3,6 +3,7 @@
 package dev.dialup.app.model
 
 import dev.t2u.lounge.PlayerStatus
+import dev.t2u.renderer.ManualSpeaker
 import dev.t2u.renderer.NowPlaying
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
@@ -145,10 +146,98 @@ class SpeakersPresenterTest {
     }
 
     @Test
-    fun `saved manual speakers are listed whenever there is no bridge`() {
-        assertEquals(true, savedManualVisible(serviceUp = false, bridgeUp = false))
-        assertEquals(true, savedManualVisible(serviceUp = true, bridgeUp = false))
-        assertEquals(false, savedManualVisible(serviceUp = true, bridgeUp = true))
+    fun `saved manual speakers are listed whenever there is no running bridge under an enabled switch`() {
+        assertEquals(true, savedManualVisible(switchOn = true, serviceUp = false, bridgeUp = false))
+        assertEquals(true, savedManualVisible(switchOn = true, serviceUp = true, bridgeUp = false))
+        assertEquals(false, savedManualVisible(switchOn = true, serviceUp = true, bridgeUp = true))
+        // switch off: listed whatever the old service and bridge are still doing
+        assertEquals(true, savedManualVisible(switchOn = false, serviceUp = true, bridgeUp = true))
+        assertEquals(true, savedManualVisible(switchOn = false, serviceUp = true, bridgeUp = false))
+        assertEquals(true, savedManualVisible(switchOn = false, serviceUp = false, bridgeUp = false))
+    }
+
+    private fun card(udn: String, name: String = udn, online: Boolean = true, manual: Boolean = false) = speaker(PlayerStatus.IDLE)
+        .copy(udn = udn, name = name, online = online, manual = manual)
+
+    private fun saved(udn: String, name: String = udn) = ManualSpeaker(ip = "10.0.0.9", udn = udn, name = name, location = "http://10.0.0.9:1400/d.xml")
+
+    private val discovered = card("A")
+    private val savedLive = card("M", manual = true)
+    private val allSaved = listOf(saved("M"), saved("S2"), saved("H"))
+
+    private fun listing(
+        switchOn: Boolean,
+        serviceUp: Boolean,
+        bridgeUp: Boolean,
+        live: List<SpeakerUi> = listOf(discovered, savedLive),
+        savedList: List<ManualSpeaker> = allSaved,
+        hidden: Set<String> = setOf("H"),
+        names: Map<String, String> = emptyMap(),
+    ) = rendererListing(switchOn, serviceUp, bridgeUp, live, savedList, hidden, names)
+
+    @Test
+    fun `switch off with the old service and bridge still up lists only the saved greyed cards`() {
+        val l = listing(switchOn = false, serviceUp = true, bridgeUp = true)
+        assertEquals(emptyList(), l.live)
+        assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
+        assertTrue(l.saved.all { !it.online && it.manual })
+        assertEquals(ListNote.BRIDGE_OFF, l.note)
+    }
+
+    @Test
+    fun `switch off after the service went lists the same saved cards`() {
+        val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList())
+        assertEquals(emptyList(), l.live)
+        assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
+        assertEquals(ListNote.BRIDGE_OFF, l.note)
+    }
+
+    @Test
+    fun `a saved renderer that is also discovered shows once as its saved card while the switch is off`() {
+        val l = listing(switchOn = false, serviceUp = true, bridgeUp = true)
+        val all = l.live + l.saved
+        assertEquals(1, all.count { it.udn == "M" })
+        assertEquals(false, all.single { it.udn == "M" }.online)
+    }
+
+    @Test
+    fun `a hidden saved renderer stays out and a user name shows on the greyed card`() {
+        val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, savedList = listOf(saved("M"), saved("H")), names = mapOf("M" to "Kitchen"))
+        assertEquals(listOf("M"), l.saved.map { it.udn })
+        assertEquals("Kitchen", l.saved.single().name)
+    }
+
+    @Test
+    fun `switch back on with a bridge shows the bridge list unchanged and no saved cards`() {
+        val live = listOf(discovered, savedLive)
+        val l = listing(switchOn = true, serviceUp = true, bridgeUp = true, live = live)
+        assertEquals(live, l.live)
+        assertEquals(emptyList(), l.saved)
+        assertEquals(null, l.note)
+    }
+
+    @Test
+    fun `switch on with a bridge and nothing found says looking`() {
+        val l = listing(switchOn = true, serviceUp = true, bridgeUp = true, live = emptyList())
+        assertEquals(emptyList(), l.live)
+        assertEquals(emptyList(), l.saved)
+        assertEquals(ListNote.LOOKING, l.note)
+    }
+
+    @Test
+    fun `switch on with the service up but no bridge drops a stale live list and lists the saved card once`() {
+        val l = listing(switchOn = true, serviceUp = true, bridgeUp = false, live = listOf(savedLive), savedList = listOf(saved("M")))
+        assertEquals(emptyList(), l.live)
+        assertEquals(listOf("M"), l.saved.map { it.udn })
+        assertEquals(ListNote.LOOKING, l.note)
+    }
+
+    @Test
+    fun `switch on but the service not up lists the saved cards and says the bridge is off`() {
+        val l = listing(switchOn = true, serviceUp = false, bridgeUp = false, live = emptyList())
+        assertEquals(emptyList(), l.live)
+        assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
+        assertEquals(ListNote.BRIDGE_OFF, l.note)
     }
 
     @Test

@@ -33,15 +33,16 @@ import dev.dialup.app.AppModel
 import dev.dialup.app.model.SpeakersPresenter
 import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
-import dev.dialup.app.model.savedManualVisible
+import dev.dialup.app.model.ListNote
+import dev.dialup.app.model.rendererListing
 import dev.t2u.renderer.HiddenSpeaker
-import dev.t2u.renderer.savedSpeakerCards
 
 /**
- * The Speakers list (GUI-01): one card per speaker the running bridge can cast to. With the service down it says so instead of
- * showing a list that no longer follows anything. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
+ * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
+ * ([rendererListing]): with the switch off only the renderers saved by address are listed, greyed, and the list says the bridge
+ * is off. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
  * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. Rename on a card opens a dialog
- * for that renderer's name (matched by UDN). While there is no bridge (off, or the
+ * for that renderer's name (matched by UDN). While the running bridge's list is not shown (switch off, or the
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
 @Composable
@@ -59,7 +60,16 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
-    val noCards = !running || speakers.isEmpty()
+    val settings by model.settings.data.collectAsStateWithLifecycle()
+    val listing = rendererListing(
+        switchOn = settings.bridgeEnabled,
+        serviceUp = running,
+        bridgeUp = bridgeUp,
+        live = speakers,
+        saved = manual,
+        hidden = hidden.mapTo(HashSet()) { it.udn },
+        names = names,
+    )
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -75,27 +85,27 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 }
             }
         }
-        if (noCards) {
+        listing.note?.let { note ->
             item(key = "empty-note") {
-                val (text, tag) = if (!running) "The bridge is off" to "bridge-off" else "Looking for renderers on the Wi-Fi" to "speakers-empty"
+                val (text, tag) = when (note) {
+                    ListNote.BRIDGE_OFF -> "The bridge is off" to "bridge-off"
+                    ListNote.LOOKING -> "Looking for renderers on the Wi-Fi" to "speakers-empty"
+                }
                 Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag(tag))
             }
-        } else {
-            items(speakers, key = { it.udn }) { speaker ->
-                SpeakerCard(
-                    speaker,
-                    buttons = buttonsFor(speaker, speaker.udn in busy),
-                    onAction = { presenter.press(speaker.udn, it) },
-                    onHide = { model.hide(speaker) },
-                    onRename = { renaming = speaker.udn },
-                )
-            }
         }
-        if (savedManualVisible(running, bridgeUp)) {
-            // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever there is no bridge (a hidden one is skipped)
-            items(savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }, names), key = { "manual-${it.udn}" }) { card ->
-                SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn })
-            }
+        items(listing.live, key = { it.udn }) { speaker ->
+            SpeakerCard(
+                speaker,
+                buttons = buttonsFor(speaker, speaker.udn in busy),
+                onAction = { presenter.press(speaker.udn, it) },
+                onHide = { model.hide(speaker) },
+                onRename = { renaming = speaker.udn },
+            )
+        }
+        // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)
+        items(listing.saved, key = { "manual-${it.udn}" }) { card ->
+            SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn })
         }
         if (hidden.isNotEmpty()) {
             item(key = "hidden-header") {
@@ -118,9 +128,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
     renaming?.let { udn ->
-        // the card on the list now: a running one, or the greyed card of a saved renderer while there is no bridge
-        val card = speakers.firstOrNull { it.udn == udn }
-            ?: savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }, names).firstOrNull { it.udn == udn && !bridgeUp }
+        // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
+        val card = (listing.live + listing.saved).firstOrNull { it.udn == udn }
         if (card == null) {
             renaming = null
         } else {

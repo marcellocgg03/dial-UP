@@ -4,8 +4,10 @@ package dev.dialup.app.model
 
 import dev.dialup.app.AppModel
 import dev.t2u.lounge.PlayerStatus
+import dev.t2u.renderer.ManualSpeaker
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
+import dev.t2u.renderer.savedSpeakerCards
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,12 +56,47 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
 
 /**
- * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are listed whenever there is no bridge:
- * the switch is off, or the service runs without one (no Wi-Fi, a failed start, the start retry, a reload restart). Once a
- * bridge exists its own list already merges the offline manual entries (plan 07-14), so drawing them again would duplicate them.
- * [serviceUp] is part of the signature so the rule reads as "service state, bridge state" but does not change the answer.
+ * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are drawn whenever the running bridge's
+ * own list is not shown: the switch is off (also while the old service is still stopping), or the service or the bridge is not up
+ * (no Wi-Fi, a failed start, the start retry, a reload restart). With a bridge up under an enabled switch its own list already
+ * merges the offline manual entries (plan 07-14), so drawing them again would duplicate them.
  */
-fun savedManualVisible(serviceUp: Boolean, bridgeUp: Boolean): Boolean = !bridgeUp
+fun savedManualVisible(switchOn: Boolean, serviceUp: Boolean, bridgeUp: Boolean): Boolean = !(switchOn && serviceUp && bridgeUp)
+
+/** What the empty Renderers list says: [BRIDGE_OFF] "The bridge is off", [LOOKING] "Looking for renderers on the Wi-Fi". */
+enum class ListNote { BRIDGE_OFF, LOOKING }
+
+/** The Renderers list as drawn: the running bridge's cards [live], the greyed [saved] cards, and the [note] when [live] is empty. */
+data class RendererListing(val live: List<SpeakerUi>, val saved: List<SpeakerUi>, val note: ListNote?)
+
+/**
+ * The one rule behind the Renderers list (author's request of 2026-11-01: with the Bridge enable switch off, no auto-discovered
+ * renderer is listed, only the ones saved by address, greyed). The running bridge's list ([live]) is shown only when the switch
+ * is on and the service and the bridge are both up, and then [saved] is not drawn (the bridge's list already merges it). In every
+ * other case [live] is empty and [saved] are the greyed saved cards ([savedSpeakerCards]: hidden UDNs are skipped, user [names]
+ * applied), so Hide and Restore are unchanged and a saved renderer that is also discovered shows once. The note is null while
+ * live cards are shown; otherwise "looking" when the switch is on and the service is up, else "bridge off". The DIAL targets go
+ * with the bridge stop (Bridge.stop, registry.removeAll), not with this rule.
+ */
+fun rendererListing(
+    switchOn: Boolean,
+    serviceUp: Boolean,
+    bridgeUp: Boolean,
+    live: List<SpeakerUi>,
+    saved: List<ManualSpeaker>,
+    hidden: Set<String>,
+    names: Map<String, String>,
+): RendererListing {
+    val showLive = !savedManualVisible(switchOn, serviceUp, bridgeUp)
+    val shownLive = if (showLive) live else emptyList()
+    val shownSaved = if (showLive) emptyList() else savedSpeakerCards(saved, hidden, names)
+    val note = when {
+        shownLive.isNotEmpty() -> null
+        switchOn && serviceUp -> ListNote.LOOKING
+        else -> ListNote.BRIDGE_OFF
+    }
+    return RendererListing(shownLive, shownSaved, note)
+}
 
 /**
  * Why Add speaker cannot work now, or null when it can (review WR-04): the switch is off ([serviceUp] false), or the service runs
