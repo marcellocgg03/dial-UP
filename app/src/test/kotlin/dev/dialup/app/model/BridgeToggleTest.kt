@@ -155,4 +155,32 @@ class BridgeToggleTest {
         val third = flight.launch(backgroundScope) { false }
         assertFalse(third === first)
     }
+
+    @Test
+    fun `start after the old service stops`() = runTest {
+        var starts = 0
+        val started = startWhenStopped(
+            awaitGone = { delay(300); true },
+            stillWanted = { true },
+            start = { starts++ },
+        )
+        assertTrue(started)
+        assertEquals(1, starts)
+    }
+
+    @Test
+    fun `switched off again meanwhile gives no start`() = runTest {
+        var starts = 0
+        val started = startWhenStopped(awaitGone = { true }, stillWanted = { false }, start = { starts++ })
+        assertFalse(started)
+        assertEquals(0, starts)
+    }
+
+    @Test
+    fun `the old service never went away gives no start`() = runTest {
+        var starts = 0
+        val started = startWhenStopped(awaitGone = { false }, stillWanted = { true }, start = { starts++ })
+        assertFalse(started)
+        assertEquals(0, starts)
+    }
 }
