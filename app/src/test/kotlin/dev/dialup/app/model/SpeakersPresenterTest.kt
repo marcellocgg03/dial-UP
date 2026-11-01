@@ -255,4 +255,12 @@ class SpeakersPresenterTest {
         assertTrue(hideOffered(speaker(PlayerStatus.IDLE, online = false).copy(manual = true)))
         assertEquals(false, hideOffered(speaker(PlayerStatus.IDLE, online = false)))
     }
+
+    @Test
+    fun `delete is offered only on renderers saved by address, answering or not`() {
+        assertTrue(deleteOffered(speaker(PlayerStatus.IDLE).copy(manual = true)))
+        assertTrue(deleteOffered(speaker(PlayerStatus.IDLE, online = false).copy(manual = true)))
+        assertEquals(false, deleteOffered(speaker(PlayerStatus.IDLE)))
+        assertEquals(false, deleteOffered(speaker(PlayerStatus.IDLE, online = false)))
+    }
 }

@@ -34,6 +34,7 @@ class BridgeManualTest {
         manualProbeIntervalMs: Long? = null,
         manualDescriptionUrl: ((String) -> String)? = null,
         manualSsdpGraceMs: Long? = null,
+        names: RendererNames? = null,
     ): Bridge =
         h.newBridge(
             searchTarget = InetSocketAddress(h.loopback, h.freePort()),
@@ -44,6 +45,7 @@ class BridgeManualTest {
             manualProbeIntervalMs = manualProbeIntervalMs,
             manualDescriptionUrl = manualDescriptionUrl,
             manualSsdpGraceMs = manualSsdpGraceMs,
+            names = names,
         )
 
     @Test
@@ -283,6 +285,30 @@ class BridgeManualTest {
 
         assertTrue(store.entries.value.isEmpty())
         h.awaitUntil("no greyed card remains") { bridge.speakers.value.isEmpty() }
+    }
+
+    @Test
+    @DisplayName("Delete of a hidden manual speaker leaves it unhidden, unnamed and gone from manual.json")
+    fun deleteOfAHiddenManualSpeakerLeavesNoResidue() = h.run<Unit> {
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        val names = RendererNames(h.dataDir).load()
+        val store = ManualSpeakers(h.dataDir).load()
+        val bridge = blindBridge(manual = store, manualProbeIntervalMs = 200, hidden = hidden, names = names)
+        bridge.start()
+        assertTrue(bridge.addManual(h.loopback) is ManualAddResult.Added)
+        h.awaitUntil("the speaker listed") { bridge.speakers.value.size == 1 }
+        assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Kitchen"))
+        assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
+        h.awaitUntil("the list empty") { bridge.speakers.value.isEmpty() }
+
+        assertTrue(bridge.removeManual(HARNESS_RENDERER_UDN))
+
+        assertFalse(hidden.contains(HARNESS_RENDERER_UDN), "unhidden")
+        assertTrue(hidden.entries.value.isEmpty())
+        assertNull(names.get(HARNESS_RENDERER_UDN), "its user name is dropped")
+        assertTrue(store.entries.value.isEmpty())
+        assertTrue(ManualSpeakers(h.dataDir).load().entries.value.isEmpty(), "gone from manual.json")
+        assertTrue(HiddenSpeakers(h.dataDir).load().entries.value.isEmpty(), "gone from hidden.json")
     }
 
     // ------------------------------------------------------------------------------------------ 261101-dcg: Hide replaces Remove

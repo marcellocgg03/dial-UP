@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import dev.dialup.app.model.CardButtons
 import dev.dialup.app.model.PlayPause
 import dev.dialup.app.model.buttonsFor
+import dev.dialup.app.model.deleteOffered
 import dev.dialup.app.model.hideOffered
 import dev.dialup.app.model.playPauseAction
 import dev.dialup.app.model.positionAt
@@ -62,6 +63,7 @@ fun SpeakerCard(
     onAction: (SpeakerAction) -> Unit = {},
     onHide: () -> Unit = {},
     onRename: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
@@ -99,7 +101,7 @@ fun SpeakerCard(
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // GUI-03: the overflow menu: Rename on every card. Hide is the only way off the list (PD-3): offered while the speaker answers and on the greyed card of a saved one.
+            // GUI-03: the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one (PD-3); Delete only on a renderer saved by address (quick 261101-oib).
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {
@@ -123,6 +125,16 @@ fun SpeakerCard(
                                 onHide()
                             },
                             modifier = Modifier.testTag("menu-hide-$udn"),
+                        )
+                    }
+                    if (deleteOffered(speaker)) {
+                        DropdownMenuItem(
+                            text = { Text("Delete") },
+                            onClick = {
+                                menuOpen = false
+                                onDelete()
+                            },
+                            modifier = Modifier.testTag("menu-delete-$udn"),
                         )
                     }
                 }

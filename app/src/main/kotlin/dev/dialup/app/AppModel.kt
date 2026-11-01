@@ -100,8 +100,28 @@ class AppModel private constructor(context: Context) {
         }
     }
 
-    /** GUI-04, D-07: the speakers added by address (they can be hidden, not removed); the store lives with the process, so the list is right while the bridge is off too. */
+    /** GUI-04, D-07: the speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
     val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
+
+    /**
+     * Delete on the card (or the Hidden row) of a renderer saved by address (quick 261101-oib; only [dev.dialup.app.model.deleteOffered]
+     * cards have the item). Through the running bridge when there is one (it also takes the renderer out of the cast menus); with the bridge off, or
+     * when the bridge does not know it, straight on the store. The UDN also leaves the hidden and name stores so nothing of the
+     * renderer stays behind. Fire-and-forget: a failure leaves the renderer listed.
+     */
+    fun deleteManual(udn: String): Job = scope.launch {
+        try {
+            val bridge = cast.value?.currentBridge()
+            val stores = SpeakerStores.of(appContext)
+            if (bridge == null || !bridge.removeManual(udn)) stores.manual.remove(udn)
+            stores.hidden.remove(udn)
+            stores.names.remove(udn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the renderer stays listed
+        }
+    }
 
     /** GUI rename: the names the author gave the renderers, by UDN; the store lives with the process, so it is readable while the bridge is off too. */
     val names: StateFlow<Map<String, String>> = SpeakerStores.of(context).names.entries

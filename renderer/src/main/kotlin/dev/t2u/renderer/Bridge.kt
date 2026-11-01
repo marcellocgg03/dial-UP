@@ -543,13 +543,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * GUI-04, D-07: forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
-     * of the registry (byebye, DIAL server closed). A speaker that multicast discovery also finds comes back at the next search as
+     * of the registry (byebye, DIAL server closed); its hidden and renamed marks go too (quick 261101-oib). A speaker that multicast discovery also finds comes back at the next search as
      * an ordinary discovered speaker without the manual mark; hiding it is what keeps it away. False when it was not saved.
-     * The app no longer calls this (Hide replaced Remove on the card, 2026-11-01); it stays covered by BridgeManualTest.
+     * The app calls this from Delete on the card of a renderer saved by address (quick 261101-oib); BridgeManualTest covers it.
      */
     suspend fun removeManual(udn: String): Boolean {
         val store = deps.manual ?: return false
         if (!store.remove(udn)) return false
+        // quick 261101-oib: nothing of the renderer stays behind; a hidden one is un-hidden, its user name is dropped
+        deps.hidden?.remove(udn)
+        deps.names?.remove(udn)
         if (started.get() && !stopped.get()) registry?.remove(udn, "manual-removed", null)
         emit("manual-removed", "udn" to udn)
         return true

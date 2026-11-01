@@ -51,9 +51,15 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 
 /**
  * Whether a card offers Hide (GUI-03, PD-3): when the renderer answers, or when it is saved by address, so its greyed card can be
- * hidden too. Hide is the only way to take a card off the list; an offline card that is not saved has nothing to hide.
+ * hidden too. An offline card that is not saved has nothing to hide.
  */
 fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
+
+/**
+ * Whether a card offers Delete (quick 261101-oib): only for a renderer added by address (saved in manual.json), whether it answers
+ * or not. A discovered-only renderer comes back at the next search, so there is nothing to delete; Hide is what keeps it away.
+ */
+fun deleteOffered(s: SpeakerUi): Boolean = s.manual
 
 /**
  * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are drawn whenever the running bridge's

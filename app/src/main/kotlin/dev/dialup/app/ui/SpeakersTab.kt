@@ -101,11 +101,12 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 onAction = { presenter.press(speaker.udn, it) },
                 onHide = { model.hide(speaker) },
                 onRename = { renaming = speaker.udn },
+                onDelete = { model.deleteManual(speaker.udn) },
             )
         }
         // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)
         items(listing.saved, key = { "manual-${it.udn}" }) { card ->
-            SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn })
+            SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn }, onDelete = { model.deleteManual(card.udn) })
         }
         if (hidden.isNotEmpty()) {
             item(key = "hidden-header") {
@@ -121,7 +122,13 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
             }
             if (hiddenExpanded) {
                 items(hidden, key = { "hidden-${it.udn}" }) { speaker ->
-                    HiddenRow(speaker, shownName = names[speaker.udn] ?: speaker.name, onRestore = { model.unhide(speaker.udn) })
+                    HiddenRow(
+                        speaker,
+                        shownName = names[speaker.udn] ?: speaker.name,
+                        onRestore = { model.unhide(speaker.udn) },
+                        // a hidden renderer saved by address can be deleted from here too (quick 261101-oib)
+                        onDelete = if (manual.any { it.udn == speaker.udn }) ({ model.deleteManual(speaker.udn) }) else null,
+                    )
                 }
             }
         }
@@ -146,7 +153,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
 
 /** One hidden speaker: its name and address, and a Restore button (GUI-03). */
 @Composable
-private fun HiddenRow(speaker: HiddenSpeaker, shownName: String, onRestore: () -> Unit) {
+private fun HiddenRow(speaker: HiddenSpeaker, shownName: String, onRestore: () -> Unit, onDelete: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().testTag("hidden-row-${speaker.udn}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -157,5 +164,8 @@ private fun HiddenRow(speaker: HiddenSpeaker, shownName: String, onRestore: () -
             if (speaker.address.isNotEmpty()) Text(speaker.address, style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = onRestore, modifier = Modifier.testTag("btn-restore-${speaker.udn}")) { Text("Restore") }
+        if (onDelete != null) {
+            TextButton(onClick = onDelete, modifier = Modifier.testTag("btn-delete-hidden-${speaker.udn}")) { Text("Delete") }
+        }
     }
 }
