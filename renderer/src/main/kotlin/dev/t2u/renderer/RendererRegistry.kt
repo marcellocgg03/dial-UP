@@ -50,6 +50,8 @@ class RendererRegistry(
     private val events: EventSink = NoEvents,
     private val clock: () -> Long = System::currentTimeMillis,
     private val clearBudgetMs: Long = CLEAR_BUDGET_MS,
+    /** How long [removeAll] and the other removals wait for one speaker's [ManagedRenderer.destroy] (plan 07-19). */
+    private val destroyBudgetMs: Long = DESTROY_BUDGET_MS,
     /** GUI-03: true for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
     private val hidden: (String) -> Boolean = { false },
 ) {
@@ -59,6 +61,9 @@ class RendererRegistry(
 
         /** How often the schedule looks for retries that are due (D-05: an attempt is at most about this late). */
         const val RETRY_CHECK_MS = 10_000L
+
+        /** Bound on one [ManagedRenderer.destroy] inside a removal; a destroy that runs longer finishes in the background. */
+        const val DESTROY_BUDGET_MS = 2000L
 
         /** The skipped-speaker memory never holds more than this many entries (T-05-10); the earliest retry time goes first. */
         const val MAX_SKIPPED = 256
