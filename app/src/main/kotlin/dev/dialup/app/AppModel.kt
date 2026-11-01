@@ -58,6 +58,9 @@ class AppModel private constructor(context: Context) {
     val status: StateFlow<BridgeStatus> =
         cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
+    /** True while a bridge exists (BridgeStatus.running is `bridge != null`); false with the service up but waiting for Wi-Fi. */
+    val bridgeUp: StateFlow<Boolean> = status.map { it.running }.stateIn(scope, SharingStarted.Eagerly, false)
+
     /**
      * GUI-03: Hide from a card's menu. The running bridge drops the speaker as a cast target at once (stopping it first when it
      * plays) and keeps it out. Fire-and-forget: a failure is dropped, a tap must never crash the app.

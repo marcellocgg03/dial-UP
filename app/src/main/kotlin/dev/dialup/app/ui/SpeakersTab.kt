@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
 import dev.dialup.app.model.SpeakersPresenter
 import dev.dialup.app.model.buttonsFor
+import dev.dialup.app.model.savedManualVisible
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.renderer.ManualSpeaker
@@ -40,13 +41,14 @@ import dev.t2u.lounge.PlayerStatus
 /**
  * The Speakers list (GUI-01): one card per speaker the running bridge can cast to. With the service down it says so instead of
  * showing a list that no longer follows anything. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
- * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. While the bridge is off the saved
- * manual speakers are listed as greyed cards that can still be removed (D-07).
+ * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. While there is no bridge (off, or the
+ * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can still be removed (D-07).
  */
 @Composable
 fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val speakers by model.speakers.collectAsStateWithLifecycle()
     val running by model.serviceRunning.collectAsStateWithLifecycle()
+    val bridgeUp by model.bridgeUp.collectAsStateWithLifecycle()
     val hidden by model.hidden.collectAsStateWithLifecycle()
     val manual by model.manual.collectAsStateWithLifecycle()
     var hiddenExpanded by rememberSaveable { mutableStateOf(false) }
@@ -86,8 +88,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 )
             }
         }
-        if (!running) {
-            // D-07: the saved manual speakers stay listed, greyed, and can still be removed while the bridge is off
+        if (savedManualVisible(running, bridgeUp)) {
+            // D-07: the saved manual speakers stay listed, greyed, and can still be removed whenever there is no bridge
             items(manual, key = { "manual-${it.udn}" }) { saved ->
                 val card = offlineCard(saved)
                 SpeakerCard(card, buttons = buttonsFor(card, busy = false), onRemove = { model.removeManual(saved.udn) })

@@ -47,6 +47,14 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 }
 
 /**
+ * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are listed whenever there is no bridge:
+ * the switch is off, or the service runs without one (no Wi-Fi, a failed start, the start retry, a reload restart). Once a
+ * bridge exists its own list already merges the offline manual entries (plan 07-14), so drawing them again would duplicate them.
+ * [serviceUp] is part of the signature so the rule reads as "service state, bridge state" but does not change the answer.
+ */
+fun savedManualVisible(serviceUp: Boolean, bridgeUp: Boolean): Boolean = !bridgeUp
+
+/**
  * Sends card taps to [command] and keeps one command in flight per speaker (RESEARCH Pitfall 9: the Player has no mutex). A press
  * for a speaker already in [busy] is dropped, so a double tap or a tap during a slow SOAP call sends one command; another speaker's
  * press runs in parallel. A command that throws still frees its card. Pure: no Android types.
