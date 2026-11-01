@@ -4,10 +4,12 @@ package dev.dialup.app
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.dialup.app.model.SingleFlight
 import dev.dialup.app.model.restartSequence
 import dev.dialup.app.model.shouldStartService
+import dev.dialup.app.model.startWhenStopped
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -25,14 +27,47 @@ object BridgeControl {
     fun setEnabled(context: Context, on: Boolean, source: String) {
         val app = context.applicationContext
         AppSettings.of(app).update { it.copy(bridgeEnabled = on) }
-        ServiceHub.service?.evidence?.event("settings", mapOf("bridgeEnabled" to on, "source" to source))
+        // On while the old service is still being destroyed (a quick off-then-on flip): the start waits for it (WR-01)
+        val deferred = on && ServiceHub.service != null
+        val details = mutableMapOf<String, Any?>("bridgeEnabled" to on, "source" to source)
+        if (deferred) details["deferred"] = true
+        ServiceHub.service?.evidence?.event("settings", details)
         if (on) {
-            if (shouldStartService(true, BatteryGate.isOpen(app), ServiceHub.service != null)) {
-                // reason extra unset: the service reads this as an open (the author turned it on)
-                ContextCompat.startForegroundService(app, Intent(app, BridgeService::class.java))
+            if (deferred) {
+                startAfterStop(app)
+            } else if (shouldStartService(true, BatteryGate.isOpen(app), false)) {
+                startService(app)
             }
         } else {
             ServiceHub.service?.stopSelf()
+        }
+    }
+
+    private val startFlight = SingleFlight<Boolean>()
+
+    /**
+     * Starts the service once the old one is gone, when the switch is still on and the battery exemption is held (D-04). A
+     * service that is running and not stopping simply times out the wait and nothing happens.
+     */
+    private fun startAfterStop(app: Context) {
+        startFlight.launch(BridgeLifecycle.scope) {
+            startWhenStopped(
+                awaitGone = { awaitServiceGone() },
+                stillWanted = {
+                    AppSettings.of(app).data.value.bridgeEnabled && BatteryGate.isOpen(app) && ServiceHub.service == null
+                },
+                start = { startService(app) },
+            )
+        }
+    }
+
+    private fun startService(app: Context) {
+        try {
+            // reason extra unset: the service reads this as an open (the author turned it on)
+            ContextCompat.startForegroundService(app, Intent(app, BridgeService::class.java))
+        } catch (t: Throwable) {
+            // a foreground-service start from the background can be denied on Android 12+
+            Log.w("t2u", "bridge start refused: ${t.javaClass.name}: ${t.message}")
         }
     }
 

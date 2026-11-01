@@ -82,3 +82,16 @@ class SingleFlight<T> {
             ?: scope.async { block() }.also { current = it }
     }
 }
+
+/**
+ * The deferred start behind a quick off-then-on flip (review WR-01): waits for the old service to be gone ([awaitGone], which
+ * also covers the process-wide stop), then starts only when the switch is still wanted ([stillWanted] re-reads the persisted
+ * switch, the battery gate and that no service runs, D-04). Returns whether [start] ran; false when the old service never went
+ * away or the switch was turned off again meanwhile.
+ */
+suspend fun startWhenStopped(awaitGone: suspend () -> Boolean, stillWanted: () -> Boolean, start: () -> Unit): Boolean {
+    if (!awaitGone()) return false
+    if (!stillWanted()) return false
+    start()
+    return true
+}
