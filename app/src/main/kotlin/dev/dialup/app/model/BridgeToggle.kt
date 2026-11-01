@@ -2,6 +2,12 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+
 /** What the header switch does when the author flips it. */
 enum class ToggleAction { START, STOP, CONFIRM_STOP, NOTHING }
 
@@ -47,12 +53,32 @@ enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }
 fun restartStep(casting: Int): RestartStep = if (casting > 0) RestartStep.CONFIRM_FIRST else RestartStep.RESTART_NOW
 
 /**
- * Off, wait for the service to be gone, then on. Switching on runs even when the wait timed out, so a restart
- * never leaves the bridge off by its own doing. Returns whether the old service stopped in time.
+ * Off, wait for the service to be gone, then on. Switching on is guaranteed: it runs when the wait timed out and also when
+ * the caller is cancelled during the wait (the screen closed mid-restart), under [NonCancellable], so a restart never leaves
+ * the bridge off by its own doing (review CR-03). Returns whether the old service stopped in time; a cancellation during the
+ * wait is rethrown after the switch-on.
  */
 suspend fun restartSequence(setEnabled: (Boolean) -> Unit, awaitStopped: suspend () -> Boolean): Boolean {
     setEnabled(false)
-    val stopped = awaitStopped()
-    setEnabled(true)
+    var stopped = false
+    try {
+        stopped = awaitStopped()
+    } finally {
+        withContext(NonCancellable) { setEnabled(true) }
+    }
     return stopped
+}
+
+/**
+ * Single flight: [launch] starts [block] on the given scope and returns its [Deferred]; while that one is still active a
+ * further [launch] returns it instead of starting a second. An awaiting caller that is cancelled does not cancel the work,
+ * which belongs to the scope.
+ */
+class SingleFlight<T> {
+    private var current: Deferred<T>? = null
+
+    fun launch(scope: CoroutineScope, block: suspend () -> T): Deferred<T> = synchronized(this) {
+        current?.takeIf { it.isActive }
+            ?: scope.async { block() }.also { current = it }
+    }
 }

@@ -5,6 +5,7 @@ package dev.dialup.app
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import dev.dialup.app.model.SingleFlight
 import dev.dialup.app.model.restartSequence
 import dev.dialup.app.model.shouldStartService
 import kotlinx.coroutines.flow.first
@@ -35,17 +36,28 @@ object BridgeControl {
         }
     }
 
+    private val restartFlight = SingleFlight<Boolean>()
+
     /**
-     * Restarts the bridge: off, wait up to 15 s for the old service to be gone, then on. Only call it after
-     * [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (plan 07-10's RestartPrompt does
-     * that): a restart ends playback like a switch-off does (D-03). The off-then-on order avoids starting the
-     * service while the old instance is still being destroyed. Returns false when the old service did not stop in time.
+     * Restarts the bridge: off, wait up to 15 s for the old service to be gone and for the process-wide stop of plan 07-20,
+     * then on. Only call it after [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (plan 07-10's
+     * RestartPrompt does that): a restart ends playback like a switch-off does (D-03). The off-then-on order avoids starting
+     * the service while the old instance is still being destroyed. The sequence runs on [BridgeLifecycle.scope], so closing
+     * or recreating the Activity mid-restart cannot cancel it, and its switch-on is non-cancellable (CR-03). A second restart
+     * while one runs joins it. Returns false when the old service did not stop in time.
      */
     suspend fun restart(context: Context): Boolean =
-        restartSequence(
-            setEnabled = { setEnabled(context, it, "restart") },
-            awaitStopped = { withTimeoutOrNull(RESTART_STOP_TIMEOUT_MS) { ServiceHub.serviceFlow.first { it == null } } != null },
-        )
+        restartFlight.launch(BridgeLifecycle.scope) {
+            restartSequence(
+                setEnabled = { setEnabled(context, it, "restart") },
+                awaitStopped = { awaitServiceGone() },
+            )
+        }.await()
 
-    private const val RESTART_STOP_TIMEOUT_MS = 15_000L
+    /** True when the service is gone and no stop is in flight, each within [STOP_TIMEOUT_MS]. */
+    private suspend fun awaitServiceGone(): Boolean =
+        withTimeoutOrNull(STOP_TIMEOUT_MS) { ServiceHub.serviceFlow.first { it == null } } != null &&
+            BridgeLifecycle.awaitIdle(STOP_TIMEOUT_MS)
+
+    private const val STOP_TIMEOUT_MS = 15_000L
 }
