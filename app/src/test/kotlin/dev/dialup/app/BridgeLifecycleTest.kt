@@ -83,4 +83,22 @@ class BridgeLifecycleTest {
         runCurrent()
         assertEquals(listOf("stop-begin@0", "stop-end@500", "start@500"), log)
     }
+
+    @Test
+    fun aBindFailureIsRecognisedThroughItsCauseChain() {
+        assertTrue(isBindFailure(java.net.BindException("Address already in use")))
+        assertTrue(isBindFailure(java.io.IOException("start failed", java.net.BindException("in use"))))
+        assertTrue(isBindFailure(IllegalStateException("wrapped", java.io.IOException("x", java.net.BindException("in use")))))
+        assertFalse(isBindFailure(IllegalStateException("boom")))
+        assertFalse(isBindFailure(java.io.IOException("connection reset")))
+    }
+
+    @Test
+    fun retryDelays() {
+        assertEquals(2_000L, startRetryDelayMs(0, true))
+        assertEquals(2_000L, startRetryDelayMs(1, true))
+        assertEquals(START_RETRY_MS, startRetryDelayMs(2, true))
+        assertEquals(START_RETRY_MS, startRetryDelayMs(0, false))
+        assertEquals(START_RETRY_MS, startRetryDelayMs(1, false))
+    }
 }
