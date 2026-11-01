@@ -7,6 +7,7 @@ package dev.t2u.renderer
 // 127.0.0.1 only; the "multicast" targets are unicast sockets of the test.
 
 import dev.t2u.dial.DialAccessMode
+import dev.t2u.lounge.FakeInnerTubeServer
 import dev.t2u.lounge.FakeLoungeServer
 import dev.t2u.media.ResolvedInfo
 import dev.t2u.media.VideoResolver
@@ -51,6 +52,11 @@ class BridgeTest {
     private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
     private val fakeRenderer = FakeRenderer().also { it.start() }
     private val lounge = FakeLoungeServer()
+
+    // Stands in for www.youtube.com: the first cast awaits InnerTube /next before it plays, so a real call ties the test to
+    // the network (a hanging DNS lookup alone outlasts the 10 s waits below).
+    private val innerTube = FakeInnerTubeServer()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val http = HttpClient.newHttpClient()
     private val dataDir: File = Files.createTempDirectory("bridge-").toFile().also { it.deleteOnExit() }
@@ -132,10 +138,11 @@ class BridgeTest {
         speakerSocket.close()
         notifySocket.close()
         lounge.close()
+        innerTube.close()
         fakeRenderer.close()
     }
 
-    private fun freePort(): Int = ServerSocket(0, 1, loopback).use { it.localPort }
+    private fun freePort(): Int = freeServerPort(loopback)
 
     private fun newBridge(mode: () -> DialAccessMode = { accessMode }, mediaPort: Int = 0): Bridge {
         val config = Config(
@@ -165,6 +172,7 @@ class BridgeTest {
                 scope = scope,
                 bufferDir = null,
                 loungeEndpoints = lounge.endpoints,
+                innerTubeEndpoints = innerTube.endpoints,
             ),
         )
         bridges.add(bridge)

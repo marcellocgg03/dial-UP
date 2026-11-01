@@ -6,6 +6,7 @@ package dev.t2u.renderer
 // GPL-3.0-only.
 
 import dev.t2u.dial.DialAccessMode
+import dev.t2u.lounge.FakeInnerTubeServer
 import dev.t2u.lounge.FakeLoungeServer
 import dev.t2u.media.ResolvedInfo
 import dev.t2u.media.VideoResolver
@@ -27,7 +28,6 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -41,6 +41,11 @@ class BridgeClearTest {
     private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
     private val fakeRenderer = FakeRenderer().also { it.start() }
     private val lounge = FakeLoungeServer()
+
+    // Stands in for www.youtube.com: the first cast awaits InnerTube /next before it plays, so a real call ties the test to
+    // the network (a hanging DNS lookup alone outlasts the 10 s waits below).
+    private val innerTube = FakeInnerTubeServer()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val http = HttpClient.newHttpClient()
     private val dataDir = Files.createTempDirectory("bridge-clear-").toFile().also { it.deleteOnExit() }
@@ -89,10 +94,11 @@ class BridgeClearTest {
         speakerSocket.close()
         notifySocket.close()
         lounge.close()
+        innerTube.close()
         fakeRenderer.close()
     }
 
-    private fun freePort(): Int = ServerSocket(0, 1, loopback).use { it.localPort }
+    private fun freePort(): Int = freeServerPort(loopback)
 
     private fun newBridge(): Bridge {
         val bridge = Bridge(
@@ -117,6 +123,7 @@ class BridgeClearTest {
                 scope = scope,
                 bufferDir = null,
                 loungeEndpoints = lounge.endpoints,
+                innerTubeEndpoints = innerTube.endpoints,
             ),
         )
         bridges.add(bridge)

@@ -48,6 +48,7 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -184,7 +185,7 @@ internal class BridgeHarness(
 
     // ------------------------------------------------------------------------------------------ bridge
 
-    fun freePort(): Int = ServerSocket(0, 1, loopback).use { it.localPort }
+    fun freePort(): Int = freeServerPort(loopback)
 
     /** Test defaults: fast polling, a short start timeout, a free receiver port, any free media port. */
     fun testConfig(
@@ -498,4 +499,19 @@ internal class BridgeHarness(
         innerTube.close()
         fakeRenderer.close()
     }
+}
+
+/**
+ * A free port for a server the test binds later (the DIAL receivers' base port). Not from bind(0): that hands out a port from
+ * the ephemeral range, which the test's own outgoing connections and port-0 servers can take again before the bridge binds it
+ * (BindException on the DIAL port, "discovery failed", full-suite red 2026-11-01; this WSL machine's range is only
+ * 35065-39160). Ports below every usual ephemeral range (Linux 32768+, Windows and macOS 49152+) are taken only by explicit
+ * binds; the receivers may use the next few ports for further speakers.
+ */
+internal fun freeServerPort(host: InetAddress): Int {
+    repeat(200) {
+        val port = 20_000 + Random.nextInt(10_000)
+        if (runCatching { ServerSocket(port, 1, host).close() }.isSuccess) return port
+    }
+    return ServerSocket(0, 1, host).use { it.localPort }
 }

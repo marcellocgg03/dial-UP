@@ -60,10 +60,38 @@ internal class PositionDriftTest {
     ) {
         val r: Renderer get() = h.renderer
 
-        /** Moves the clock and brings the speaker up to it. */
+        /** The clock value the last poll brought the speaker up to (see [refreshAtEachPoll]). */
+        private val refreshedTo = AtomicLong(Long.MIN_VALUE)
+
+        /**
+         * Brings the speaker up to the clock at the start of every poll, inside the fake's GetTransportInfo handler. A poll is
+         * two reads (GetTransportInfo, then GetPositionInfo) and the mimic writes the transport state and the RelTime
+         * separately; a refresh from the test thread could land between the two reads and show PLAYING (old) at the seek
+         * target (new), which ends a pending seek hold (full-suite red, 2026-11-01). A real speaker answers each request from
+         * one state, and so does this one now.
+         */
+        fun refreshAtEachPoll() {
+            fake.beforeAction = { action ->
+                if (action == "GetTransportInfo") {
+                    val now = clock.now()
+                    mimic.refresh()
+                    refreshedTo.accumulateAndGet(now, ::maxOf)
+                }
+            }
+        }
+
+        /** Moves the clock and waits until a poll has brought the speaker up to it (directly when no poll comes in 2 s). */
         fun advance(deltaMs: Long) {
             clock.advance(deltaMs)
-            mimic.refresh()
+            val target = clock.now()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (refreshedTo.get() < target) {
+                if (System.nanoTime() > deadline) {
+                    mimic.refresh() // no poll is running, so nothing can read half of it
+                    return
+                }
+                Thread.sleep(2)
+            }
         }
 
         /** What YouTubeApp.handlePlayerStateEvent would turn into an onStateChange: the status or the position moved. */
@@ -100,6 +128,7 @@ internal class PositionDriftTest {
             return runBlocking {
                 val events = CopyOnWriteArrayList<PlayerStateEvent>()
                 val rig = Rig(fake, mimic, h, clock, events)
+                rig.refreshAtEachPoll()
                 rig.r.init()
                 rig.r.addStateListener { events.add(it) }
                 assertTrue(rig.r.play(Video(A), 0.0))
