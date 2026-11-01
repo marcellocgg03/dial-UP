@@ -79,12 +79,13 @@ object BridgeControl {
      * RestartPrompt does that): a restart ends playback like a switch-off does (D-03). The off-then-on order avoids starting
      * the service while the old instance is still being destroyed. The sequence runs on [BridgeLifecycle.scope], so closing
      * or recreating the Activity mid-restart cannot cancel it, and its switch-on is non-cancellable (CR-03). A second restart
-     * while one runs joins it. Returns false when the old service did not stop in time.
+     * while one runs joins it. Returns false when the old service did not stop in time. [source] lands in the `settings`
+     * evidence events: "restart" for the author's button, "auto-restart" for the restart an app open makes (T-dcg-06).
      */
-    suspend fun restart(context: Context): Boolean =
+    suspend fun restart(context: Context, source: String = "restart"): Boolean =
         restartFlight.launch(BridgeLifecycle.scope) {
             restartSequence(
-                setEnabled = { setEnabled(context, it, "restart") },
+                setEnabled = { setEnabled(context, it, source) },
                 awaitStopped = { awaitServiceGone() },
             )
         }.await()

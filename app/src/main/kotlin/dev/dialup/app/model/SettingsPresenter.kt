@@ -50,7 +50,12 @@ interface BridgePort {
     suspend fun cacheInfo(): CacheInfo?
     suspend fun updateNow(): YtDlpUpdateOutcome?
     suspend fun ytdlpVersion(): String?
-    suspend fun restart(): Boolean
+
+    /** The restart-relevant settings the running bridge was started with; null while there is no bridge (PD-6). */
+    fun runningWith(): RestartFields?
+
+    /** Restarts the bridge; [source] ([RESTART_SOURCE] or [AUTO_RESTART_SOURCE]) lands in the `settings` evidence events. */
+    suspend fun restart(source: String): Boolean
 }
 
 /** The settings the tab changes, and whether the running bridge needs a restart to pick the change up (D-09, RESEARCH A2). */
@@ -142,7 +147,7 @@ class SettingsPresenter(
     val state: StateFlow<SettingsUi> = ui.asStateFlow()
 
     /** The restart card and its confirmation; its action restarts the bridge. */
-    val restart = RestartPrompt(scope, visibleMs) { bridge.restart() }
+    val restart = RestartPrompt(scope, visibleMs) { source -> bridge.restart(source) }
 
     init {
         scope.launch {
@@ -203,6 +208,30 @@ class SettingsPresenter(
     fun refresh() {
         ui.update { it.copy(message = null, logMessage = null) }
         scope.launch { if (bridge.running.value) refreshUsage() }
+    }
+
+    /**
+     * Called on every app open (PD-7; the Activity decides what an open is). When the running bridge was started with other
+     * restart-relevant settings than the saved ones and the switch is on, it restarts the bridge once with nothing cast
+     * ([RestartPrompt.restartNow]) or, with something cast ([casting] above 0), shows the restart card until nothing is cast
+     * ([RestartPrompt.showUntilCastEnds]). Nothing pending, no bridge or the switch off: nothing. A failure is dropped; an open
+     * must never crash the app. [casting] is read at decision time.
+     */
+    fun onAppOpened(casting: () -> Int) {
+        scope.launch {
+            try {
+                val saved = restartFields(settings.effective())
+                when (autoRestartOnOpen(bridge.runningWith(), saved, settings.data.value.bridgeEnabled, casting())) {
+                    AutoRestart.RESTART -> restart.restartNow()
+                    AutoRestart.SHOW_CARD -> restart.showUntilCastEnds()
+                    AutoRestart.NONE -> Unit
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // nothing is applied; the author's own restart card still works
+            }
+        }
     }
 
     private fun changed(key: SettingKey): Boolean {

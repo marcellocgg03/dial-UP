@@ -5,6 +5,7 @@ package dev.dialup.app
 import android.content.Context
 import dev.dialup.app.model.BridgePort
 import dev.dialup.app.model.EffectiveSettings
+import dev.dialup.app.model.RestartFields
 import dev.dialup.app.model.SettingsPort
 import dev.dialup.app.model.SettingsPresenter
 import dev.t2u.media.CacheInfo
@@ -70,7 +71,9 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
 
         override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion()
 
-        override suspend fun restart(): Boolean = BridgeControl.restart(app)
+        override fun runningWith(): RestartFields? = model.cast.value?.runningWith()
+
+        override suspend fun restart(source: String): Boolean = BridgeControl.restart(app, source)
     }
 
     fun presenter(): SettingsPresenter = SettingsPresenter(scope, settingsPort, bridgePort)

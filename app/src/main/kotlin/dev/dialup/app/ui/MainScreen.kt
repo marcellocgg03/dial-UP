@@ -15,6 +15,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -39,12 +40,14 @@ import kotlinx.coroutines.flow.StateFlow
  * The Compose root. testTagsAsResourceId lets uiautomator see the test tags (plan 07-16). The permission
  * banners sit above both tabs (D-01); their Grant buttons call back into the Activity, which owns the
  * result launchers. A bottom bar switches between Speakers and Settings (plan 07-10). The theme comes from the Activity.
+ * Every app open ([opens] going up) lets the settings presenter apply a bridge restart that is still owed (quick 261101-dcg).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MainScreen(
     model: AppModel,
     permissions: StateFlow<PermissionState>,
+    opens: StateFlow<Int>,
     theme: ThemeMode,
     onGrantNotifications: () -> Unit,
     onGrantBattery: () -> Unit,
@@ -54,6 +57,10 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     val settings = remember(scope) { SettingsModel(context, scope).presenter() }
     val settingsUi by settings.state.collectAsStateWithLifecycle()
+    val openCount by opens.collectAsStateWithLifecycle()
+    LaunchedEffect(openCount) {
+        if (openCount > 0) settings.onAppOpened { model.casting.value }
+    }
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
     DialUpTheme(theme) {
         Scaffold(

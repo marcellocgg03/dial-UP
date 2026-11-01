@@ -52,8 +52,19 @@ class MainActivity : ComponentActivity() {
         refreshPermissions()
     }
 
+    /**
+     * How many times the app was opened in this Activity instance (quick 261101-dcg, PD-7). An open is every start except the
+     * first one after a recreation (rotation, dark-mode change, process restore), so turning the phone never restarts the
+     * bridge. MainScreen applies a restart that is still owed on every increase.
+     */
+    private val opens = MutableStateFlow(0)
+
+    /** True from [onCreate] of a recreated Activity until its first [onStart]. */
+    private var recreated = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        recreated = savedInstanceState != null
         enableEdgeToEdge()
         refreshPermissions()
         setContent {
@@ -69,11 +80,17 @@ class MainActivity : ComponentActivity() {
             MainScreen(
                 model = AppModel.of(applicationContext),
                 permissions = permissionState.asStateFlow(),
+                opens = opens.asStateFlow(),
                 theme = theme,
                 onGrantNotifications = ::grantNotifications,
                 onGrantBattery = ::grantBattery,
             )
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (recreated) recreated = false else opens.value += 1
     }
 
     override fun onResume() {

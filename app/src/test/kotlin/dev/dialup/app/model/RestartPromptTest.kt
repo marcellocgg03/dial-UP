@@ -142,4 +142,68 @@ class RestartPromptTest {
         runCurrent()
         assertEquals(2, runs)
     }
+
+    private val auto = RestartFields(gapless = true, outputFormat = "auto")
+    private val changed = RestartFields(gapless = false, outputFormat = "auto")
+
+    @Test
+    fun `opening the app restarts only a running bridge that differs from the saved settings`() {
+        assertEquals(AutoRestart.NONE, autoRestartOnOpen(null, changed, switchedOn = true, casting = 0))
+        assertEquals(AutoRestart.NONE, autoRestartOnOpen(auto, auto, switchedOn = true, casting = 0))
+        assertEquals(AutoRestart.NONE, autoRestartOnOpen(auto, changed, switchedOn = false, casting = 0))
+        assertEquals(AutoRestart.RESTART, autoRestartOnOpen(auto, changed, switchedOn = true, casting = 0))
+        assertEquals(AutoRestart.SHOW_CARD, autoRestartOnOpen(auto, changed, switchedOn = true, casting = 1))
+        assertEquals(AutoRestart.SHOW_CARD, autoRestartOnOpen(auto, changed, switchedOn = true, casting = 2))
+    }
+
+    @Test
+    fun `the card shown on open stays until nothing is cast`() = runTest {
+        var runs = 0
+        val prompt = RestartPrompt(backgroundScope) { runs++; true }
+
+        prompt.showUntilCastEnds()
+        assertTrue(prompt.visible.value)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertTrue(prompt.visible.value)
+        prompt.onCastingChanged(1)
+        assertTrue(prompt.visible.value)
+        prompt.onCastingChanged(0)
+        assertFalse(prompt.visible.value)
+        assertEquals(0, runs, "the action never ran")
+    }
+
+    @Test
+    fun `the end of a cast does not hide a card shown after a setting change`() = runTest {
+        val prompt = RestartPrompt(backgroundScope) { true }
+        prompt.onSettingChanged(SettingKey.GAPLESS, true)
+
+        prompt.onCastingChanged(0)
+        assertTrue(prompt.visible.value)
+
+        advanceTimeBy(6_100)
+        runCurrent()
+        assertFalse(prompt.visible.value)
+    }
+
+    @Test
+    fun `restart now runs the action once with the auto-restart source`() = runTest {
+        val sources = mutableListOf<String>()
+        val gate = CompletableDeferred<Unit>()
+        val prompt = RestartPrompt(backgroundScope) { source -> sources.add(source); gate.await(); true }
+        prompt.showUntilCastEnds()
+
+        prompt.restartNow()
+        runCurrent()
+        assertFalse(prompt.visible.value)
+        prompt.restartNow()
+        runCurrent()
+        assertEquals(listOf("auto-restart"), sources)
+        gate.complete(Unit)
+        runCurrent()
+
+        prompt.requestRestart(casting = 0)
+        runCurrent()
+        assertEquals(listOf("auto-restart", "restart"), sources)
+    }
 }

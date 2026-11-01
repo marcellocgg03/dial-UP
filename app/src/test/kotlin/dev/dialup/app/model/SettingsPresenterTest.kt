@@ -12,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -48,7 +49,11 @@ class FakeSettingsPort(
 }
 
 /** A bridge you can script: calls are counted and the answers are plain fields. */
-class FakeBridgePort(running: Boolean = true) : BridgePort {
+class FakeBridgePort(
+    running: Boolean = true,
+    /** What the running bridge was started with; null means no bridge. */
+    var started: RestartFields? = RestartFields(gapless = true, outputFormat = "auto"),
+) : BridgePort {
     private val flow = MutableStateFlow(running)
     override val running: StateFlow<Boolean> get() = flow
     var cleared: Int? = 3
@@ -98,8 +103,13 @@ class FakeBridgePort(running: Boolean = true) : BridgePort {
 
     override suspend fun ytdlpVersion(): String? = version
 
-    override suspend fun restart(): Boolean {
+    val restartSources = mutableListOf<String>()
+
+    override fun runningWith(): RestartFields? = started
+
+    override suspend fun restart(source: String): Boolean {
         restartCalls++
+        restartSources.add(source)
         return restartResult
     }
 }
@@ -540,5 +550,97 @@ class SettingsPresenterTest {
         runCurrent()
 
         assertNull(p.state.value.message, "a cancelled action writes no message")
+    }
+
+    // ------------------------------------------------------------------------------------------ quick 261101-dcg: restart on open
+
+    @Test
+    fun `opening the app with a pending restart and nothing cast restarts the bridge once`() = runTest {
+        val settings = FakeSettingsPort()
+        val bridge = FakeBridgePort()
+        val p = presenter(settings, bridge)
+        p.setGapless(false)
+        runCurrent()
+
+        p.onAppOpened { 0 }
+        runCurrent()
+
+        assertEquals(1, bridge.restartCalls)
+        assertEquals(listOf("auto-restart"), bridge.restartSources)
+    }
+
+    @Test
+    fun `opening the app with a pending restart while a renderer plays keeps the card up`() = runTest {
+        val settings = FakeSettingsPort()
+        val bridge = FakeBridgePort()
+        val p = presenter(settings, bridge)
+        p.setGapless(false)
+        runCurrent()
+        // the six-second card of the change itself has gone
+        advanceTimeBy(7_000)
+        runCurrent()
+        assertFalse(p.restart.visible.value)
+
+        p.onAppOpened { 1 }
+        runCurrent()
+
+        assertEquals(0, bridge.restartCalls)
+        assertTrue(p.restart.visible.value)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertTrue(p.restart.visible.value)
+        p.restart.onCastingChanged(0)
+        assertFalse(p.restart.visible.value)
+        runCurrent()
+        assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
+    fun `opening the app with nothing pending, no bridge or the switch off does nothing`() = runTest {
+        // nothing pending: the running bridge already has what is saved
+        val a = FakeBridgePort()
+        presenter(FakeSettingsPort(), a).onAppOpened { 0 }
+        runCurrent()
+        assertEquals(0, a.restartCalls)
+
+        // no bridge: runningWith is null although the port still reports running
+        val noBridge = FakeBridgePort(started = null)
+        val p2 = presenter(FakeSettingsPort(), noBridge)
+        p2.setGapless(false)
+        runCurrent()
+        p2.onAppOpened { 0 }
+        runCurrent()
+        assertEquals(0, noBridge.restartCalls)
+
+        // the switch off
+        val off = FakeSettingsPort()
+        off.update { it.copy(bridgeEnabled = false) }
+        val b3 = FakeBridgePort()
+        val p3 = presenter(off, b3)
+        p3.setGapless(false)
+        runCurrent()
+        p3.onAppOpened { 0 }
+        runCurrent()
+        assertEquals(0, b3.restartCalls)
+
+        advanceTimeBy(7_000)
+        runCurrent()
+        assertFalse(p2.restart.visible.value)
+        assertFalse(p3.restart.visible.value)
+    }
+
+    @Test
+    fun `a bridge started after the change needs no restart on open`() = runTest {
+        // the change was saved, then the process was killed: the new process read settings.json when it started the bridge
+        val settings = FakeSettingsPort()
+        settings.update { it.copy(gapless = false) }
+        val bridge = FakeBridgePort(started = RestartFields(gapless = false, outputFormat = "auto"))
+        val p = presenter(settings, bridge)
+
+        p.onAppOpened { 0 }
+        runCurrent()
+
+        assertEquals(0, bridge.restartCalls)
+        assertFalse(p.restart.visible.value)
     }
 }

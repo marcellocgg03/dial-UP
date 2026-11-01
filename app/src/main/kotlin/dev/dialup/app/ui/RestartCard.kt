@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -32,7 +33,8 @@ import dev.dialup.app.model.confirmText
 
 /**
  * The thin card that offers a bridge restart after a setting that needs one (GUI-09, D-09). It goes away by itself; the
- * confirmation for a restart during a cast is a dialog and so is shown here even after the card has gone (D-03).
+ * confirmation for a restart during a cast is a dialog and so is shown here even after the card has gone (D-03). A card that an
+ * app open showed because something is cast stays until nothing is cast: this reports every change of the cast count to the prompt.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -40,6 +42,7 @@ fun RestartCard(model: AppModel, prompt: RestartPrompt, clearOnCastEnd: Boolean,
     val visible by prompt.visible.collectAsStateWithLifecycle()
     val pending by prompt.confirmPending.collectAsStateWithLifecycle()
     val casting by model.casting.collectAsStateWithLifecycle()
+    LaunchedEffect(casting) { prompt.onCastingChanged(casting) }
 
     if (visible) {
         Card(

@@ -6,6 +6,7 @@ package dev.dialup.app
 
 import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
+import dev.dialup.app.model.RestartFields
 import dev.t2u.dial.DialRequest
 import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CacheInfo
@@ -103,6 +104,16 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     /** The bridge now, for the controls that act on one speaker (plan 07-08); null while there is none. */
     fun currentBridge(): Bridge? = bridgeState.value
+
+    /** What the running bridge read at its start (gapless, forced format); set with [bridge], cleared with it. */
+    @Volatile private var startedWith: RestartFields? = null
+
+    /**
+     * The restart-relevant settings the running bridge was started with, or null while there is no bridge (PD-6). They live in
+     * memory for exactly as long as that bridge runs, so a process kill after a change leaves nothing pending: the next bridge
+     * starts from settings.json. A Wi-Fi rebind keeps them because the bridge moves in place and the config is not reloaded.
+     */
+    fun runningWith(): RestartFields? = if (bridge != null) startedWith else null
 
     /**
      * GUI-08: empties the running bridge's cache of every file no stream pins (T-07-21) and logs `cache-clear` with the
@@ -400,6 +411,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         )
         b.start()
         bridge = b
+        startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat)
         countJob = h.scope.launch { b.castCount.collect { count.value = CastCount(it.casting, it.total) } }
         scheduleWarmUp(h, b)
     }
@@ -411,6 +423,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     private suspend fun stopBridge(clearSpeakers: Boolean, stopSpeakers: Boolean = false) {
         val b = bridge
         bridge = null
+        startedWith = null
         countJob?.cancel()
         countJob = null
         try {
