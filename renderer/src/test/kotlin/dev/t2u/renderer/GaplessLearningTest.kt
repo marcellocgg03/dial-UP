@@ -13,6 +13,7 @@ import dev.t2u.lounge.PreviousNextVideos
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.VideoContext
 import dev.t2u.upnp.FakeRenderer
+import dev.t2u.upnp.FakeState
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -71,6 +73,36 @@ internal class GaplessLearningTest {
 
     private fun FakeRenderer.nearTheEnd() {
         state.relTime = "0:03:28"
+    }
+
+    // Every poll of the renderer opens with GetTransportInfo, and nothing else in these tests sends one, so the fake counts
+    // polls. The tests wait for polls and change the speaker at a poll, never for a number of milliseconds: a slow or busy
+    // machine then only makes them slower (debug session flaky-renderer-tests).
+
+    private fun FakeRenderer.polls(): Int = count("GetTransportInfo")
+
+    /** Waits until [n] more polls have begun, so at least `n - 1` whole polls have read the speaker since the call. */
+    private suspend fun FakeRenderer.awaitPolls(n: Int) {
+        val target = polls() + n
+        waitUntil(15_000) { polls() >= target }
+        assertTrue(polls() >= target, "$n more polls")
+    }
+
+    /**
+     * Runs [change] on the speaker's state with the number (1, 2, ...) of every poll from now on, just before the fake answers that
+     * poll's GetTransportInfo. Each poll then reads one consistent speaker. Writing several fields from the test instead could land
+     * between a poll's GetTransportInfo and its GetPositionInfo: PLAYING with the queued stream reads as a real gapless switch.
+     */
+    private fun FakeRenderer.onEachPoll(change: FakeState.(Int) -> Unit) {
+        val n = AtomicInteger()
+        beforeAction = { action -> if (action == "GetTransportInfo") state.change(n.incrementAndGet()) }
+    }
+
+    /** The speaker stops at the end of A while holding B, the stream it was given as its next one. */
+    private fun FakeState.stopHoldingTheQueuedStream() {
+        currentUri = nextUri
+        nextUri = ""
+        transport = "STOPPED"
     }
 
     private fun harness(fake: FakeRenderer, dir: File, handler: NextHandler = NextHandler(), clock: () -> Long = System::currentTimeMillis) =
@@ -145,13 +177,12 @@ internal class GaplessLearningTest {
                 assertEquals(false, r.gaplessSupport)
                 assertTrue(r.play(r.queue.current!!, 0.0))
                 waitUntil { h.notes("Prepared next track").isNotEmpty() }
-                kotlinx.coroutines.delay(500) // about ten polls
+                fake.awaitPolls(10)
                 assertEquals(0, fake.count("SetNextAVTransportURI"), "a stored false is not asked again")
 
                 // The end of A: B starts from the prepared item.
-                kotlinx.coroutines.delay(100)
                 fake.nearTheEnd()
-                kotlinx.coroutines.delay(200)
+                fake.awaitPolls(2) // a whole poll has read A near its end
                 fake.state.transport = "STOPPED"
                 waitUntil { fake.count("SetAVTransportURI") == 2 }
                 assertEquals(2, fake.count("SetAVTransportURI"))
@@ -182,7 +213,7 @@ internal class GaplessLearningTest {
                 assertNull(r.gaplessSupport, "a week-old false is unknown again")
                 assertTrue(r.doPlay(Video(A), 0.0))
                 waitUntil { atIn(dir) == later }
-                kotlinx.coroutines.delay(400)
+                fake.awaitPolls(8)
                 assertEquals(1, fake.count("SetNextAVTransportURI"), "asked exactly once")
                 assertEquals(false, supportedIn(dir))
                 assertEquals(later, atIn(dir), "the refusal stored the new time")
@@ -244,14 +275,17 @@ internal class GaplessLearningTest {
 
     private fun streamPath(n: Int) = "/stream/" + n.toString().padStart(32, '0') + ".aac"
 
-    /** A is playing, the speaker took B as its next track, and a poll has seen A near its end. */
+    /**
+     * A is playing, the speaker took B as its next track, and a poll has seen A near its end. A poll saw A playing before B was
+     * queued: the prepare that queues B is launched from a PLAYING poll.
+     */
     private suspend fun RendererHarness.playingWithBQueued(fake: FakeRenderer): Renderer {
         val r = queued(this, A, B)
         assertTrue(r.play(r.queue.current!!, 0.0))
         waitUntil { fake.state.nextUri.isNotEmpty() && r.gaplessSupport == true }
-        kotlinx.coroutines.delay(200) // a poll has seen A playing
+        assertTrue(fake.state.nextUri.isNotEmpty() && r.gaplessSupport == true, "B is queued on the speaker")
         fake.nearTheEnd()
-        kotlinx.coroutines.delay(200) // and near its end
+        fake.awaitPolls(2) // a whole poll has read A near its end
         return r
     }
 
@@ -279,7 +313,7 @@ internal class GaplessLearningTest {
                 waitUntil { supportedIn(dir) == false }
                 assertEquals(false, supportedIn(dir))
                 assertEquals(false, r.gaplessSupport)
-                kotlinx.coroutines.delay(400)
+                fake.awaitPolls(8)
                 assertEquals(1, fake.count("SetNextAVTransportURI"), "no further SetNext this run")
             }
         }
@@ -318,19 +352,22 @@ internal class GaplessLearningTest {
                 val loads = fake.count("SetAVTransportURI")
                 val stops = fake.count("Stop")
                 val plays = fake.count("Play")
-                fake.state.currentUri = fake.state.nextUri
-                fake.state.nextUri = ""
-                fake.state.transport = "STOPPED"
-                waitUntil { h.notes("Speaker stopped at the switch - waiting for it to play the queued track").isNotEmpty() }
-                kotlinx.coroutines.delay(50) // about one more poll, within the grace
-                fake.state.transport = "PLAYING"
-                waitUntil { r.nowPlaying?.videoId == B }
+                fake.onEachPoll { n ->
+                    when (n) {
+                        1 -> stopHoldingTheQueuedStream()
+                        3 -> transport = "PLAYING" // two STOPPED readings, within the grace, then it plays B
+                    }
+                }
+                // The adoption sets nowPlaying before it writes its "continued gaplessly" note, so the note, its last step, is
+                // what the test waits for (debug session flaky-renderer-tests).
+                fun continuedGaplessly() = h.notes("Now playing").any { (it["message"] as String).contains("continued gaplessly") }
+                waitUntil(15_000) { continuedGaplessly() }
+                assertTrue(continuedGaplessly(), "B was adopted as a gapless switch")
                 assertEquals(B, r.nowPlaying?.videoId)
                 assertEquals(loads, fake.count("SetAVTransportURI"), "B was not loaded")
                 assertEquals(stops, fake.count("Stop"), "no Stop for B")
                 assertEquals(plays, fake.count("Play"), "B's start did not play twice")
                 assertEquals(1, h.notes("Speaker stopped at the switch").size, "noted once")
-                assertTrue(h.notes("Now playing").any { (it["message"] as String).contains("continued gaplessly") })
                 assertNotNull(h.notes("Renderer continued into the next track").single()["via"])
                 assertEquals(true, supportedIn(dir), "the memory is kept")
                 assertEquals(true, r.gaplessSupport)
@@ -346,11 +383,9 @@ internal class GaplessLearningTest {
             harness(fake, dir).use { h ->
                 val r = h.playingWithBQueued(fake)
                 val plays = fake.count("Play")
-                fake.state.currentUri = fake.state.nextUri
-                fake.state.nextUri = ""
-                fake.state.transport = "STOPPED"
+                fake.onEachPoll { n -> if (n == 1) stopHoldingTheQueuedStream() }
                 waitUntil { fake.count("SetAVTransportURI") == 2 && fake.count("Play") == plays + 1 }
-                kotlinx.coroutines.delay(400)
+                fake.awaitPolls(8)
                 assertEquals(2, fake.count("SetAVTransportURI"), "B loaded once")
                 assertEquals(plays + 1, fake.count("Play"), "one Play for B")
                 assertEquals(listOf(A, B), h.resolves.toList())
@@ -371,13 +406,20 @@ internal class GaplessLearningTest {
                 val r = queued(h, A, B)
                 assertTrue(r.doPlay(Video(A), 0.0))
                 waitUntil { h.notes("Prepared next track").isNotEmpty() }
-                kotlinx.coroutines.delay(700) // about fourteen polls
+                waitUntil(15_000) { fake.count("SetNextAVTransportURI") >= 3 } // one attempt per poll
+                fake.awaitPolls(14)
                 assertEquals(3, fake.count("SetNextAVTransportURI"), "three attempts, then none")
                 assertNull(r.gaplessSupport, "an unclear error never marks the speaker as unsupported")
                 assertNull(stored(dir))
                 assertTrue(r.doPlay(Video(B), 0.0))
-                assertEquals(listOf(A, B), h.resolves.toList(), "B still starts from the prepared item")
+                // The polls go on while this doPlay runs, and the queue's current is still A, so a prefetch a poll launched just
+                // before can find the slot already taken by this load and resolve B once more, then drop it. The load itself must
+                // not prepare B again: it uses the prepared item and its stream (debug session flaky-renderer-tests).
+                assertEquals(1, h.notes("Using prepared track").size, "B still starts from the prepared item")
                 assertEquals(2, fake.count("SetAVTransportURI"))
+                val second = fake.calls.filter { it.action == "SetAVTransportURI" }[1]
+                assertTrue(second.body.contains(streamPath(2)), "the prepared stream of B")
+                assertEquals(listOf(A, B), h.resolves.distinct())
             }
         }
     }
