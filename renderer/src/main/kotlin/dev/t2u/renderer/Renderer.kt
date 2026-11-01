@@ -1263,6 +1263,7 @@ class Renderer(
      * A stop, a newer load or removal that overtakes the wait cancels the Pause.
      */
     override suspend fun doPause(): Boolean {
+        if (destroyed) return false
         commandEpoch.incrementAndGet()
         try {
             if (pending?.awaitPlay == true) pending = null // the Play it waited for is cancelled by this Pause
@@ -1294,6 +1295,7 @@ class Renderer(
      * 12 s check then measures from the Play and not from the load (Node measures from the load only).
      */
     override suspend fun doResume(): Boolean {
+        if (destroyed) return false
         commandEpoch.incrementAndGet()
         try {
             return resumeNow()
@@ -1358,7 +1360,11 @@ class Renderer(
         advanced = switching
         // T-03-58: the track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
         // A speaker that holds nothing still gets it (harmless, as before). The switch shortcut comes before any speaker read.
-        val stopped = if (switching != null) {
+        val stopped = if (destroyed) {
+            // The registry's stopOne/clearOne already sent the Stop before the removal; the lounge shutdown that follows
+            // must not wait on a speaker that may never answer (plan 07-19, D-1).
+            true
+        } else if (switching != null) {
             note("info", "stop not sent: the speaker already moved on to the queued track")
             true
         } else if (onAnotherSource(emptyCounts = false)) {
@@ -1629,6 +1635,7 @@ class Renderer(
      * in init, load, play, poll or stop sends SetVolume or SetMute.
      */
     override suspend fun doSetVolume(volume: Volume): Boolean {
+        if (destroyed) return false
         val levelSet = ok(
             RENDERING_CONTROL,
             "SetVolume",
@@ -1799,6 +1806,9 @@ class Renderer(
     private suspend fun call(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String> {
         val service = description?.services?.get(SERVICE_ID_PREFIX + svc)
             ?: throw UpnpError("$svc service not provided", "ENOSERVICE")
+        // A destroyed Renderer sends no more SOAP: the lounge shutdown that follows destroy() reads the position and the
+        // volume for its last state report, and a speaker that never answers would hold it for the SOAP timeout per call.
+        if (destroyed) throw UpnpError("the renderer was destroyed", "EDESTROYED")
         return soap.callAction(service, action, params.toList())
     }
 

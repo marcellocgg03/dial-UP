@@ -18,11 +18,14 @@ import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +40,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import kotlin.coroutines.ContinuationInterceptor
 
 private val RENDERER_TYPE_RE = Regex("urn:schemas-upnp-org:device:MediaRenderer:\\d")
 
@@ -93,6 +97,9 @@ class RendererRegistry(
         skip.until == Long.MAX_VALUE || (skip.until > now && skip.until - now <= RETRY_FAILED_MS)
 
     private val lock = Mutex()
+
+    /** Destroys that outlive their budget keep running here (plan 07-19); nothing ever cancels it. */
+    private val destroyScope = CoroutineScope(SupervisorJob())
     private val running = LinkedHashMap<String, ManagedRenderer>()
     private val skipped = HashMap<String, Skip>()
     private val pending = HashSet<String>()
@@ -377,18 +384,39 @@ class RendererRegistry(
         }
     }
 
-    /** index.js removeRenderer: take it out of the list, destroy it, free its port (which stays remembered), log [event]. */
+    /**
+     * index.js removeRenderer: take it out of the list, destroy it (bounded by `destroyBudgetMs`, see [destroyBounded]),
+     * free its port (which stays remembered), log [event].
+     */
     private suspend fun removeRenderer(udn: String, event: String = "removed", reason: String? = null) {
         val r = lock.withLock { running.remove(udn)?.also { publish() } } ?: return
-        try {
-            r.destroy()
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            // a renderer that fails to stop is gone from the list all the same
-        } finally {
-            ports.release(r.port)
-        }
+        destroyBounded(r)
         log(event, udn, r.name, r.location, r.port, reason)
+    }
+
+    /**
+     * Runs [ManagedRenderer.destroy] as a job of the registry's own scope and waits for it at most `destroyBudgetMs`.
+     * The receiver's shutdown runs under NonCancellable (the lounge sessions are ended even when the caller is cancelled), so
+     * a time limit cannot cut it; instead the removal stops waiting and the job finishes in the background. The port goes
+     * back to the allocator when the destroy has really ended, never at the timeout, so a port whose DIAL listener may still
+     * be open is not handed out (plan 07-19, CR-01 c).
+     */
+    private suspend fun destroyBounded(r: ManagedRenderer) {
+        // The caller's dispatcher, so a test dispatcher keeps the job in its own (virtual) time; the Job is the registry's own.
+        val job = destroyScope.launch(currentCoroutineContext()[ContinuationInterceptor] ?: Dispatchers.Default) {
+            try {
+                r.destroy()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // a renderer that fails to stop is gone from the list all the same
+            } finally {
+                ports.release(r.port)
+            }
+        }
+        if (withTimeoutOrNull(destroyBudgetMs) { job.join() } == null) {
+            log("destroy-slow", r.udn, r.name, r.location, r.port, "the speaker did not finish stopping in $destroyBudgetMs ms; it ends in the background")
+        }
     }
 
     /**
