@@ -23,6 +23,8 @@ import io.ktor.server.response.respondBytesWriter
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -36,9 +38,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.RandomAccessFile
+import java.net.BindException
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** Where the bytes of a registered stream come from. */
 sealed interface StreamSource {
@@ -224,9 +230,20 @@ class MediaServer(
         startEngine(host, port)
     }
 
-    // reuseAddress: a restart must not hit EADDRINUSE from TIME_WAIT
+    /**
+     * Binds and starts the engine for [start] and [rebindHost]. A busy address throws [BindException] to the caller
+     * (CR-01 b): Ktor CIO binds inside its accept job, where a failure is uncaught and ends the process, so the address
+     * is probed first (reuseAddress, as for the real bind: a restart must not hit EADDRINUSE from TIME_WAIT) and the
+     * engine gets a supervisor that records a failure that slips past the probe. A failed call leaves [server] untouched.
+     */
     private fun startEngine(bindHost: String, bindPort: Int) {
-        val s = embeddedServer(CIO, serverConfig { module { configure(this) } }) {
+        if (bindPort != 0) requireBindable(bindHost, bindPort)
+        val asyncFailure = AtomicReference<Throwable?>(null)
+        val handler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
+        val s = embeddedServer(CIO, serverConfig {
+            parentCoroutineContext = SupervisorJob() + handler
+            module { configure(this) }
+        }) {
             reuseAddress = true
             connectors.add(
                 EngineConnectorBuilder().apply {
@@ -235,9 +252,27 @@ class MediaServer(
                 },
             )
         }
-        s.start(wait = false)
-        boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+        try {
+            s.start(wait = false)
+            boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+        } catch (e: Throwable) {
+            runCatching { s.stop(0, 0) }
+            val cause = asyncFailure.get() ?: e
+            throw cause as? BindException
+                ?: BindException("media server cannot bind $bindHost:$bindPort: ${cause.message}").also { it.initCause(cause) }
+        }
         server = s
+    }
+
+    private fun requireBindable(bindHost: String, bindPort: Int) {
+        ServerSocket().use { probe ->
+            probe.reuseAddress = true
+            try {
+                probe.bind(InetSocketAddress(bindHost, bindPort))
+            } catch (e: BindException) {
+                throw BindException("media port $bindHost:$bindPort is busy: ${e.message}").also { it.initCause(e) }
+            }
+        }
     }
 
     /**
