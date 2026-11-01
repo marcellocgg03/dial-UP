@@ -5,6 +5,7 @@ package dev.dialup.app.model
 import dev.t2u.dial.DialAccessMode
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class BridgeStatusTest {
     @Test
@@ -13,29 +14,30 @@ class BridgeStatusTest {
     }
 
     @Test
-    fun `running with the phone only mode and no address`() {
-        assertEquals("Running · This phone only", statusLine(BridgeStatus(true, null, DialAccessMode.PHONE)))
+    fun `running with the phone only mode`() {
+        assertEquals("Running · This phone only", statusLine(BridgeStatus(true, DialAccessMode.PHONE)))
     }
 
     @Test
-    fun `running with the whole network mode and no address`() {
-        assertEquals("Running · Whole network", statusLine(BridgeStatus(true, null, DialAccessMode.LAN)))
+    fun `running with the whole network mode`() {
+        assertEquals("Running · Whole network", statusLine(BridgeStatus(true, DialAccessMode.LAN)))
     }
 
     @Test
-    fun `running with a known Wi-Fi address names it`() {
-        assertEquals(
-            "Running · Wi-Fi 192.168.1.20 · This phone only",
-            statusLine(BridgeStatus(true, "192.168.1.20", DialAccessMode.PHONE)),
-        )
+    fun `the running text never names an address`() {
+        for (mode in DialAccessMode.values()) {
+            val text = statusLine(BridgeStatus(true, mode))
+            assertFalse(text.contains("Wi-Fi"), text)
+            assertFalse(Regex("\\d\\.\\d").containsMatchIn(text), text)
+        }
     }
 
     @Test
-    fun `off ignores address and mode`() {
-        assertEquals("Bridge off", statusLine(BridgeStatus(false, "192.168.1.20", DialAccessMode.LAN)))
+    fun `off ignores the mode`() {
+        assertEquals("Bridge off", statusLine(BridgeStatus(false, DialAccessMode.LAN)))
     }
 
-    private val up = BridgeStatus(true, "192.168.1.20", DialAccessMode.PHONE)
+    private val up = BridgeStatus(true, DialAccessMode.PHONE)
     private val down = BridgeStatus.OFF
 
     @Test
@@ -64,12 +66,12 @@ class BridgeStatusTest {
     @Test
     fun `a running bridge keeps the running texts`() {
         assertEquals(
-            "Running · Wi-Fi 192.168.1.20 · This phone only",
+            "Running · This phone only",
             statusLine(up, enabled = true, exempt = true, serviceUp = true),
         )
         assertEquals(
             "Running · Whole network",
-            statusLine(BridgeStatus(true, null, DialAccessMode.LAN), enabled = true, exempt = true, serviceUp = true),
+            statusLine(BridgeStatus(true, DialAccessMode.LAN), enabled = true, exempt = true, serviceUp = true),
         )
     }
 }

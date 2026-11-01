@@ -130,22 +130,16 @@ class CastFeature : SpikeFeature, CastCountSource {
     /** What the last bridge start applied from files/config.json (counts and switches only, never pattern text). */
     @Volatile private var configSummaryJson: JsonObject? = null
 
-    /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log. */
-    private val lastIpState = MutableStateFlow<String?>(null)
+    /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log and the DIAL self check. */
+    @Volatile private var lastIp: String? = null
 
-    private var lastIp: String?
-        get() = lastIpState.value
-        set(value) {
-            lastIpState.value = value
-        }
-
-    /** The header's state (plan 07-03, D-05): whether a bridge exists, the Wi-Fi address it is bound to, and who may cast. */
+    /** The bridge card's state (plan 07-03, D-05): whether a bridge exists and who may cast. */
     @OptIn(ExperimentalCoroutinesApi::class)
     val status: Flow<BridgeStatus> = settingsState.flatMapLatest { s ->
         if (s == null) {
             flowOf(BridgeStatus.OFF)
         } else {
-            combine(bridgeState, lastIpState, s.dialAccess) { b, ip, mode -> BridgeStatus(b != null, if (b != null) ip else null, mode) }
+            combine(bridgeState, s.dialAccess) { b, mode -> BridgeStatus(b != null, mode) }
         }
     }
 

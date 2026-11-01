@@ -55,7 +55,7 @@ class AppModel private constructor(context: Context) {
         cast.flatMapLatest { it?.castCount?.map { c -> c.casting } ?: flowOf(0) }
             .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    /** The header's state: bridge up or not, the Wi-Fi address it runs on and the access mode (plan 07-04 words "Waiting for Wi-Fi"). */
+    /** The bridge card's state: bridge up or not, and the access mode (plan 07-04 words "Waiting for Wi-Fi"). */
     val status: StateFlow<BridgeStatus> =
         cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
