@@ -3,6 +3,7 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
+import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YtDlpUpdateOutcome
@@ -212,6 +213,32 @@ class SettingsPresenterTest {
         assertEquals(false, settings.data.value.logEnabled)
         assertFalse(p.state.value.logEnabled)
         assertFalse(p.restart.visible.value)
+    }
+
+    @Test
+    fun `the theme defaults to system, saves the choice and needs no restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertEquals(ThemeMode.SYSTEM, p.state.value.theme)
+        for (mode in listOf(ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.SYSTEM)) {
+            assertFalse(p.setThemeMode(mode))
+            runCurrent()
+            assertEquals(mode, settings.data.value.theme)
+            assertEquals(mode, p.state.value.theme)
+            assertFalse(p.restart.visible.value)
+        }
+    }
+
+    @Test
+    fun `a saved theme shows as the current choice`() = runTest {
+        val settings = FakeSettingsPort().also { it.update { d -> d.copy(theme = ThemeMode.LIGHT) } }
+        val p = presenter(settings)
+        assertEquals(ThemeMode.LIGHT, p.state.value.theme)
+    }
+
+    @Test
+    fun `the theme key needs no restart`() {
+        assertFalse(SettingKey.THEME.needsRestart)
     }
 
     @Test

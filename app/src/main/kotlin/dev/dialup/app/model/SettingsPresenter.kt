@@ -3,6 +3,8 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
+import dev.dialup.app.DEFAULT_THEME
+import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YTDLP_CHANNELS
@@ -54,6 +56,7 @@ enum class SettingKey(val needsRestart: Boolean) {
     CACHE(false),
     FORMAT(true),
     CHANNEL(false),
+    THEME(false),
 }
 
 /** The cache sizes offered, in MiB (0 keeps only the file just built). */
@@ -94,6 +97,8 @@ fun updateMessage(o: YtDlpUpdateOutcome): String = when {
 data class SettingsUi(
     val phoneOnly: Boolean = true,
     val clearOnCastEnd: Boolean = false,
+    /** The app's look, applied at once. */
+    val theme: ThemeMode = DEFAULT_THEME,
     val logEnabled: Boolean = true,
     val gapless: Boolean = true,
     /** The effective cache size in MiB; one of [CACHE_STEPS], or a custom value when [cacheCustom]. */
@@ -135,7 +140,9 @@ class SettingsPresenter(
     init {
         scope.launch {
             settings.data.collectLatest { d ->
-                ui.update { it.copy(phoneOnly = d.dialAccess == DialAccessMode.PHONE, clearOnCastEnd = d.clearOnCastEnd) }
+                ui.update {
+                    it.copy(phoneOnly = d.dialAccess == DialAccessMode.PHONE, clearOnCastEnd = d.clearOnCastEnd, theme = d.theme)
+                }
                 val e = settings.effective()
                 ui.update {
                     it.copy(
@@ -206,6 +213,15 @@ class SettingsPresenter(
     fun setClearOnCastEnd(on: Boolean): Boolean {
         settings.update { it.copy(clearOnCastEnd = on) }
         return changed(SettingKey.CLEAR_ON_CAST_END)
+    }
+
+    /**
+     * System, Light or Dark. UI-only: the screen recolours at once and the bridge never reads it, so no restart. The
+     * parameter is the enum, so there is no out-of-list value to refuse (T-07-23 by type).
+     */
+    fun setThemeMode(mode: ThemeMode): Boolean {
+        settings.update { it.copy(theme = mode) }
+        return changed(SettingKey.THEME)
     }
 
     /** The one global log switch; applies to the running bridge at once. Returns whether a restart is needed. */

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
 import dev.dialup.app.model.SettingsPresenter
 import dev.dialup.app.model.SettingsUi
@@ -43,6 +44,12 @@ private val FORMATS = listOf(
     "adts" to "AAC stream (adts)",
     "flac" to "FLAC",
     "mp3" to "MP3",
+)
+
+private val THEMES = listOf(
+    ThemeMode.SYSTEM to "System",
+    ThemeMode.LIGHT to "Light",
+    ThemeMode.DARK to "Dark",
 )
 
 /** The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed. */
@@ -98,6 +105,16 @@ fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
         )
         HorizontalDivider()
         YtDlpSection(ui, presenter)
+        HorizontalDivider()
+        ChoiceRow(
+            title = "Theme",
+            support = "System follows the phone's light or dark setting",
+            current = THEMES.first { it.first == ui.theme }.second,
+            options = THEMES.map { it.second },
+            onPick = { i -> presenter.setThemeMode(THEMES[i].first) },
+            tag = "setting-theme",
+            optionTag = { "theme-option-${THEMES[it].first.wire}" },
+        )
     }
 }
 

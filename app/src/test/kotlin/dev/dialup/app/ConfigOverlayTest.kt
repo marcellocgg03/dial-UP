@@ -111,4 +111,23 @@ class ConfigOverlayTest {
         assertTrue(s["gui"]!!.jsonArray.isEmpty())
         assertFalse(s["clearOnCastEnd"]!!.jsonPrimitive.boolean)
     }
+
+    @Test
+    fun theThemeIsUiOnlyAndLeavesTheConfigAlone() {
+        writeConfig("""{"gapless": false}""")
+        writeSettings("{}")
+        val without = loadAppConfig(dir)
+        writeSettings("""{"theme":"dark"}""")
+        val with = loadAppConfig(dir)
+        assertEquals(without.config, with.config)
+        assertEquals(without.warnings, with.warnings)
+        assertTrue(with.guiKeys.isEmpty())
+        assertTrue(configSummary(with)["gui"]!!.jsonArray.isEmpty())
+    }
+
+    @Test
+    fun aBadThemeDoesNotStopTheOtherOverrides() {
+        writeSettings("""{"theme":"sepia","cacheMb":64}""")
+        assertEquals(64, loadAppConfig(dir).config.cacheMb)
+    }
 }
