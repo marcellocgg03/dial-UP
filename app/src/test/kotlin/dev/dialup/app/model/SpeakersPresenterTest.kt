@@ -150,4 +150,12 @@ class SpeakersPresenterTest {
         assertEquals(true, savedManualVisible(serviceUp = true, bridgeUp = false))
         assertEquals(false, savedManualVisible(serviceUp = true, bridgeUp = true))
     }
+
+    @Test
+    fun `add refusal says off, waiting for Wi-Fi, or nothing`() {
+        assertEquals(dev.dialup.app.AppModel.BRIDGE_OFF_ADD, addRefusal(serviceUp = false, bridgeUp = false))
+        assertEquals(dev.dialup.app.AppModel.BRIDGE_WAITING_ADD, addRefusal(serviceUp = true, bridgeUp = false))
+        assertEquals(null, addRefusal(serviceUp = true, bridgeUp = true))
+        assertTrue(!dev.dialup.app.AppModel.BRIDGE_WAITING_ADD.contains("Switch"), "the waiting text must not claim the switch is off")
+    }
 }
