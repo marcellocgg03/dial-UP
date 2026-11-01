@@ -37,8 +37,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -71,7 +69,6 @@ class CastFeature : SpikeFeature, CastCountSource {
     override val name = "cast"
     override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "housekeeping")
 
-    private val lifecycle = Mutex()
     private var host: SpikeHost? = null
     private var monitor: NetworkMonitor? = null
     private var rebindJob: Job? = null
@@ -187,7 +184,7 @@ class CastFeature : SpikeFeature, CastCountSource {
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()
-        host.scope.launch { lifecycle.withLock { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
+        host.scope.launch { withBridgeLock(host) { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
         HousekeepingAlarm.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
@@ -210,7 +207,7 @@ class CastFeature : SpikeFeature, CastCountSource {
      * D-03: playback ends, so every speaker playing our stream gets a Stop; it is emptied as well (CAST-06) only when the
      * "clear the speaker when a cast ends" setting is on (GUI-08). Then every receiver says byebye and goodbye before the
      * service goes. The stop or clear is bounded to about 4 s and runs in parallel across speakers, so the worst case
-     * stays inside the 10 s join below.
+     * stays short.
      */
     override fun stop() {
         host?.let { HousekeepingAlarm.cancel(it.context) }
@@ -221,10 +218,37 @@ class CastFeature : SpikeFeature, CastCountSource {
         monitor = null
         rebindJob?.cancel()
         retryJob?.cancel()
-        // sockets are never touched on the main thread
-        val t = Thread({ runBlocking { lifecycle.withLock { stopBridge(clearSpeakers = settings?.data?.value?.clearOnCastEnd == true, stopSpeakers = true) } } }, "t2u-cast-stop").apply { isDaemon = true }
-        t.start()
-        t.join(10_000)
+        // The shutdown runs on the process scope, never on the calling (main) thread, and never waits here (review WR-02).
+        // The token is registered before this returns, so a start on a new service instance sees the stop in flight (CR-01 a).
+        val h = host
+        val clear = settings?.data?.value?.clearOnCastEnd == true
+        val token = BridgeLifecycle.beginStop()
+        BridgeLifecycle.scope.launch {
+            val started = System.nanoTime()
+            try {
+                BridgeLifecycle.mutex.withLock { stopBridge(clearSpeakers = clear, stopSpeakers = true) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                runCatching { h?.evidence?.event("feature-error", featureErrorFields("stop-bridge", t)) }
+            } finally {
+                // written before the token completes, so on the log each bridge-stop-done precedes the next start
+                runCatching { h?.evidence?.event("bridge-stop-done", mapOf("ms" to (System.nanoTime() - started) / 1_000_000L)) }
+                token.complete()
+            }
+        }
+    }
+
+    /**
+     * Every start path (first start, retry, rebind): waits for a stop in flight, also one begun by another service
+     * instance, then takes the process-wide lifecycle lock (CR-01 a, D-1). A wait that runs out is logged and the start
+     * goes on: the lock still serialises it and a port collision is handled as a bind failure.
+     */
+    private suspend fun withBridgeLock(h: SpikeHost, block: suspend () -> Unit) {
+        if (!BridgeLifecycle.awaitIdle(STOP_WAIT_MS)) {
+            h.evidence.event("bridge-error", mapOf("where" to "stop-wait", "waitedMs" to STOP_WAIT_MS))
+        }
+        BridgeLifecycle.mutex.withLock { block() }
     }
 
     override fun handle(cmd: String, args: Map<String, String>): CommandReply = when (cmd) {
@@ -286,7 +310,7 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     /**
      * [startBridge] that logs a failure as `feature-error` instead of throwing (plan 05-19, review WR-01). True only when
-     * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with [lifecycle] held.
+     * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with the lifecycle lock held.
      */
     private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
         runGuarded("start-bridge", { where, t -> h.evidence.event("feature-error", featureErrorFields(where, t) + ("reason" to reason)) }) {
@@ -303,11 +327,11 @@ class CastFeature : SpikeFeature, CastCountSource {
         h.evidence.event("net", mapOf("retry" to true, "inMs" to START_RETRY_MS))
         retryJob = h.scope.launch {
             delay(START_RETRY_MS)
-            lifecycle.withLock { applyRebind(h, "retry") }
+            withBridgeLock(h) { applyRebind(h, "retry") }
         }
     }
 
-    /** Call with [lifecycle] held, off the main thread. */
+    /** Call with the lifecycle lock held, off the main thread. */
     private suspend fun startBridge(h: SpikeHost) {
         val network = bridgeNetwork(h)
         if (network == null) {
@@ -369,7 +393,7 @@ class CastFeature : SpikeFeature, CastCountSource {
     }
 
     /**
-     * Call with [lifecycle] held. [stopSpeakers]: stop every playing speaker first (D-03). [clearSpeakers]: also empty
+     * Call with the lifecycle lock held. [stopSpeakers]: stop every playing speaker first (D-03). [clearSpeakers]: also empty
      * every speaker's transport URI (CAST-06, only with the GUI-08 setting on). Neither: the speakers are not touched.
      */
     private suspend fun stopBridge(clearSpeakers: Boolean, stopSpeakers: Boolean = false) {
@@ -422,11 +446,11 @@ class CastFeature : SpikeFeature, CastCountSource {
         rebindJob?.cancel()
         rebindJob = h.scope.launch {
             delay(REBIND_DEBOUNCE_MS)
-            lifecycle.withLock { applyRebind(h, reason) }
+            withBridgeLock(h) { applyRebind(h, reason) }
         }
     }
 
-    /** Call with [lifecycle] held, after the debounce. A burst of events reaches here once, with the last reason. */
+    /** Call with the lifecycle lock held, after the debounce. A burst of events reaches here once, with the last reason. */
     private suspend fun applyRebind(h: SpikeHost, reason: String) {
         val oldIp = lastIp
         when (rebindAction(reason, bridge != null, h.wifiIpv4()?.hostAddress)) {
@@ -571,6 +595,7 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     private companion object {
         const val REBIND_DEBOUNCE_MS = 2000L
+        const val STOP_WAIT_MS = 15_000L
         const val VALIDATED_WAIT_MS = 20_000L
         const val WARMUP_WAIT_MS = 15_000L
         const val UPDATE_RECHECK_MS = 900_000L
