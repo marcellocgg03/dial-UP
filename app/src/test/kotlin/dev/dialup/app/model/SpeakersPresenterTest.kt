@@ -143,4 +143,11 @@ class SpeakersPresenterTest {
         advanceUntilIdle()
         assertEquals(emptySet(), presenter.busy.value)
     }
+
+    @Test
+    fun `saved manual speakers are listed whenever there is no bridge`() {
+        assertEquals(true, savedManualVisible(serviceUp = false, bridgeUp = false))
+        assertEquals(true, savedManualVisible(serviceUp = true, bridgeUp = false))
+        assertEquals(false, savedManualVisible(serviceUp = true, bridgeUp = true))
+    }
 }
