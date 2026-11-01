@@ -205,6 +205,11 @@ class BridgeService : Service(), SpikeHost {
         return true
     }
 
+    /**
+     * Returns without waiting for the bridge shutdown: [CastFeature.stop] hands it to [BridgeLifecycle.scope] (off the main
+     * thread, outliving this service) and every start path waits on [BridgeLifecycle.awaitIdle], so clearing
+     * [ServiceHub.service] early is safe (plan 07-20, review WR-02).
+     */
     override fun onDestroy() {
         evidence.event("service-stop")
         ServiceHub.cast.value = null

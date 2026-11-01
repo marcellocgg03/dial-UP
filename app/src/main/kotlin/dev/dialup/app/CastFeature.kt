@@ -73,6 +73,10 @@ class CastFeature : SpikeFeature, CastCountSource {
     private var monitor: NetworkMonitor? = null
     private var rebindJob: Job? = null
     private var retryJob: Job? = null
+
+    /** The last start failed on a busy port; with [consecutiveBindFailures] it picks the retry delay. Read and written under the lifecycle lock. */
+    @Volatile private var lastStartBindFailure = false
+    private var consecutiveBindFailures = 0
     private var countJob: Job? = null
     private var updaterJob: Job? = null
     @Volatile private var updater: YtDlpUpdater? = null
@@ -313,20 +317,32 @@ class CastFeature : SpikeFeature, CastCountSource {
      * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with the lifecycle lock held.
      */
     private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
-        runGuarded("start-bridge", { where, t -> h.evidence.event("feature-error", featureErrorFields(where, t) + ("reason" to reason)) }) {
+        lastStartBindFailure = false
+        runGuarded("start-bridge", { where, t ->
+            if (isBindFailure(t)) {
+                // a port the previous bridge still holds: heals on a quick retry, so it is a bridge-error and not a feature-error
+                lastStartBindFailure = true
+                h.evidence.event("bridge-error", mapOf("where" to "bind", "error" to t.javaClass.name, "reason" to reason))
+            } else {
+                h.evidence.event("feature-error", featureErrorFields(where, t) + ("reason" to reason))
+            }
+        }) {
             startBridge(h)
         }
+        consecutiveBindFailures = if (lastStartBindFailure) consecutiveBindFailures + 1 else 0
         return bridge != null
     }
 
     /**
-     * Looks for a bridge again after [START_RETRY_MS]. Its own job, so a retry that fails can schedule the next one
-     * without cancelling itself; [scheduleRebind] and [stop] cancel it.
+     * Looks for a bridge again after [startRetryDelayMs]: 2 s for the first two bind failures in a row, else
+     * [START_RETRY_MS]. Its own job, so a retry that fails can schedule the next one without cancelling itself;
+     * [scheduleRebind] and [stop] cancel it.
      */
     private fun scheduleStartRetry(h: SpikeHost) {
-        h.evidence.event("net", mapOf("retry" to true, "inMs" to START_RETRY_MS))
+        val delayMs = startRetryDelayMs(maxOf(consecutiveBindFailures - 1, 0), lastStartBindFailure)
+        h.evidence.event("net", mapOf("retry" to true, "inMs" to delayMs))
         retryJob = h.scope.launch {
-            delay(START_RETRY_MS)
+            delay(delayMs)
             withBridgeLock(h) { applyRebind(h, "retry") }
         }
     }
@@ -483,7 +499,12 @@ class CastFeature : SpikeFeature, CastCountSource {
             }
 
             // only the retry reason gets here: a bridge exists (done) or there is still no Wi-Fi (look again later)
-            RebindAction.NOTHING -> if (bridge == null) scheduleStartRetry(h)
+            RebindAction.NOTHING -> if (bridge == null) {
+                // no start was tried, so a bind failure from an earlier one must not keep the quick retry going
+                lastStartBindFailure = false
+                consecutiveBindFailures = 0
+                scheduleStartRetry(h)
+            }
 
             RebindAction.REBIND_IN_PLACE -> {
                 val started = System.nanoTime()

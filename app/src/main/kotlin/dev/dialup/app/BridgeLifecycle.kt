@@ -83,3 +83,22 @@ object BridgeLifecycle {
 
     suspend fun awaitIdle(timeoutMs: Long): Boolean = core.awaitIdle(timeoutMs)
 }
+
+/** True when [t] or one of its causes is a [java.net.BindException] (a port the old bridge still holds, plan 07-19). */
+fun isBindFailure(t: Throwable): Boolean {
+    var cur: Throwable? = t
+    var depth = 0
+    while (cur != null && depth < 10) {
+        if (cur is java.net.BindException) return true
+        cur = cur.cause
+        depth++
+    }
+    return false
+}
+
+/** Delay of the start retry after [attempt] earlier consecutive bind failures (0 for the first retry); other failures wait [START_RETRY_MS]. */
+fun startRetryDelayMs(attempt: Int, bindFailure: Boolean): Long =
+    if (bindFailure && attempt < QUICK_BIND_RETRIES) QUICK_BIND_RETRY_MS else START_RETRY_MS
+
+private const val QUICK_BIND_RETRIES = 2
+private const val QUICK_BIND_RETRY_MS = 2_000L
