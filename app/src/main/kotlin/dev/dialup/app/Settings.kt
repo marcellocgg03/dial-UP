@@ -24,6 +24,29 @@ const val SETTINGS_FILE = "settings.json"
  */
 val DEFAULT_DIAL_ACCESS = DialAccessMode.PHONE
 
+/** The app's light or dark look. UI-only: the bridge never reads it, and it is not a config.json override. */
+enum class ThemeMode(val wire: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark"),
+    ;
+
+    companion object {
+        /** The mode for a wire name, or null for anything else (the match is case-sensitive). */
+        fun fromWire(s: String?): ThemeMode? = entries.firstOrNull { it.wire == s }
+    }
+}
+
+/** The theme of a fresh install: follow the phone's light or dark setting. */
+val DEFAULT_THEME = ThemeMode.SYSTEM
+
+/** Whether the app draws dark for [mode], given the phone's own dark setting [systemDark]. */
+fun useDarkTheme(mode: ThemeMode, systemDark: Boolean): Boolean = when (mode) {
+    ThemeMode.SYSTEM -> systemDark
+    ThemeMode.LIGHT -> false
+    ThemeMode.DARK -> true
+}
+
 /**
  * Everything the app's own screens can change, as kept in `files/settings.json` (GUI-08, D-04). The first three fields
  * always have a value; the nullable ones are overrides of config.json keys, written only once the author sets them in
@@ -33,6 +56,7 @@ data class AppSettingsData(
     val bridgeEnabled: Boolean = true,
     val dialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS,
     val clearOnCastEnd: Boolean = false,
+    val theme: ThemeMode = DEFAULT_THEME,
     val logEnabled: Boolean? = null,
     val gapless: Boolean? = null,
     val cacheMb: Int? = null,
@@ -56,6 +80,7 @@ private val CACHE_MB_RANGE = 0..32768
 private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
+private const val KEY_THEME = "theme"
 private const val KEY_LOG_ENABLED = "logEnabled"
 private const val KEY_GAPLESS = "gapless"
 private const val KEY_CACHE_MB = "cacheMb"
@@ -63,11 +88,13 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_THEME, KEY_LOG_ENABLED,
     KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
-/** The nullable override keys of [data] that are set, in a stable order. Names only. */
+/**
+ * The nullable override keys of [data] that are set, in a stable order. Names only. The theme is UI-only and never listed.
+ */
 fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
     if (data.logEnabled != null) add(KEY_LOG_ENABLED)
     if (data.gapless != null) add(KEY_GAPLESS)
@@ -109,6 +136,10 @@ fun parseSettings(text: String): ParsedSettings {
         if (mode != null) data = data.copy(dialAccess = mode) else problems += KEY_DIAL_ACCESS
     }
     bool(KEY_CLEAR_ON_CAST_END)?.let { data = data.copy(clearOnCastEnd = it) }
+    o[KEY_THEME]?.let { e ->
+        val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { ThemeMode.fromWire(it) }
+        if (mode != null) data = data.copy(theme = mode) else problems += KEY_THEME
+    }
     data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), gapless = bool(KEY_GAPLESS))
     o[KEY_CACHE_MB]?.let { e ->
         val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in CACHE_MB_RANGE }
@@ -134,10 +165,11 @@ fun readSettingsFile(file: File): AppSettingsData =
 /** The JSON written for [data]: known keys in a stable order, null overrides and default switches left out. */
 private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>): JsonObject {
     val known = LinkedHashMap<String, JsonElement>()
-    // The two plain switches are written only when they differ from the fresh-install default, so the file stays small.
+    // The two plain switches and the theme are written only when they differ from the fresh-install default, so the file stays small.
     if (!data.bridgeEnabled) known[KEY_BRIDGE_ENABLED] = JsonPrimitive(false)
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
     if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
+    if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     data.gapless?.let { known[KEY_GAPLESS] = JsonPrimitive(it) }
     data.cacheMb?.let { known[KEY_CACHE_MB] = JsonPrimitive(it) }

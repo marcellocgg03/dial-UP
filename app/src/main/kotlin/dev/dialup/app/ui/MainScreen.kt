@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
 import dev.dialup.app.SettingsModel
+import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.PermissionState
 import dev.dialup.app.model.bannerState
 import kotlinx.coroutines.flow.StateFlow
@@ -37,13 +38,14 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The Compose root. testTagsAsResourceId lets uiautomator see the test tags (plan 07-16). The permission
  * banners sit above both tabs (D-01); their Grant buttons call back into the Activity, which owns the
- * result launchers. A bottom bar switches between Speakers and Settings (plan 07-10).
+ * result launchers. A bottom bar switches between Speakers and Settings (plan 07-10). The theme comes from the Activity.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MainScreen(
     model: AppModel,
     permissions: StateFlow<PermissionState>,
+    theme: ThemeMode,
     onGrantNotifications: () -> Unit,
     onGrantBattery: () -> Unit,
 ) {
@@ -53,7 +55,7 @@ fun MainScreen(
     val settings = remember(scope) { SettingsModel(context, scope).presenter() }
     val settingsUi by settings.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
-    DialUpTheme {
+    DialUpTheme(theme) {
         Scaffold(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },

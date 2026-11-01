@@ -4,16 +4,21 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.model.GrantAction
 import dev.dialup.app.model.PermissionState
 import dev.dialup.app.model.notificationGrantAction
@@ -28,6 +33,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * request. The exemption and notification state is read again from the platform on every resume (the system
  * screens return no reliable result, T-07-44), and onResume starts the bridge when the switch is on and the
  * exemption is held (D-01); a switched-off or non-exempt bridge is never started from here (D-04, D-12).
+ * The Theme setting is collected here so a change recolours the screen and the system bars at once.
  */
 class MainActivity : ComponentActivity() {
     private val permissionState = MutableStateFlow(PermissionState(notificationsGranted = true, exempt = false))
@@ -51,9 +57,19 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         refreshPermissions()
         setContent {
+            val theme = AppSettings.of(applicationContext).data.collectAsStateWithLifecycle().value.theme
+            val dark = useDarkTheme(theme, isSystemInDarkTheme())
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                )
+                onDispose {}
+            }
             MainScreen(
                 model = AppModel.of(applicationContext),
                 permissions = permissionState.asStateFlow(),
+                theme = theme,
                 onGrantNotifications = ::grantNotifications,
                 onGrantBattery = ::grantBattery,
             )
@@ -122,5 +138,9 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val TAG = "T2U"
+
+        // activity 1.13.0's own default scrims, re-stated because the bar icons must follow the app's theme, not the system's uiMode.
+        val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
     }
 }
