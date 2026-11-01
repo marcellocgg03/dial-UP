@@ -139,4 +139,15 @@ class BridgeManualUdnCaseTest {
         assertFalse(h.events.any { it.first == "manual-probe" && it.second["result"] == "Answered" }, "never Answered")
         assertTrue(bridge.speakers.value.none { it.online }, "never online: ${bridge.speakers.value}")
     }
+
+    @Test
+    @DisplayName("a description UDN takes the lower-case form of a USN UDN")
+    fun aDescriptionUdnTakesTheLowerCaseFormOfAUsnUdn() = h.run<Unit> {
+        assertEquals("rincon_abc01400_mr", descriptionUdn("uuid:RINCON_ABC01400_MR"))
+        assertEquals("abc", descriptionUdn("UUID:Abc"))
+        assertEquals("abc", descriptionUdn("Uuid:abc"))
+        assertEquals("abc", descriptionUdn("  uuid:abc  "))
+        assertEquals("abc", descriptionUdn("abc"))
+        assertEquals("", descriptionUdn(""))
+    }
 }

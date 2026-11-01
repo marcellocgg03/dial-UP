@@ -201,6 +201,17 @@ private const val TRACK_GRACE_MS = 120_000L
 /** How long a housekeeping run waits for its own listener to hear the probe datagram. */
 private const val PROBE_TIMEOUT_MS = 2000L
 
+/**
+ * D-9: a device description's UDN (`uuid:RINCON_..._MR` on a real Sonos, upper case) in the form `udnFromUsn` gives a USN's UDN,
+ * which is the key the registry, replySources, hidden.json and manual.json all use: the `uuid:` prefix removed in any letter
+ * case, trimmed and lower-cased.
+ */
+internal fun descriptionUdn(raw: String): String {
+    val trimmed = raw.trim()
+    val bare = if (trimmed.startsWith("uuid:", ignoreCase = true)) trimmed.substring("uuid:".length) else trimmed
+    return bare.trim().lowercase()
+}
+
 class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** Where the bridge listens now; [rebindNetwork] replaces it, so every reader takes the current value (plan 05-07). */
     @Volatile private var net: BridgeNetwork = net
@@ -606,7 +617,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             failure("manual-add-describe", t)
             return null
         }
-        val udn = desc.udn.removePrefix("uuid:").removePrefix("UUID:").trim()
+        val udn = descriptionUdn(desc.udn)
         if (udn.isEmpty() || !desc.services.containsKey("urn:upnp-org:serviceId:AVTransport")) {
             emit("manual-add-describe", "ip" to host, "result" to "NotARenderer")
             return ManualAddResult.NotUsable("It answered, but it is not a speaker that can play audio here: no AVTransport")
@@ -644,8 +655,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * Plan 07-18, WR-03, D-07: the liveness signal for a saved manual speaker that never answers a unicast search (a Sonos
      * speaker). Fetches the speaker's description (the saved `location` when [descriptionUrlAllowed] holds for the re-validated
      * saved address, otherwise [BridgeDeps.manualDescriptionUrl], T-07-48) and counts it as an answer only when the document's UDN
-     * equals the saved one (T-07-49); the registry then refreshes the running renderer or sets it up. A failure is one
-     * `manual-probe` event and means "no answer". Never throws except for cancellation.
+     * equals the saved one, letter case ignored because a Sonos serves it in upper case and the saved one is lower case
+     * (T-07-49, D-9); the registry then refreshes the running renderer or sets it up. A failure is one `manual-probe` event
+     * and means "no answer". Never throws except for cancellation.
      */
     private suspend fun describeSaved(entry: ManualSpeaker, reg: RendererRegistry): Boolean {
         val ip = parseIpv4Literal(entry.ip)
@@ -666,8 +678,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             emit("manual-probe", "ip" to entry.ip, "result" to t.javaClass.simpleName, "via" to "http")
             return false
         }
-        val udn = desc.udn.removePrefix("uuid:").removePrefix("UUID:").trim()
-        if (udn != entry.udn) {
+        val udn = descriptionUdn(desc.udn)
+        if (!udn.equals(entry.udn, ignoreCase = true)) {
             emit("manual-probe", "ip" to entry.ip, "result" to "OtherDevice", "via" to "http")
             return false
         }
