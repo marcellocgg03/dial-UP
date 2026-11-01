@@ -233,6 +233,11 @@ data class RendererDeps(
      * the setting applies to a running bridge (D-09). The default reads the fixed [config] flag.
      */
     val clearOnCastEnd: () -> Boolean = { config.clearOnCastEnd },
+    /**
+     * GUI rename (261101-dcg): the author's name for the speaker with this UDN, read once at init; null keeps the described name.
+     * Matching (hide, manual, ports, the name filter) never uses it.
+     */
+    val userName: (String) -> String? = { null },
 )
 
 /** What the speaker is playing, for the status UI and the notification. */
@@ -376,6 +381,9 @@ class Renderer(
 
     @Volatile var description: DeviceDescription? = null
         private set
+
+    /** The name [receiverName] built from the description (template and suffix applied); null until [init] has read it. A user name replaces it on show, never in matching. */
+    @Volatile private var describedName: String? = null
 
     // The status UI follows these through [ui]; the property syntax and the private setters stay as they were (plan 07-03).
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
@@ -609,7 +617,9 @@ class Renderer(
             return false
         }
 
-        val displayName = receiverName(config.nameTemplate, config.nameSuffix, desc.friendlyName, desc.manufacturer, desc.modelName)
+        val described = receiverName(config.nameTemplate, config.nameSuffix, desc.friendlyName, desc.manufacturer, desc.modelName)
+        describedName = described
+        val displayName = shownRendererName(deps.userName(udn), described)
         name = displayName
 
         safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { protocols = parseSink(it["Sink"]) }
@@ -654,6 +664,29 @@ class Renderer(
         }
         note("info", "Cast receiver \"$displayName\" ready on $ip:$port")
         return true
+    }
+
+    /**
+     * GUI rename (261101-dcg, PD-5): [userName] is the author's new name for this speaker, or null to go back to the described
+     * one. Does nothing before [init] has read the description (init reads the store itself) or after [destroy]. Otherwise the
+     * card name changes, the receiver options are copied with the new name and screen name (so a revived receiver keeps it), and
+     * the running receiver is told, which serves and advertises the new DIAL friendly name. The card stays renamed when the
+     * receiver cannot take the name. The UDN, port, store and lounge sessions are untouched.
+     */
+    suspend fun rename(userName: String?) {
+        val described = describedName ?: return
+        if (destroyed) return
+        val shown = shownRendererName(userName, described)
+        name = shown
+        receiverOptions = receiverOptions?.copy(name = shown, screenName = shown)
+        val rec = receiver ?: return
+        try {
+            rec.rename(shown)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("warn", "Cast receiver could not take the new name (${e.javaClass.simpleName})")
+        }
     }
 
     /**

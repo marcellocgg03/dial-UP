@@ -80,6 +80,9 @@ class YouTubeCastReceiver(
     /** The address the DIAL server listens on and the LOCATION names; [rebindDial] moves it (plan 05-07). */
     @Volatile private var bindHost: String = deps.bindHost
 
+    /** The DIAL friendly name: [ReceiverOptions.name] until [rename] changes it; read at start and at a rebind. */
+    @Volatile private var friendlyName: String = options.name
+
     /** The config the running DIAL server was built from; the port in it is the one a rebind keeps. */
     private var dialConfig: DialConfig? = null
 
@@ -153,7 +156,7 @@ class YouTubeCastReceiver(
                 app.start()
                 appStarted = true
                 val config = DialConfig(
-                    friendlyName = options.name,
+                    friendlyName = friendlyName,
                     uuid = id,
                     bindHost = bindHost,
                     port = options.dialPort,
@@ -166,7 +169,7 @@ class YouTubeCastReceiver(
                 withContext(Dispatchers.IO) { created.start() }
                 server = created
                 val location = "http://${config.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
-                deps.advertiser.advertise(SsdpDevice(options.name, id, deps.serverHeader, location))
+                deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, location))
                 advertisedUuid = id
                 dial = created
                 dialConfig = config
@@ -255,7 +258,7 @@ class YouTubeCastReceiver(
                 dial = created
                 dialConfig = moved
                 bindHost = newHost
-                deps.advertiser.advertise(SsdpDevice(options.name, id, deps.serverHeader, "http://$newHost:$port${moved.prefix}/ssdp/device-desc.xml"))
+                deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, "http://$newHost:$port${moved.prefix}/ssdp/device-desc.xml"))
                 note("rebound", "port" to port)
             } catch (e: CancellationException) {
                 throw e
@@ -264,6 +267,30 @@ class YouTubeCastReceiver(
                 note("rebindFailed", "error" to (e::class.simpleName ?: "Throwable"))
                 throw e
             }
+        }
+    }
+
+    /**
+     * GUI rename (261101-dcg, PD-5): [name] becomes the DIAL friendly name from the next device-desc.xml answer, and the device is
+     * advertised again with it (the bridge's advertiser decides whether a NOTIFY goes out: phone-only mode sends none). No byebye
+     * is sent, so a sender that is casting keeps its entry. The lounge screen name keeps its start-time value until the next
+     * start. A receiver that is not running only remembers the name for its next start.
+     */
+    override suspend fun rename(name: String) {
+        lifecycle.withLock {
+            friendlyName = name
+            val server = dial
+            val config = dialConfig
+            val id = uuid
+            if (status != "running" || server == null || config == null || id == null) {
+                note("renameIgnored", "status" to status)
+                return
+            }
+            server.rename(name)
+            dialConfig = config.copy(friendlyName = name)
+            val location = "http://$bindHost:${server.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
+            deps.advertiser.advertise(SsdpDevice(name, id, deps.serverHeader, location))
+            note("renamed")
         }
     }
 

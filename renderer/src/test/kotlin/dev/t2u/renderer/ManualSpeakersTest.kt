@@ -215,4 +215,12 @@ class ManualSpeakersTest {
         assertTrue(first.manual)
         assertEquals(listOf("uuid:1", "uuid:2", "uuid:3"), savedSpeakerCards(saved, emptySet()).map { it.udn })
     }
+
+    @Test
+    @DisplayName("savedSpeakerCards shows a user name")
+    fun savedSpeakerCardsShowsAUserName() {
+        val saved = listOf(speaker(1), speaker(2))
+        val cards = savedSpeakerCards(saved, emptySet(), mapOf("uuid:2" to "Kitchen"))
+        assertEquals(listOf("Name 1", "Kitchen"), cards.map { it.name })
+    }
 }

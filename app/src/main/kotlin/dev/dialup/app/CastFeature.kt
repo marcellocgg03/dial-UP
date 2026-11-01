@@ -384,6 +384,8 @@ class CastFeature : SpikeFeature, CastCountSource {
                 hidden = SpeakerStores.of(h.context).hidden,
                 // GUI-04 / D-06: the speakers added by address, saved on a successful add and probed at every start
                 manual = SpeakerStores.of(h.context).manual,
+                // GUI rename (261101-dcg): the author's renderer names, applied when a renderer is set up and live on a rename
+                names = SpeakerStores.of(h.context).names,
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,

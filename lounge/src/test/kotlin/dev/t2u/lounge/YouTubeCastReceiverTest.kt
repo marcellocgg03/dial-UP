@@ -206,6 +206,40 @@ class YouTubeCastReceiverTest {
         false
     }
 
+    private fun friendlyName(port: Int): String =
+        deviceDescription(port).getElementsByTagName("friendlyName").item(0).textContent
+
+    @Test
+    fun renameServesTheNewNameAndAdvertisesItAgain() = run {
+        val r = receiver()
+        r.start()
+        val port = dialPort()
+        assertEquals("🔊 Test (app)", friendlyName(port))
+
+        r.rename("Kitchen")
+
+        assertEquals("Kitchen", friendlyName(port))
+        assertEquals(2, advertiser.advertised.size)
+        val first = advertiser.advertised[0]
+        val second = advertiser.advertised[1]
+        assertEquals("Kitchen", second.name)
+        assertEquals(first.uuid, second.uuid)
+        assertEquals(first.location, second.location)
+        assertEquals("running", r.status)
+    }
+
+    @Test
+    fun aRenameBeforeStartIsUsedAtStart() = run {
+        val r = receiver()
+
+        r.rename("Kitchen")
+
+        assertTrue(advertiser.advertised.isEmpty(), "a stopped receiver advertises nothing")
+        r.start()
+        assertEquals("Kitchen", advertiser.advertised.single().name)
+        assertEquals("Kitchen", friendlyName(dialPort()))
+    }
+
     private fun pairingRegistrations() = fake.requests.filter { it.path.endsWith("register_pairing_code") }
 
     @Test

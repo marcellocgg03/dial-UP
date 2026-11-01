@@ -26,6 +26,13 @@ interface CastReceiver {
      * (plan 05-04). The default does nothing, for receivers that never stop themselves.
      */
     fun setOnTerminate(callback: (Throwable) -> Unit) {}
+
+    /**
+     * GUI rename (261101-dcg, PD-5): from now on [name] is this receiver's DIAL friendly name. The device description answers
+     * with it at once and the device is advertised again (ssdp:alive where announcing is allowed). The lounge screen name keeps
+     * the start-time name until the receiver's next start. The default does nothing.
+     */
+    suspend fun rename(name: String) {}
 }
 
 /**

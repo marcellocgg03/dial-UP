@@ -56,6 +56,19 @@ class DialServerTest {
     }
 
     @Test
+    fun aRenameChangesTheFriendlyNameAtOnceAndEscapesIt() = testApplication {
+        val server = DialServer(config) { }
+        application { server.configure(this) }
+        val before = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(before.contains("<friendlyName>T2U-SPIKE A base</friendlyName>"), before)
+
+        server.rename("Kitchen & <Bath>")
+
+        val after = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(after.contains("<friendlyName>Kitchen &amp; &lt;Bath&gt;</friendlyName>"), after)
+    }
+
+    @Test
     fun applicationUrlFollowsTheRequestHostHeader() = dialTest {
         val r = get("/ytcr/ssdp/device-desc.xml", host = "10.1.2.3")
         assertEquals("http://10.1.2.3:3000/ytcr/apps", r.headers["Application-URL"])

@@ -40,7 +40,8 @@ import dev.t2u.renderer.savedSpeakerCards
 /**
  * The Speakers list (GUI-01): one card per speaker the running bridge can cast to. With the service down it says so instead of
  * showing a list that no longer follows anything. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
- * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. While there is no bridge (off, or the
+ * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. Rename on a card opens a dialog
+ * for that renderer's name (matched by UDN). While there is no bridge (off, or the
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
 @Composable
@@ -50,6 +51,9 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val bridgeUp by model.bridgeUp.collectAsStateWithLifecycle()
     val hidden by model.hidden.collectAsStateWithLifecycle()
     val manual by model.manual.collectAsStateWithLifecycle()
+    val names by model.names.collectAsStateWithLifecycle()
+    // the UDN being renamed; the dialog goes when no card with that UDN is on the list any more
+    var renaming by rememberSaveable { mutableStateOf<String?>(null) }
     var hiddenExpanded by rememberSaveable { mutableStateOf(false) }
     var adding by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -83,13 +87,14 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                     buttons = buttonsFor(speaker, speaker.udn in busy),
                     onAction = { presenter.press(speaker.udn, it) },
                     onHide = { model.hide(speaker) },
+                    onRename = { renaming = speaker.udn },
                 )
             }
         }
         if (savedManualVisible(running, bridgeUp)) {
             // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever there is no bridge (a hidden one is skipped)
-            items(savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }), key = { "manual-${it.udn}" }) { card ->
-                SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) })
+            items(savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }, names), key = { "manual-${it.udn}" }) { card ->
+                SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn })
             }
         }
         if (hidden.isNotEmpty()) {
@@ -106,24 +111,40 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
             }
             if (hiddenExpanded) {
                 items(hidden, key = { "hidden-${it.udn}" }) { speaker ->
-                    HiddenRow(speaker, onRestore = { model.unhide(speaker.udn) })
+                    HiddenRow(speaker, shownName = names[speaker.udn] ?: speaker.name, onRestore = { model.unhide(speaker.udn) })
                 }
             }
         }
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
+    renaming?.let { udn ->
+        // the card on the list now: a running one, or the greyed card of a saved renderer while there is no bridge
+        val card = speakers.firstOrNull { it.udn == udn }
+            ?: savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }, names).firstOrNull { it.udn == udn && !bridgeUp }
+        if (card == null) {
+            renaming = null
+        } else {
+            RenameDialog(
+                current = card.name,
+                custom = udn in names,
+                onSave = { model.rename(udn, it) },
+                onReset = { model.rename(udn, null) },
+                onDismiss = { renaming = null },
+            )
+        }
+    }
 }
 
 /** One hidden speaker: its name and address, and a Restore button (GUI-03). */
 @Composable
-private fun HiddenRow(speaker: HiddenSpeaker, onRestore: () -> Unit) {
+private fun HiddenRow(speaker: HiddenSpeaker, shownName: String, onRestore: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().testTag("hidden-row-${speaker.udn}"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(speaker.name.ifEmpty { speaker.udn }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(shownName.ifEmpty { speaker.udn }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (speaker.address.isNotEmpty()) Text(speaker.address, style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = onRestore, modifier = Modifier.testTag("btn-restore-${speaker.udn}")) { Text("Restore") }

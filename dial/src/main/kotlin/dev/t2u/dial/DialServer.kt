@@ -89,6 +89,17 @@ class DialServer(
 
     private var server: EmbeddedServer<*, *>? = null
 
+    /** The friendlyName the device description carries; starts as [DialConfig.friendlyName] and changes with [rename]. */
+    @Volatile private var friendlyName: String = config.friendlyName
+
+    /**
+     * GUI rename (261101-dcg): the next device-desc.xml answer carries [name] as its friendlyName, XML-escaped by [DialXml].
+     * The caller validates the text (length, no control characters).
+     */
+    fun rename(name: String) {
+        friendlyName = name
+    }
+
     @Volatile private var boundPort: Int = config.port
 
     /** Pid handed out in the run link and in the POST LOCATION header; fixed for this server's lifetime. */
@@ -175,7 +186,7 @@ class DialServer(
             route(prefix) {
                 get("/ssdp/device-desc.xml") {
                     val base = baseUrl(call)
-                    val xml = DialXml.deviceDesc(base, config.friendlyName, config.manufacturer, config.modelName, config.uuid)
+                    val xml = DialXml.deviceDesc(base, friendlyName, config.manufacturer, config.modelName, config.uuid)
                     call.response.header("Application-URL", "$base/apps")
                     call.respondText(xml, XML_UTF8)
                 }

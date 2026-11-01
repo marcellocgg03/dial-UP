@@ -61,6 +61,7 @@ fun SpeakerCard(
     buttons: CardButtons = buttonsFor(speaker, busy = false),
     onAction: (SpeakerAction) -> Unit = {},
     onHide: () -> Unit = {},
+    onRename: () -> Unit = {},
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
@@ -98,13 +99,22 @@ fun SpeakerCard(
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // GUI-03: the overflow menu. Hide is the only way off the list (PD-3): offered while the speaker answers and on the greyed card of a saved one.
+            // GUI-03: the overflow menu: Rename on every card. Hide is the only way off the list (PD-3): offered while the speaker answers and on the greyed card of a saved one.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // GUI rename: on every card, answering or not (the name is kept per UDN)
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = {
+                            menuOpen = false
+                            onRename()
+                        },
+                        modifier = Modifier.testTag("menu-rename-$udn"),
+                    )
                     if (hideOffered(speaker)) {
                         DropdownMenuItem(
                             text = { Text("Hide from cast menus") },

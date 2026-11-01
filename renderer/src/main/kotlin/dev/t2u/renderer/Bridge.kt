@@ -171,6 +171,11 @@ data class BridgeDeps(
     val manualDescriptionUrl: (String) -> String = ::sonosDescriptionUrl,
     /** Plan 07-17: how long [Bridge.addManual] waits for a reply to the unicast search before it falls back to the description. */
     val manualSsdpGraceMs: Long = MANUAL_SSDP_GRACE_MS,
+    /**
+     * GUI rename (261101-dcg): the names the author gave their renderers, by UDN. Process-level in the app, so it also lives
+     * while the bridge is off. Null renames nothing ([Bridge.rename] answers false).
+     */
+    val names: RendererNames? = null,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -376,13 +381,29 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val speaker = reg.renderers().firstOrNull { it.udn == udn }
         if (speaker == null) {
             val entry = deps.manual?.entries?.value?.firstOrNull { it.udn == udn } ?: return false
-            if (!store.add(HiddenSpeaker(udn, entry.name, entry.ip))) return false
-            emit("hidden", "udn" to udn, "name" to entry.name)
+            val shown = deps.names?.get(udn) ?: entry.name
+            if (!store.add(HiddenSpeaker(udn, shown, entry.ip))) return false
+            emit("hidden", "udn" to udn, "name" to shown)
             return true
         }
         if (!store.add(HiddenSpeaker(udn, speaker.name ?: udn, speaker.address))) return false
         reg.hide(udn, stop = true, clear = clearOnCastEndNow())
         emit("hidden", "udn" to udn, "name" to speaker.name)
+        return true
+    }
+
+    /**
+     * GUI rename (261101-dcg, PD-4, PD-5): [name] is the author's name for the renderer [udn]; null goes back to the name the
+     * renderer described itself with. A name goes through [RendererNames.set], so an unusable one (blank, over 63 characters, a
+     * control character) answers false and changes nothing. Afterwards, while the bridge runs, the running renderer with that UDN
+     * (if any) shows the new name on its card and serves it as its DIAL friendly name at once, without a restart. Emits `renamed`.
+     * The renderer stays matched by its UDN everywhere. False without a names store.
+     */
+    suspend fun rename(udn: String, name: String?): Boolean {
+        val store = deps.names ?: return false
+        if (name == null) store.remove(udn) else if (!store.set(udn, name)) return false
+        if (started.get() && !stopped.get()) renderer(udn)?.rename(store.get(udn))
+        emit("renamed", "udn" to udn, "name" to store.get(udn), "reset" to (name == null))
         return true
     }
 
@@ -804,6 +825,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                         deps.scope,
                         deps.events,
                         clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
+                        userName = { deps.names?.get(it) },
                         // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
                         playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
                     ),
@@ -980,12 +1002,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         val saved = deps.manual?.entries ?: return running.distinctUntilChanged()
         val hidden = deps.hidden?.entries ?: flowOf(emptyList())
-        return combine(running, saved, hidden) { live, entries, hiddenEntries ->
+        val names = deps.names?.entries ?: flowOf(emptyMap())
+        return combine(running, saved, hidden, names) { live, entries, hiddenEntries, namesMap ->
             val savedUdns = entries.mapTo(HashSet()) { it.udn }
             val liveUdns = live.mapTo(HashSet()) { it.udn }
             val hiddenUdns = hiddenEntries.mapTo(HashSet()) { it.udn }
             live.map { if (it.udn in savedUdns) it.copy(manual = true) else it } +
-                savedSpeakerCards(entries.filter { it.udn !in liveUdns }, hiddenUdns)
+                savedSpeakerCards(entries.filter { it.udn !in liveUdns }, hiddenUdns, namesMap)
         }.distinctUntilChanged()
     }
 

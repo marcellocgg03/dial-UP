@@ -5,6 +5,7 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.renderer.HiddenSpeakers
 import dev.t2u.renderer.ManualSpeakers
+import dev.t2u.renderer.RendererNames
 import java.io.File
 
 /**
@@ -13,7 +14,7 @@ import java.io.File
  * the Config dataDir.
  */
 object SpeakerStores {
-    class Instance(val hidden: HiddenSpeakers, val manual: ManualSpeakers)
+    class Instance(val hidden: HiddenSpeakers, val manual: ManualSpeakers, val names: RendererNames)
 
     @Volatile private var instance: Instance? = null
 
@@ -29,7 +30,11 @@ object SpeakerStores {
             val manual = ManualSpeakers(dir) { line ->
                 ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "manual", "message" to line))
             }.load()
-            return Instance(hidden, manual).also { instance = it }
+            // GUI rename (261101-dcg): the names the author gave the renderers, by UDN
+            val names = RendererNames(dir) { line ->
+                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "names", "message" to line))
+            }.load()
+            return Instance(hidden, manual, names).also { instance = it }
         }
     }
 }

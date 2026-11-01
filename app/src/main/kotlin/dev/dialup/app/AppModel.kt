@@ -103,6 +103,28 @@ class AppModel private constructor(context: Context) {
     /** GUI-04, D-07: the speakers added by address (they can be hidden, not removed); the store lives with the process, so the list is right while the bridge is off too. */
     val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
 
+    /** GUI rename: the names the author gave the renderers, by UDN; the store lives with the process, so it is readable while the bridge is off too. */
+    val names: StateFlow<Map<String, String>> = SpeakerStores.of(context).names.entries
+
+    /**
+     * GUI rename: names the renderer [udn] [name], or resets it to its own name when [name] is null. Matched by UDN. Through the
+     * running bridge when there is one (the card and the DIAL friendly name change at once); with the bridge off straight on the
+     * store, and the bridge's next start uses the name. An unusable name changes nothing. Fire-and-forget.
+     */
+    fun rename(udn: String, name: String?): Job = scope.launch {
+        try {
+            val bridge = cast.value?.currentBridge()
+            if (bridge == null || !bridge.rename(udn, name)) {
+                val store = SpeakerStores.of(appContext).names
+                if (name == null) store.remove(udn) else store.set(udn, name)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the renderer keeps its name
+        }
+    }
+
     /**
      * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
      * sent (T-07-29); with no bridge the answer is [ManualAddResult.NotUsable] saying to switch it on, or that the bridge is waiting for Wi-Fi when the service is up, because the probe runs

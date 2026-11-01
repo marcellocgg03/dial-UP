@@ -291,13 +291,14 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
 /**
  * The greyed card of every saved renderer whose UDN is not in [hidden], in the saved order (GUI-04, D-07, PD-3): idle, no track,
  * no navigation, not online, marked manual. A hidden saved renderer stays in manual.json but is not listed: Hide is the only
- * way to take a card off the list, so a hidden one must not come back as a greyed card, with the bridge on or off.
+ * way to take a card off the list, so a hidden one must not come back as a greyed card, with the bridge on or off. A user name
+ * in [names] (by UDN, quick 261101-dcg) replaces the saved name on the card.
  */
-fun savedSpeakerCards(saved: List<ManualSpeaker>, hidden: Set<String>): List<SpeakerUi> =
+fun savedSpeakerCards(saved: List<ManualSpeaker>, hidden: Set<String>, names: Map<String, String> = emptyMap()): List<SpeakerUi> =
     saved.filter { it.udn !in hidden }.map { entry ->
         SpeakerUi(
             udn = entry.udn,
-            name = entry.name,
+            name = names[entry.udn] ?: entry.name,
             address = entry.ip,
             status = PlayerStatus.IDLE,
             track = null,
