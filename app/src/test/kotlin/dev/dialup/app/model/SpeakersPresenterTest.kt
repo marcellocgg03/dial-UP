@@ -158,4 +158,12 @@ class SpeakersPresenterTest {
         assertEquals(null, addRefusal(serviceUp = true, bridgeUp = true))
         assertTrue(!dev.dialup.app.AppModel.BRIDGE_WAITING_ADD.contains("Switch"), "the waiting text must not claim the switch is off")
     }
+
+    @Test
+    fun `hide is offered on answering cards and on saved renderers that do not answer`() {
+        assertTrue(hideOffered(speaker(PlayerStatus.IDLE)))
+        assertTrue(hideOffered(speaker(PlayerStatus.IDLE).copy(manual = true)))
+        assertTrue(hideOffered(speaker(PlayerStatus.IDLE, online = false).copy(manual = true)))
+        assertEquals(false, hideOffered(speaker(PlayerStatus.IDLE, online = false)))
+    }
 }

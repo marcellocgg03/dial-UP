@@ -63,12 +63,18 @@ class AppModel private constructor(context: Context) {
     val bridgeUp: StateFlow<Boolean> = status.map { it.running }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
-     * GUI-03: Hide from a card's menu. The running bridge drops the speaker as a cast target at once (stopping it first when it
-     * plays) and keeps it out. Fire-and-forget: a failure is dropped, a tap must never crash the app.
+     * GUI-03: Hide from a card's menu, the only way to take a card off the list. The running bridge drops the speaker as a cast
+     * target at once (stopping it first when it plays) and keeps it out; with no bridge, or when the bridge does not know the
+     * speaker, it goes straight into the hidden store (this is how a saved renderer's greyed card is hidden with the bridge off;
+     * the registry reads the same process-level store at the next start). Fire-and-forget: a failure is dropped, a tap must never
+     * crash the app.
      */
-    fun hide(udn: String): Job = scope.launch {
+    fun hide(speaker: SpeakerUi): Job = scope.launch {
         try {
-            cast.value?.currentBridge()?.hide(udn)
+            val bridge = cast.value?.currentBridge()
+            if (bridge == null || !bridge.hide(speaker.udn)) {
+                SpeakerStores.of(appContext).hidden.add(HiddenSpeaker(speaker.udn, speaker.name, speaker.address))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -94,23 +100,8 @@ class AppModel private constructor(context: Context) {
         }
     }
 
-    /** GUI-04, D-07: the speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
+    /** GUI-04, D-07: the speakers added by address (they can be hidden, not removed); the store lives with the process, so the list is right while the bridge is off too. */
     val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
-
-    /**
-     * GUI-04, D-07: Remove on a manual speaker's card. Through the running bridge when there is one (it also takes the speaker out
-     * of the cast menus); with the bridge off straight on the store. Fire-and-forget: a failure leaves the speaker listed.
-     */
-    fun removeManual(udn: String): Job = scope.launch {
-        try {
-            val bridge = cast.value?.currentBridge()
-            if (bridge == null || !bridge.removeManual(udn)) SpeakerStores.of(appContext).manual.remove(udn)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            // the speaker stays listed
-        }
-    }
 
     /**
      * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was

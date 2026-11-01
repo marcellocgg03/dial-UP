@@ -35,15 +35,13 @@ import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.savedManualVisible
 import dev.t2u.renderer.HiddenSpeaker
-import dev.t2u.renderer.SpeakerUi
-import dev.t2u.renderer.ManualSpeaker
-import dev.t2u.lounge.PlayerStatus
+import dev.t2u.renderer.savedSpeakerCards
 
 /**
  * The Speakers list (GUI-01): one card per speaker the running bridge can cast to. With the service down it says so instead of
  * showing a list that no longer follows anything. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
  * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. While there is no bridge (off, or the
- * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can still be removed (D-07).
+ * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
 @Composable
 fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
@@ -84,16 +82,14 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                     speaker,
                     buttons = buttonsFor(speaker, speaker.udn in busy),
                     onAction = { presenter.press(speaker.udn, it) },
-                    onHide = { model.hide(speaker.udn) },
-                    onRemove = { model.removeManual(speaker.udn) },
+                    onHide = { model.hide(speaker) },
                 )
             }
         }
         if (savedManualVisible(running, bridgeUp)) {
-            // D-07: the saved manual speakers stay listed, greyed, and can still be removed whenever there is no bridge
-            items(manual, key = { "manual-${it.udn}" }) { saved ->
-                val card = offlineCard(saved)
-                SpeakerCard(card, buttons = buttonsFor(card, busy = false), onRemove = { model.removeManual(saved.udn) })
+            // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever there is no bridge (a hidden one is skipped)
+            items(savedSpeakerCards(manual, hidden.mapTo(HashSet()) { it.udn }), key = { "manual-${it.udn}" }) { card ->
+                SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) })
             }
         }
         if (hidden.isNotEmpty()) {
@@ -117,22 +113,6 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
 }
-
-/** A saved manual speaker as the greyed card it is while the bridge is off: idle, no track, every control off (D-07). */
-private fun offlineCard(saved: ManualSpeaker) = SpeakerUi(
-    udn = saved.udn,
-    name = saved.name,
-    address = saved.ip,
-    status = PlayerStatus.IDLE,
-    track = null,
-    error = null,
-    hasPrevious = false,
-    hasNext = false,
-    queueHasCurrent = false,
-    position = null,
-    online = false,
-    manual = true,
-)
 
 /** One hidden speaker: its name and address, and a Restore button (GUI-03). */
 @Composable

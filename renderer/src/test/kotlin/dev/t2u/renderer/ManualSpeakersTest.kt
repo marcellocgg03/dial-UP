@@ -194,4 +194,25 @@ class ManualSpeakersTest {
         assertFalse(descriptionUrlAllowed("not a url", ip))
         assertEquals("http://192.168.1.40:1400/xml/device_description.xml", sonosDescriptionUrl("192.168.1.40"))
     }
+
+    @Test
+    @DisplayName("savedSpeakerCards lists saved renderers greyed in order and skips hidden ones")
+    fun savedSpeakerCardsListsGreyedAndSkipsHidden() {
+        val saved = listOf(speaker(1), speaker(2), speaker(3))
+        val cards = savedSpeakerCards(saved, setOf("uuid:2"))
+        assertEquals(listOf("uuid:1", "uuid:3"), cards.map { it.udn })
+        val first = cards.first()
+        assertEquals("Name 1", first.name)
+        assertEquals(saved[0].ip, first.address)
+        assertEquals(dev.t2u.lounge.PlayerStatus.IDLE, first.status)
+        assertEquals(null, first.track)
+        assertEquals(null, first.error)
+        assertEquals(null, first.position)
+        assertFalse(first.hasPrevious)
+        assertFalse(first.hasNext)
+        assertFalse(first.queueHasCurrent)
+        assertFalse(first.online)
+        assertTrue(first.manual)
+        assertEquals(listOf("uuid:1", "uuid:2", "uuid:3"), savedSpeakerCards(saved, emptySet()).map { it.udn })
+    }
 }

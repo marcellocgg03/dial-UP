@@ -364,14 +364,22 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * GUI-03, D-08: drops the speaker [udn] as a DIAL target at once and keeps it out until [unhide]. The speaker joins the
      * hidden set first, so every guard (alive, retry, a setup in flight) refuses it before the receiver goes; then a playing
      * speaker is stopped (and emptied only when clear-when-cast-ends is on, RESEARCH A7) and its receiver stopped, which sends
-     * ssdp:byebye, closes its DIAL port and ends the lounge session. The other speakers are not touched. False when there is
-     * no such running speaker or no hidden store.
+     * ssdp:byebye, closes its DIAL port and ends the lounge session. The other speakers are not touched. A saved renderer that
+     * does not answer (no running speaker, but an entry in manual.json) is hidden too (PD-3): there is nothing to stop, its greyed
+     * card leaves the list, and its probes go on while the registry's hidden guard refuses their answers. False when there is
+     * neither a running nor a saved speaker with that UDN, or no hidden store.
      */
     suspend fun hide(udn: String): Boolean {
         val reg = registry ?: return false
         val store = deps.hidden ?: return false
         if (stopped.get()) return false
-        val speaker = reg.renderers().firstOrNull { it.udn == udn } ?: return false
+        val speaker = reg.renderers().firstOrNull { it.udn == udn }
+        if (speaker == null) {
+            val entry = deps.manual?.entries?.value?.firstOrNull { it.udn == udn } ?: return false
+            if (!store.add(HiddenSpeaker(udn, entry.name, entry.ip))) return false
+            emit("hidden", "udn" to udn, "name" to entry.name)
+            return true
+        }
         if (!store.add(HiddenSpeaker(udn, speaker.name ?: udn, speaker.address))) return false
         reg.hide(udn, stop = true, clear = clearOnCastEndNow())
         emit("hidden", "udn" to udn, "name" to speaker.name)
@@ -516,6 +524,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * GUI-04, D-07: forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
      * of the registry (byebye, DIAL server closed). A speaker that multicast discovery also finds comes back at the next search as
      * an ordinary discovered speaker without the manual mark; hiding it is what keeps it away. False when it was not saved.
+     * The app no longer calls this (Hide replaced Remove on the card, 2026-11-01); it stays covered by BridgeManualTest.
      */
     suspend fun removeManual(udn: String): Boolean {
         val store = deps.manual ?: return false
@@ -960,7 +969,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /**
      * The status UI's list: every renderer's [Renderer.ui] combined, rebuilt whenever a speaker joins or leaves the registry.
      * With a manual store (GUI-04, D-07) a running speaker whose UDN is saved is marked manual, and a saved speaker that is not
-     * running (it does not answer) is listed after them as an offline card: idle, no track, controls off.
+     * running (it does not answer) is listed after them as an offline card: idle, no track, controls off. A hidden saved speaker
+     * is not listed (PD-3): the registry refuses it, and it must not come back as a greyed card.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun speakersFlow(reg: RendererRegistry): Flow<List<SpeakerUi>> {
@@ -969,28 +979,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             if (renderers.isEmpty()) flowOf(emptyList()) else combine(renderers.map { it.ui }) { it.toList() }
         }
         val saved = deps.manual?.entries ?: return running.distinctUntilChanged()
-        return combine(running, saved) { live, entries ->
+        val hidden = deps.hidden?.entries ?: flowOf(emptyList())
+        return combine(running, saved, hidden) { live, entries, hiddenEntries ->
             val savedUdns = entries.mapTo(HashSet()) { it.udn }
             val liveUdns = live.mapTo(HashSet()) { it.udn }
+            val hiddenUdns = hiddenEntries.mapTo(HashSet()) { it.udn }
             live.map { if (it.udn in savedUdns) it.copy(manual = true) else it } +
-                entries.filter { it.udn !in liveUdns }.map { offlineManualCard(it) }
+                savedSpeakerCards(entries.filter { it.udn !in liveUdns }, hiddenUdns)
         }.distinctUntilChanged()
     }
-
-    private fun offlineManualCard(entry: ManualSpeaker) = SpeakerUi(
-        udn = entry.udn,
-        name = entry.name,
-        address = entry.ip,
-        status = PlayerStatus.IDLE,
-        track = null,
-        error = null,
-        hasPrevious = false,
-        hasNext = false,
-        queueHasCurrent = false,
-        position = null,
-        online = false,
-        manual = true,
-    )
 
     // ------------------------------------------------------------------------------------------ commands
 

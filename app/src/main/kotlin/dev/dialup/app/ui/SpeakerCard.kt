@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.DropdownMenu
@@ -36,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import dev.dialup.app.model.CardButtons
 import dev.dialup.app.model.PlayPause
 import dev.dialup.app.model.buttonsFor
+import dev.dialup.app.model.hideOffered
 import dev.dialup.app.model.playPauseAction
 import dev.dialup.app.model.positionAt
 import dev.dialup.app.model.progressFraction
@@ -61,7 +61,6 @@ fun SpeakerCard(
     buttons: CardButtons = buttonsFor(speaker, busy = false),
     onAction: (SpeakerAction) -> Unit = {},
     onHide: () -> Unit = {},
-    onRemove: () -> Unit = {},
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
@@ -99,14 +98,14 @@ fun SpeakerCard(
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // GUI-03: the overflow menu. D-07: a manual speaker also has Remove; Hide is offered only while the speaker answers.
+            // GUI-03: the overflow menu. Hide is the only way off the list (PD-3): offered while the speaker answers and on the greyed card of a saved one.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (speaker.online) {
+                    if (hideOffered(speaker)) {
                         DropdownMenuItem(
                             text = { Text("Hide from cast menus") },
                             onClick = {
@@ -114,16 +113,6 @@ fun SpeakerCard(
                                 onHide()
                             },
                             modifier = Modifier.testTag("menu-hide-$udn"),
-                        )
-                    }
-                    if (speaker.manual) {
-                        DropdownMenuItem(
-                            text = { Text("Remove") },
-                            onClick = {
-                                menuOpen = false
-                                onRemove()
-                            },
-                            modifier = Modifier.testTag("menu-remove-$udn"),
                         )
                     }
                 }
@@ -151,7 +140,7 @@ fun SpeakerCard(
                 Icon(SkipNextIcon, contentDescription = "Next")
             }
             IconButton(onClick = { onAction(SpeakerAction.CLEAR) }, enabled = buttons.clear, modifier = Modifier.testTag("btn-clear-$udn")) {
-                Icon(Icons.Filled.Delete, contentDescription = "Clear renderer")
+                Icon(ClearAllIcon, contentDescription = "Clear renderer")
             }
         }
         val position = speaker.position

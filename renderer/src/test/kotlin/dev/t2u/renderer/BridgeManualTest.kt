@@ -199,9 +199,9 @@ class BridgeManualTest {
     // ------------------------------------------------------------------------------------------ plan 07-14: offline, back, remove
 
     /** A bridge with a saved manual speaker that is up, probing every 200 ms. */
-    private suspend fun upManualBridge(): Pair<Bridge, ManualSpeakers> {
+    private suspend fun upManualBridge(hidden: HiddenSpeakers? = null): Pair<Bridge, ManualSpeakers> {
         val store = ManualSpeakers(h.dataDir).load()
-        val bridge = blindBridge(manual = store, manualProbeIntervalMs = 200)
+        val bridge = blindBridge(manual = store, manualProbeIntervalMs = 200, hidden = hidden)
         bridge.start()
         assertTrue(bridge.addManual(h.loopback) is ManualAddResult.Added)
         h.awaitUntil("the speaker listed") { bridge.speakers.value.size == 1 }
@@ -283,6 +283,58 @@ class BridgeManualTest {
 
         assertTrue(store.entries.value.isEmpty())
         h.awaitUntil("no greyed card remains") { bridge.speakers.value.isEmpty() }
+    }
+
+    // ------------------------------------------------------------------------------------------ 261101-dcg: Hide replaces Remove
+
+    @Test
+    @DisplayName("Hide on a manual speaker keeps it off the list while it answers")
+    fun hideOnAManualSpeakerKeepsItOffTheListWhileItAnswers() = h.run<Unit> {
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        val (bridge, store) = upManualBridge(hidden)
+
+        assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
+
+        h.awaitUntil("the list empty") { bridge.speakers.value.isEmpty() }
+        val before = h.searchesSeen.get()
+        h.awaitUntil("three probe rounds", timeoutMs = 3_000) { h.searchesSeen.get() - before >= 3 }
+        assertTrue(bridge.speakers.value.isEmpty(), "no greyed card comes back")
+        assertNull(h.dialSearchAt(bridge, h.loopback), "no DIAL reply for a hidden receiver")
+        assertEquals(1, store.entries.value.size, "still saved")
+        assertEquals(1, ManualSpeakers(h.dataDir).load().entries.value.size, "still in manual.json")
+        assertTrue(hidden.contains(HARNESS_RENDERER_UDN))
+    }
+
+    @Test
+    @DisplayName("Hide on an offline manual speaker drops its greyed card and keeps it saved")
+    fun hideOnAnOfflineManualSpeakerDropsItsGreyedCardAndKeepsItSaved() = h.run<Unit> {
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        val (bridge, store) = upManualBridge(hidden)
+        h.speakerSilent = true
+        h.awaitUntil("the speaker offline", timeoutMs = 2_000) { bridge.speakers.value.singleOrNull()?.online == false }
+
+        assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
+
+        h.awaitUntil("the list empty") { bridge.speakers.value.isEmpty() }
+        val entry = hidden.entries.value.single()
+        assertEquals(HARNESS_RENDERER_UDN, entry.udn)
+        assertEquals(h.loopback.hostAddress, entry.address)
+        assertEquals(1, store.entries.value.size, "still saved")
+        assertTrue(h.events.any { it.first == "hidden" }, "hidden is logged")
+    }
+
+    @Test
+    @DisplayName("Restore brings a hidden manual speaker back")
+    fun restoreBringsAHiddenManualSpeakerBack() = h.run<Unit> {
+        val hidden = HiddenSpeakers(h.dataDir).load()
+        val (bridge, _) = upManualBridge(hidden)
+        assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
+        h.awaitUntil("the list empty") { bridge.speakers.value.isEmpty() }
+
+        assertTrue(bridge.unhide(HARNESS_RENDERER_UDN))
+
+        h.awaitUntil("the speaker listed again", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        assertTrue(bridge.speakers.value.single().manual)
     }
 
     // ------------------------------------------------------------------------------------------ plan 07-17: HTTP description fallback

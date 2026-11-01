@@ -48,6 +48,12 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 }
 
 /**
+ * Whether a card offers Hide (GUI-03, PD-3): when the renderer answers, or when it is saved by address, so its greyed card can be
+ * hidden too. Hide is the only way to take a card off the list; an offline card that is not saved has nothing to hide.
+ */
+fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
+
+/**
  * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are listed whenever there is no bridge:
  * the switch is off, or the service runs without one (no Wi-Fi, a failed start, the start retry, a reload restart). Once a
  * bridge exists its own list already merges the offline manual entries (plan 07-14), so drawing them again would duplicate them.

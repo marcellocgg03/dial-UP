@@ -6,6 +6,7 @@ package dev.t2u.renderer
 // ports.json, as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen", "address": "192.168.1.20"}}. The name and address are
 // kept only so the Hidden section can show something the author recognises while the speaker is not running.
 
+import dev.t2u.lounge.PlayerStatus
 import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.parseIpv4Literal
 import kotlinx.coroutines.Dispatchers
@@ -286,3 +287,26 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
     }
 }
+
+/**
+ * The greyed card of every saved renderer whose UDN is not in [hidden], in the saved order (GUI-04, D-07, PD-3): idle, no track,
+ * no navigation, not online, marked manual. A hidden saved renderer stays in manual.json but is not listed: Hide is the only
+ * way to take a card off the list, so a hidden one must not come back as a greyed card, with the bridge on or off.
+ */
+fun savedSpeakerCards(saved: List<ManualSpeaker>, hidden: Set<String>): List<SpeakerUi> =
+    saved.filter { it.udn !in hidden }.map { entry ->
+        SpeakerUi(
+            udn = entry.udn,
+            name = entry.name,
+            address = entry.ip,
+            status = PlayerStatus.IDLE,
+            track = null,
+            error = null,
+            hasPrevious = false,
+            hasNext = false,
+            queueHasCurrent = false,
+            position = null,
+            online = false,
+            manual = true,
+        )
+    }
