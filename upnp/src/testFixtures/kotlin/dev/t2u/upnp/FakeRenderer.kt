@@ -106,6 +106,9 @@ class FakeRenderer(
      */
     @Volatile var beforeAction: (suspend (action: String) -> Unit)? = null
 
+    /** How many times `/desc.xml` was requested, answered or not (plan 07-18: a saved speaker is judged by its description). */
+    val descriptionRequests = java.util.concurrent.atomic.AtomicInteger()
+
     private var server: EmbeddedServer<*, *>? = null
 
     @Volatile private var port: Int = 0
@@ -151,7 +154,10 @@ class FakeRenderer(
 
     private fun io.ktor.server.application.Application.routes() {
         routing {
-            get("/desc.xml") { call.respondText(description(), ContentType.Text.Xml) }
+            get("/desc.xml") {
+                descriptionRequests.incrementAndGet()
+                call.respondText(description(), ContentType.Text.Xml)
+            }
             get("/scpd/{svc}.xml") {
                 val svc = call.parameters["svc"] ?: ""
                 if (svc in ACTIONS) call.respondText(scpd(svc), ContentType.Text.Xml) else call.respondText("", status = HttpStatusCode.NotFound)

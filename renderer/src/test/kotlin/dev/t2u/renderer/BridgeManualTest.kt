@@ -384,4 +384,55 @@ class BridgeManualTest {
         assertTrue(result is ManualAddResult.NotUsable, "got $result")
         assertTrue(bridge.speakers.value.isEmpty())
     }
+
+    // ------------------------------------------------------------------------------------------ plan 07-18: saved speakers judged by description
+
+    /** A deaf speaker added through its description and saved; returns the running first bridge's store (the bridge is stopped). */
+    private suspend fun savedDeafSpeaker(): ManualSpeakers {
+        h.speakerSearchDeaf = true
+        val store = ManualSpeakers(h.dataDir).load()
+        val first = blindBridge(manual = store, manualDescriptionUrl = fakeDescription, manualSsdpGraceMs = 300)
+        first.start()
+        assertTrue(first.addManual(h.loopback) is ManualAddResult.Added)
+        first.stop()
+        return store
+    }
+
+    @Test
+    @DisplayName("a saved speaker deaf to unicast search is set up at the next start")
+    fun aSavedSpeakerDeafToUnicastSearchIsSetUpAtTheNextStart() = h.run<Unit> {
+        savedDeafSpeaker()
+
+        val second = blindBridge(manual = ManualSpeakers(h.dataDir).load(), manualDescriptionUrl = fakeDescription)
+        second.start()
+
+        h.awaitUntil("the saved deaf speaker listed again", timeoutMs = 3_000) { second.speakers.value.size == 1 }
+        assertEquals(HARNESS_RENDERER_UDN, second.speakers.value.single().udn)
+        assertTrue(second.speakers.value.single().manual)
+        assertTrue(h.dialSearchAt(second, h.loopback) != null, "a DIAL cast target")
+    }
+
+    @Test
+    @DisplayName("a saved deaf speaker stays online across probe rounds")
+    fun aSavedDeafSpeakerStaysOnlineAcrossProbeRounds() = h.run<Unit> {
+        savedDeafSpeaker()
+        val second = blindBridge(
+            manual = ManualSpeakers(h.dataDir).load(),
+            manualProbeIntervalMs = 200,
+            manualDescriptionUrl = fakeDescription,
+        )
+        second.start()
+        h.awaitUntil("the saved deaf speaker listed", timeoutMs = 3_000) { second.speakers.value.size == 1 }
+        val requestsBefore = h.fakeRenderer.descriptionRequests.get()
+
+        val until = System.nanoTime() + 1_500_000_000L
+        while (System.nanoTime() < until) {
+            assertTrue(second.speakers.value.singleOrNull()?.online == true, "it left the list or went offline: ${second.speakers.value}")
+            delay(50)
+        }
+
+        assertFalse(h.events.any { it.first == "manual-offline" }, "no manual-offline event")
+        val requests = h.fakeRenderer.descriptionRequests.get() - requestsBefore
+        assertTrue(requests >= 3, "description requests over the rounds: $requests")
+    }
 }
