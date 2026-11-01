@@ -37,10 +37,16 @@ data class EffectiveSettings(
     val ytdlpChannel: String,
 )
 
-/** What the Settings tab asks of the running bridge. Every call is safe with the bridge off and answers null or false then. */
+/**
+ * What the Settings tab asks of the running bridge. Every call except [clearLog] is safe with the bridge off and answers null or
+ * false then.
+ */
 interface BridgePort {
     val running: StateFlow<Boolean>
     suspend fun clearCache(): Int?
+
+    /** Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then); true when cleared. */
+    suspend fun clearLog(): Boolean
     suspend fun cacheInfo(): CacheInfo?
     suspend fun updateNow(): YtDlpUpdateOutcome?
     suspend fun ytdlpVersion(): String?
@@ -76,13 +82,6 @@ sealed interface UpdateUi {
     data object Unavailable : UpdateUi
 }
 
-/**
- * Python, ffmpeg and QuickJS are inside youtubedl-android 0.18.1 and cannot be updated at run time, only yt-dlp can (RESEARCH
- * Pitfall 11); the tab says so instead of offering an updater for them.
- */
-const val BUNDLED_COMPONENTS =
-    "Python 3.12.11, ffmpeg 7.1.1 and QuickJS come with youtubedl-android 0.18.1 inside the app and are updated by an app update"
-
 private const val BUSY_STATUS = "BUSY"
 
 /** The one line the result of an Update now press becomes. The arrow is U+2192. */
@@ -115,7 +114,15 @@ data class SettingsUi(
     val update: UpdateUi = UpdateUi.Unavailable,
     /** A one-line result of the last action (cleared cache and so on); null when there is none. */
     val message: String? = null,
-)
+    /** The one-line result of the last Clear log, shown under the log buttons; null when there is none. */
+    val logMessage: String? = null,
+) {
+    /** The LAN access switch: on when any device on the LAN may cast; the inverse of [phoneOnly]. */
+    val lanAccess: Boolean get() = !phoneOnly
+}
+
+/** Shown under the log buttons after a successful Clear log. */
+const val LOG_CLEARED = "Log cleared"
 
 /** "Cleared 3 files" / "Cleared 1 file". */
 fun clearedMessage(count: Int): String = "Cleared $count ${if (count == 1) "file" else "files"}"
@@ -194,7 +201,7 @@ class SettingsPresenter(
 
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
     fun refresh() {
-        ui.update { it.copy(message = null) }
+        ui.update { it.copy(message = null, logMessage = null) }
         scope.launch { if (bridge.running.value) refreshUsage() }
     }
 
@@ -208,6 +215,12 @@ class SettingsPresenter(
         settings.update { it.copy(dialAccess = if (on) DialAccessMode.PHONE else DialAccessMode.LAN) }
         return changed(SettingKey.PHONE_ONLY)
     }
+
+    /**
+     * The Settings row is shown from the LAN side (author's wording 2026-11-01): on means any device on the LAN may cast. Same
+     * setting and same default as [setPhoneOnly], no restart.
+     */
+    fun setLanAccess(on: Boolean): Boolean = setPhoneOnly(!on)
 
     /** Empty the speaker's queue when the last phone disconnects or the bridge stops. Read live by the bridge. */
     fun setClearOnCastEnd(on: Boolean): Boolean {
@@ -264,6 +277,21 @@ class SettingsPresenter(
                 ui.update { it.copy(message = "Could not clear the cache (${e.javaClass.simpleName})") }
             }
             refreshUsage()
+        }
+    }
+
+    /** Empties the event log, with the bridge on or off. The result is one line under the log buttons. */
+    fun clearLog() {
+        scope.launch {
+            try {
+                val done = bridge.clearLog()
+                ui.update { it.copy(logMessage = if (done) LOG_CLEARED else "Could not clear the log") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // one line naming the action and the exception class: no stack trace, no path (review IN-04)
+                ui.update { it.copy(logMessage = "Could not clear the log (${e.javaClass.simpleName})") }
+            }
         }
     }
 

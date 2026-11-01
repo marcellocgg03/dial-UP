@@ -2,7 +2,10 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.ui
 
+import android.content.Intent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,17 +27,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
 import dev.dialup.app.model.SettingsPresenter
 import dev.dialup.app.model.SettingsUi
 import dev.dialup.app.model.UpdateUi
-import dev.dialup.app.model.BUNDLED_COMPONENTS
 import dev.dialup.app.model.updateMessage
 
 private val FORMATS = listOf(
@@ -52,40 +56,34 @@ private val THEMES = listOf(
     ThemeMode.DARK to "Dark",
 )
 
-/** The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed. */
+/**
+ * The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed. The log switch with its
+ * Share log and Clear log buttons comes last.
+ */
 @Composable
 fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
     val ui by presenter.state.collectAsStateWithLifecycle()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { presenter.refresh() }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SwitchRow(
-            title = "Only this phone may cast to the speakers",
-            support = "Off: any device on the Wi-Fi may cast to them",
-            checked = ui.phoneOnly,
-            onChange = { presenter.setPhoneOnly(it) },
+            title = "LAN access",
+            support = "Any device on the LAN can access the bridge running through this app and cast to the speakers",
+            checked = ui.lanAccess,
+            onChange = { presenter.setLanAccess(it) },
             tag = "setting-phone-only",
         )
         HorizontalDivider()
         SwitchRow(
-            title = "Clear the speaker when a cast ends",
-            support = "When the last phone disconnects or the bridge stops, empty the speaker's queue. Off: the speaker keeps the " +
-                "track. Nothing is cleared after a crash or a force stop.",
+            title = "Clear the renderer when a cast ends",
+            support = "When a cast is ended or the phone disconnects, empty the renderer's queue",
             checked = ui.clearOnCastEnd,
             onChange = { presenter.setClearOnCastEnd(it) },
             tag = "setting-clear-on-end",
         )
         HorizontalDivider()
         SwitchRow(
-            title = "Write the event log",
+            title = "Gapless track changes on renderers that support it",
             support = null,
-            checked = ui.logEnabled,
-            onChange = { presenter.setLogEnabled(it) },
-            tag = "setting-log",
-        )
-        HorizontalDivider()
-        SwitchRow(
-            title = "Gapless track changes on speakers that support it",
-            support = "Applies after the bridge restarts",
             checked = ui.gapless,
             onChange = { presenter.setGapless(it) },
             tag = "setting-gapless",
@@ -95,8 +93,7 @@ fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
         HorizontalDivider()
         ChoiceRow(
             title = "Forced audio format",
-            support = "Applies after the bridge restarts. A speaker that cannot play a forced format shows an error on its card " +
-                "instead of trying another format.",
+            support = "A renderer that cannot play a forced format shows an error on its card instead of trying another format.",
             current = FORMATS.firstOrNull { it.first == ui.outputFormat }?.second ?: ui.outputFormat,
             options = FORMATS.map { it.second },
             onPick = { i -> presenter.setOutputFormat(FORMATS[i].first) },
@@ -115,6 +112,8 @@ fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
             tag = "setting-theme",
             optionTag = { "theme-option-${THEMES[it].first.wire}" },
         )
+        HorizontalDivider()
+        LogSection(ui, presenter)
     }
 }
 
@@ -128,7 +127,6 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
-                Text(BUNDLED_COMPONENTS, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(
                     onClick = presenter::updateNow,
                     enabled = ui.bridgeRunning && !running,
@@ -191,6 +189,32 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
                 tag = "setting-cache",
                 optionTag = { "cache-option-${steps[it]}" },
             )
+        },
+    )
+}
+
+@Composable
+private fun LogSection(ui: SettingsUi, presenter: SettingsPresenter) {
+    val context = LocalContext.current
+    ListItem(
+        headlineContent = { Text("Write the event log") },
+        supportingContent = {
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    OutlinedButton(
+                        onClick = { context.startActivity(Intent(context, ShareLogActivity::class.java)) },
+                        modifier = Modifier.testTag("btn-share-log"),
+                    ) { Text("Share log") }
+                    OutlinedButton(
+                        onClick = presenter::clearLog,
+                        modifier = Modifier.testTag("btn-clear-log"),
+                    ) { Text("Clear log") }
+                }
+                ui.logMessage?.let { Text(it, modifier = Modifier.padding(top = 8.dp).testTag("log-message")) }
+            }
+        },
+        trailingContent = {
+            Switch(checked = ui.logEnabled, onCheckedChange = { presenter.setLogEnabled(it) }, modifier = Modifier.testTag("setting-log"))
         },
     )
 }

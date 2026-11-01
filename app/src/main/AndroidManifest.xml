@@ -30,7 +30,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Share log: started only by the notification's PendingIntent; hands the current log file to the
+        <!-- Share log: started only by the Share log button on the Settings tab; hands the current log file to the
              system share sheet (D-11). -->
         <activity
             android:name=".ShareLogActivity"

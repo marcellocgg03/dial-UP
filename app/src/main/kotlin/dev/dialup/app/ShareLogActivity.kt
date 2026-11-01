@@ -12,7 +12,7 @@ import java.io.File
 
 /**
  * Opens the system share sheet with the current log file and nothing else (D-11, T-05-22). Started
- * by the notification's Share log action; not exported. A chooser started by an Activity carries the
+ * by the Share log button on the Settings tab (no longer by the notification); not exported. A chooser started by an Activity carries the
  * one-file read grant reliably, which is why this is an Activity and not a service trampoline.
  * Rotated logs, state.json, store.json and config.json are never offered.
  */

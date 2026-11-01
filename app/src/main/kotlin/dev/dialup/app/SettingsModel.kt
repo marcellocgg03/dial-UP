@@ -51,6 +51,19 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
 
         override suspend fun clearCache(): Int? = withContext(Dispatchers.IO) { model.cast.value?.clearCache() }
 
+        // Not through the service intent: with the bridge off that would run the start gate and log a denied start.
+        override suspend fun clearLog(): Boolean = withContext(Dispatchers.IO) {
+            val evidence = ServiceHub.service?.evidence
+            if (evidence != null) {
+                val done = evidence.clear()
+                if (done) evidence.event("log-cleared", mapOf("source" to "settings"))
+                done
+            } else {
+                clearEventLogFiles(logDirFor(app.getExternalFilesDir(null), app.filesDir).first)
+                true
+            }
+        }
+
         override suspend fun cacheInfo(): CacheInfo? = withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() }
 
         override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow()

@@ -459,18 +459,11 @@ class BridgeService : Service(), SpikeHost {
             Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        // D-11, Open Question 6: three actions is Android's limit. Share log opens a tiny non-exported
-        // activity (a PendingIntent that opens an Activity is not a trampoline).
+        // Sharing the log moved to the Settings tab (author 2026-11-01); the notification keeps Stop and Clear log.
         val clearLog = PendingIntent.getService(
             this,
             1,
             Intent(this, BridgeService::class.java).setAction(ACTION_CLEAR_LOG),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val shareLog = PendingIntent.getActivity(
-            this,
-            2,
-            Intent(this, ShareLogActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -480,7 +473,6 @@ class BridgeService : Service(), SpikeHost {
             .setOngoing(true)
             .addAction(0, "Stop", stop)
             .addAction(0, "Clear log", clearLog)
-            .addAction(0, "Share log", shareLog)
             .build()
     }
 

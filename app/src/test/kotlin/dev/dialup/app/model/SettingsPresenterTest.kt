@@ -57,11 +57,13 @@ class FakeBridgePort(running: Boolean = true) : BridgePort {
     var version: String? = "2026.08.19"
     var restartResult = true
     var clearCalls = 0
+    var logClears = 0
+    var logResult = true
     var updateCalls = 0
     var restartCalls = 0
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-    /** When set, clearCache, cacheInfo and updateNow throw it (a disk or bridge fault). */
+    /** When set, clearCache, clearLog, cacheInfo and updateNow throw it (a disk or bridge fault). */
     var failWith: Throwable? = null
     var clearGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
@@ -74,6 +76,12 @@ class FakeBridgePort(running: Boolean = true) : BridgePort {
         clearGate?.await()
         failWith?.let { throw it }
         return cleared.also { if (it != null) info = info?.copy(files = 0, bytes = 0) }
+    }
+
+    override suspend fun clearLog(): Boolean {
+        logClears++
+        failWith?.let { throw it }
+        return logResult
     }
 
     override suspend fun cacheInfo(): CacheInfo? {
@@ -404,9 +412,69 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `the bundled components text names what an app update brings`() {
-        assertTrue("Python 3.12.11" in BUNDLED_COMPONENTS && "ffmpeg 7.1.1" in BUNDLED_COMPONENTS && "QuickJS" in BUNDLED_COMPONENTS)
-        assertTrue("app update" in BUNDLED_COMPONENTS)
+    fun `clear log says Log cleared with the bridge on or off`() = runTest {
+        for (running in listOf(true, false)) {
+            val bridge = FakeBridgePort(running = running)
+            val p = presenter(bridge = bridge)
+            p.clearLog()
+            runCurrent()
+            assertEquals(1, bridge.logClears)
+            assertEquals(LOG_CLEARED, p.state.value.logMessage)
+            assertEquals("Log cleared", p.state.value.logMessage)
+            assertNull(p.state.value.message)
+        }
+    }
+
+    @Test
+    fun `a clear log that did not finish says so`() = runTest {
+        val bridge = FakeBridgePort().also { it.logResult = false }
+        val p = presenter(bridge = bridge)
+        p.clearLog()
+        runCurrent()
+        assertEquals("Could not clear the log", p.state.value.logMessage)
+    }
+
+    @Test
+    fun `a failing clear log names the exception class only`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        bridge.failWith = java.io.IOException("disk full /data/secret/path")
+        p.clearLog()
+        runCurrent()
+        val msg = p.state.value.logMessage
+        assertEquals("Could not clear the log (IOException)", msg)
+        assertFalse(msg!!.contains("/data"), "no path in the message")
+    }
+
+    @Test
+    fun `refresh drops the log message`() = runTest {
+        val p = presenter()
+        p.clearLog()
+        runCurrent()
+        assertEquals(LOG_CLEARED, p.state.value.logMessage)
+        p.refresh()
+        runCurrent()
+        assertNull(p.state.value.logMessage)
+    }
+
+    @Test
+    fun `the LAN access switch is the inverse of phone only`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertFalse(p.state.value.lanAccess)
+        assertTrue(p.state.value.phoneOnly)
+
+        assertFalse(p.setLanAccess(true), "no restart")
+        runCurrent()
+        assertEquals(DialAccessMode.LAN, settings.data.value.dialAccess)
+        assertTrue(p.state.value.lanAccess)
+        assertFalse(p.state.value.phoneOnly)
+        assertFalse(p.restart.visible.value)
+
+        p.setLanAccess(false)
+        runCurrent()
+        assertEquals(DialAccessMode.PHONE, settings.data.value.dialAccess)
+        assertFalse(p.state.value.lanAccess)
     }
 
     @Test

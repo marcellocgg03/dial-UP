@@ -66,6 +66,20 @@ class RotatingFileTest {
     }
 
     @Test
+    fun `clearEventLogFiles deletes the event log and its two rotated files only`() {
+        val dir = File(tmp, "logs").also { it.mkdirs() }
+        val name = EvidenceLog.FILE_NAME
+        for (suffix in listOf("", ".1", ".2", ".3")) File(dir, name + suffix).writeText("x")
+        File(dir, "state.json").writeText("{}")
+        assertEquals(3, clearEventLogFiles(dir))
+        assertFalse(File(dir, name).exists())
+        assertFalse(File(dir, "$name.1").exists())
+        assertFalse(File(dir, "$name.2").exists())
+        assertTrue(File(dir, "$name.3").exists())
+        assertTrue(File(dir, "state.json").exists())
+    }
+
+    @Test
     fun `files lists existing files oldest first and current names dir slash name`() {
         val dir = File(tmp, "logs")
         val rf = RotatingFile(dir, "a.jsonl", rotateBytes = 100, keep = 2)

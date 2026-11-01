@@ -156,7 +156,7 @@ class EvidenceLog(
 
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
-    private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = 2)
+    private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = KEEP_ROTATED)
 
     fun setLevel(value: LogLevel) {
         level = value
@@ -190,12 +190,17 @@ class EvidenceLog(
     /** The file that new events are appended to. */
     fun currentFile(): File = rotating.current
 
-    /** Deletes the log files on the writer thread, so a clear never races a write. */
-    fun clear() {
-        try {
+    /**
+     * Deletes the log files on the writer thread, so a clear never races a write. True once the writer thread finished the delete
+     * within 2 s; false (after a warning) on any failure or timeout.
+     */
+    fun clear(): Boolean {
+        return try {
             executor.submit { rotating.clear() }.get(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            true
         } catch (t: Throwable) {
             warn("evidence clear failed", t)
+            false
         }
     }
 
@@ -219,5 +224,15 @@ class EvidenceLog(
     companion object {
         const val FILE_NAME = "spike-events.jsonl"
         const val ROTATE_BYTES = 8L * 1024 * 1024
+
+        /** How many rotated files are kept next to the current one. */
+        const val KEEP_ROTATED = 2
     }
 }
+
+/**
+ * Deletes the event log and its rotated files (fixed names only), for when no service writes the log; a running service clears
+ * through its own writer thread with [EvidenceLog.clear]. Returns how many existed.
+ */
+fun clearEventLogFiles(dir: File): Int =
+    RotatingFile(dir, EvidenceLog.FILE_NAME, EvidenceLog.ROTATE_BYTES, EvidenceLog.KEEP_ROTATED).clear()
