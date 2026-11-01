@@ -2,6 +2,13 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -97,5 +104,54 @@ class BridgeToggleTest {
         )
         assertEquals(listOf("set:false", "await", "set:true"), calls)
         assertFalse(ok)
+    }
+
+    @Test
+    fun `a cancelled restart still switches on`() = runTest {
+        val calls = mutableListOf<Boolean>()
+        val job = launch {
+            restartSequence(
+                setEnabled = { calls += it },
+                awaitStopped = { awaitCancellation() },
+            )
+        }
+        runCurrent()
+        job.cancel()
+        advanceUntilIdle()
+        assertEquals(listOf(false, true), calls)
+    }
+
+    @Test
+    fun `a restart started on another scope outlives its caller`() = runTest {
+        val calls = mutableListOf<Boolean>()
+        val flight = SingleFlight<Boolean>()
+        val deferred = flight.launch(backgroundScope) {
+            restartSequence(
+                setEnabled = { calls += it },
+                awaitStopped = { delay(5_000); true },
+            )
+        }
+        val caller = launch { deferred.await() }
+        runCurrent()
+        caller.cancel()
+        advanceTimeBy(6_000)
+        runCurrent()
+        assertTrue(deferred.isCompleted)
+        assertEquals(listOf(false, true), calls)
+    }
+
+    @Test
+    fun `a second restart while one runs joins it`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val flight = SingleFlight<Boolean>()
+        val first = flight.launch(backgroundScope) { gate.await(); true }
+        val second = flight.launch(backgroundScope) { false }
+        runCurrent()
+        assertTrue(first === second)
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(first.await())
+        val third = flight.launch(backgroundScope) { false }
+        assertFalse(third === first)
     }
 }
