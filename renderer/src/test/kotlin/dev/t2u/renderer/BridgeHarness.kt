@@ -65,9 +65,14 @@ internal class BridgeHarness(
     neverPlay: Boolean = false,
     bareFaultOn: Set<String> = emptySet(),
     noGapless: Boolean = false,
+    // D-9: lets a test serve the speaker UDN in upper case, as a real Sonos does (null keeps uuid:fake-renderer).
+    rendererUdn: String? = null,
 ) : AutoCloseable {
     val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
-    val fakeRenderer = FakeRenderer(sink, neverPlay, bareFaultOn, noGapless).also { it.start() }
+    val fakeRenderer = FakeRenderer(sink, neverPlay, bareFaultOn, noGapless, udn = rendererUdn).also { it.start() }
+
+    /** The UDN the fake speaker serves in its description and its SSDP USN, in the case it serves it. */
+    val servedRendererUdn: String = rendererUdn ?: HARNESS_RENDERER_UDN
     val lounge = FakeLoungeServer()
     val innerTube = FakeInnerTubeServer()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -132,7 +137,7 @@ internal class BridgeHarness(
             if (speakerSilent || speakerSearchDeaf) continue
             val reply = (
                 "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
-                    "USN: uuid:$HARNESS_RENDERER_UDN::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
+                    "USN: uuid:$servedRendererUdn::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
                     "LOCATION: ${fakeRenderer.location}\r\nSERVER: Linux UPnP/1.0 Fake/1.0\r\n\r\n"
                 ).toByteArray(Charsets.UTF_8)
             runCatching { speakerSocket.send(DatagramPacket(reply, reply.size, packet.socketAddress)) }
@@ -311,7 +316,7 @@ internal class BridgeHarness(
 
     /** Finds the receiver by M-SEARCH, reads its description and posts the DIAL launch (BridgeTest steps 2 and 3). */
     suspend fun launch(bridge: Bridge): LaunchedReceiver {
-        awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(HARNESS_RENDERER_UDN) == true }
+        awaitUntil("one renderer up") { bridge.state()["renderers"]?.toString()?.contains(servedRendererUdn.lowercase()) == true }
         var reply: String? = null
         awaitUntil("a DIAL search reply") {
             reply = dialSearch(bridge)
