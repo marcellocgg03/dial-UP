@@ -8,6 +8,7 @@ import dev.t2u.media.CacheInfo
 import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YtDlpUpdateOutcome
 import dev.t2u.renderer.OUTPUT_FORMATS
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -168,10 +169,20 @@ class SettingsPresenter(
         }
     }
 
+    /**
+     * Re-reads the cache usage and the yt-dlp version. A bridge or file-system fault keeps the last values (review IN-04): this
+     * runs in coroutines whose exceptions would reach the composition scope's handler and end the process. Cancellation propagates.
+     */
     private suspend fun refreshUsage() {
-        val info = bridge.cacheInfo()
-        val version = bridge.ytdlpVersion()
-        ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info, ytdlpVersion = version ?: it.ytdlpVersion) else it }
+        try {
+            val info = bridge.cacheInfo()
+            val version = bridge.ytdlpVersion()
+            ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info, ytdlpVersion = version ?: it.ytdlpVersion) else it }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // keep what the screen shows; the next refresh tries again
+        }
     }
 
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
@@ -227,8 +238,15 @@ class SettingsPresenter(
     fun clearCache() {
         if (!bridge.running.value) return
         scope.launch {
-            val n = bridge.clearCache()
-            if (n != null) ui.update { it.copy(message = clearedMessage(n)) }
+            try {
+                val n = bridge.clearCache()
+                if (n != null) ui.update { it.copy(message = clearedMessage(n)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // one line naming the action and the exception class: no stack trace, no path (review IN-04)
+                ui.update { it.copy(message = "Could not clear the cache (${e.javaClass.simpleName})") }
+            }
             refreshUsage()
         }
     }
@@ -253,10 +271,20 @@ class SettingsPresenter(
         }
         if (!start) return
         scope.launch {
-            val outcome = bridge.updateNow() ?: YtDlpUpdateOutcome(
-                ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
-                status = "UNAVAILABLE", ms = 0, error = "the bridge is not running",
-            )
+            val outcome = try {
+                bridge.updateNow() ?: YtDlpUpdateOutcome(
+                    ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
+                    status = "UNAVAILABLE", ms = 0, error = "the bridge is not running",
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // end as a failed outcome so the button is usable again instead of stuck on Running (review IN-04)
+                YtDlpUpdateOutcome(
+                    ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
+                    status = "ERROR", ms = 0, error = e.javaClass.simpleName,
+                )
+            }
             ui.update { if (it.bridgeRunning) it.copy(update = UpdateUi.Done(outcome)) else it }
             refreshUsage()
         }
