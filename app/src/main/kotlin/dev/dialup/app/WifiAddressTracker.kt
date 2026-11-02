@@ -19,6 +19,9 @@ class WifiAddressTracker(initial: String? = null) {
     private val networks = LinkedHashMap<Long, String?>()
     private var reported: String? = initial
 
+    // the tether (hotspot) address: used only while no Wi-Fi network has an address, so Wi-Fi stays the first choice
+    private var fallback: String? = null
+
     /** The address the tracker last reported (what the owner is bound to). */
     val currentIp: String? get() = reported
 
@@ -37,6 +40,12 @@ class WifiAddressTracker(initial: String? = null) {
         return refresh()
     }
 
+    /** The tether interface now has [ip] (null: none). Returns true when the current address changed. */
+    fun onFallback(ip: String?): Boolean {
+        fallback = ip
+        return refresh()
+    }
+
     /** A network went away. Ignores a handle never seen (returns false); otherwise true when the current address changed. */
     fun onLost(handle: Long): Boolean {
         if (!networks.containsKey(handle)) return false
@@ -45,7 +54,7 @@ class WifiAddressTracker(initial: String? = null) {
     }
 
     private fun refresh(): Boolean {
-        val now = networks.values.lastOrNull { it != null }
+        val now = networks.values.lastOrNull { it != null } ?: fallback
         if (now == reported) return false
         reported = now
         return true

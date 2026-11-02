@@ -189,7 +189,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 if (level != LogLevel.OFF) host.evidence.event("settings", mapOf("logEnabled" to enabled, "source" to "change"))
             }
         }
-        val mon = NetworkMonitor(host.context, host.evidence) { reason -> onNetworkChange(reason) }
+        val mon = NetworkMonitor(host.context, host.evidence, { selectTether(tetherCandidates())?.ipv4 }) { reason -> onNetworkChange(reason) }
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
         mon.start()

@@ -21,12 +21,14 @@ import java.net.Inet4Address
 class NetworkMonitor(
     private val context: Context,
     private val evidence: EvidenceLog,
+    private val tetherProbe: () -> String? = { null },
     private val onChange: (String) -> Unit,
 ) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
     private val lock = Any()
     private val tracker = WifiAddressTracker()
     private var registered = false
+    private var tetherTimer: java.util.Timer? = null
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -64,11 +66,25 @@ class NetworkMonitor(
         val request = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
         manager.registerNetworkCallback(request, callback)
         registered = true
+        // a hotspot starting or stopping raises no Wi-Fi network callback, so look for the tether address now and then
+        tetherTimer = java.util.Timer("tether-probe", true).also { timer ->
+            timer.schedule(object : java.util.TimerTask() {
+                override fun run() {
+                    val changed = runCatching { synchronized(lock) { tracker.onFallback(tetherProbe()) } }.getOrDefault(false)
+                    if (changed) {
+                        evidence.event("net", mapOf("event" to "tether", "tracked" to synchronized(lock) { tracker.currentIp }))
+                        onChange("tether")
+                    }
+                }
+            }, TETHER_POLL_MS, TETHER_POLL_MS)
+        }
     }
 
     fun stop() {
         if (!registered) return
         registered = false
+        tetherTimer?.cancel()
+        tetherTimer = null
         runCatching { cm?.unregisterNetworkCallback(callback) }
     }
 
@@ -113,5 +129,6 @@ class NetworkMonitor(
 
     private companion object {
         const val VALIDATED_POLL_MS = 500L
+        const val TETHER_POLL_MS = 5_000L
     }
 }
