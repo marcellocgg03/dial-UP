@@ -729,4 +729,57 @@ class SettingsPresenterTest {
         assertEquals(2, bridge.infoCalls)
         assertNull(p.state.value.cacheUsage)
     }
+
+    // ------------------------------------------------------------------------------------------ quick 261102-i9h: poll while visible
+
+    @Test
+    fun `the cache usage is polled while the tab is visible`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        p.onVisible()
+        bridge.info = CacheInfo(files = 5, bytes = 1, limitBytes = 256L * 1024 * 1024)
+        advanceTimeBy(USAGE_POLL_MS + 1)
+        runCurrent()
+        assertEquals(5, p.state.value.cacheUsage?.files)
+    }
+
+    @Test
+    fun `the poll stops when the tab is hidden`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        p.onVisible()
+        bridge.info = CacheInfo(files = 5, bytes = 1, limitBytes = 256L * 1024 * 1024)
+        advanceTimeBy(USAGE_POLL_MS + 1)
+        runCurrent()
+        assertEquals(5, p.state.value.cacheUsage?.files)
+
+        p.onHidden()
+        bridge.info = CacheInfo(files = 9, bytes = 1, limitBytes = 256L * 1024 * 1024)
+        advanceTimeBy(3 * USAGE_POLL_MS)
+        runCurrent()
+        assertEquals(5, p.state.value.cacheUsage?.files)
+    }
+
+    @Test
+    fun `calling onVisible twice runs one poll loop only`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        val before = bridge.infoCalls
+        p.onVisible()
+        p.onVisible()
+        advanceTimeBy(USAGE_POLL_MS + 1)
+        runCurrent()
+        assertEquals(before + 1, bridge.infoCalls)
+    }
+
+    @Test
+    fun `the poll never calls the bridge while the bridge is off`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(bridge = bridge)
+        p.onVisible()
+        advanceTimeBy(3 * USAGE_POLL_MS)
+        runCurrent()
+        assertEquals(0, bridge.infoCalls)
+        assertNull(p.state.value.cacheUsage)
+    }
 }
