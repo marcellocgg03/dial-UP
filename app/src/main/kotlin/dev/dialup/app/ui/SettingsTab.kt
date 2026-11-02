@@ -30,8 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
@@ -63,7 +62,11 @@ private val THEMES = listOf(
 @Composable
 fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
     val ui by presenter.state.collectAsStateWithLifecycle()
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { presenter.refresh() }
+    LifecycleResumeEffect(presenter) {
+        presenter.refresh()
+        presenter.onVisible()
+        onPauseOrDispose { presenter.onHidden() }
+    }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SwitchRow(
             title = "LAN access",

@@ -12,6 +12,7 @@ import dev.t2u.media.YtDlpUpdateOutcome
 import dev.t2u.renderer.OUTPUT_FORMATS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -101,6 +102,9 @@ internal const val USAGE_RETRY_MS = 2_000L
 
 /** Most reads after a bridge comes up before the tab gives up (about 30 s in all). */
 internal const val USAGE_ATTEMPTS = 15
+
+/** How often the cache usage is re-read while the Settings tab is on screen, so files added by a cast show up. */
+internal const val USAGE_POLL_MS = 5_000L
 
 private const val BUSY_STATUS = "BUSY"
 
@@ -231,6 +235,36 @@ class SettingsPresenter(
             // keep what the screen shows; the next refresh tries again
             return false
         }
+    }
+
+    private var pollJob: Job? = null
+
+    /**
+     * Called by the tab when it comes on screen: re-reads the cache usage every [USAGE_POLL_MS] until [onHidden]. One loop at a
+     * time; it never calls the bridge while the bridge is off. The yt-dlp version is not polled (only Update now changes it).
+     */
+    fun onVisible() {
+        pollJob?.cancel()
+        pollJob = scope.launch {
+            while (true) {
+                delay(USAGE_POLL_MS)
+                if (!bridge.running) continue
+                try {
+                    val info = bridge.cacheInfo()
+                    ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info) else it }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // keep what the screen shows; the next poll tries again
+                }
+            }
+        }
+    }
+
+    /** Called by the tab when it leaves the screen or the app pauses: stops the poll. */
+    fun onHidden() {
+        pollJob?.cancel()
+        pollJob = null
     }
 
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
