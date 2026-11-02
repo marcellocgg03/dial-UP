@@ -23,7 +23,7 @@ import dev.t2u.renderer.rendererNameProblem
 /**
  * Rename renderer (quick 261101-dcg, PD-4): a text field prefilled with the [current] shown name. The name replaces the whole
  * shown name exactly as typed, trimmed; Save is on only for a usable name ([rendererNameProblem]: not blank, at most 63
- * characters, no line breaks or tabs). Reset name is offered only when the renderer has a user name ([custom]). The content sets
+ * characters, no line breaks or tabs); a blank field saves as Reset name (the default name). Reset name is offered only when the renderer has a user name ([custom]). The content sets
  * [testTagsAsResourceId] itself because a dialog is its own window.
  */
 @Composable
@@ -35,7 +35,9 @@ fun RenameDialog(
     onDismiss: () -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf(current) }
-    val problem = rendererNameProblem(text)
+    // a blank field means "use the default name": Save resets instead of reporting a problem
+    val blank = text.isBlank()
+    val problem = if (blank) null else rendererNameProblem(text)
     AlertDialog(
         modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("dialog-rename"),
         onDismissRequest = onDismiss,
@@ -50,6 +52,8 @@ fun RenameDialog(
                 supportingText = {
                     if (problem != null) {
                         Text(problem, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("rename-problem"))
+                    } else if (blank) {
+                        Text("Leave empty to use the default name")
                     } else {
                         Text("Shown on this card and in the YouTube and YouTube Music cast menus")
                     }
@@ -61,7 +65,7 @@ fun RenameDialog(
             TextButton(
                 enabled = problem == null,
                 onClick = {
-                    onSave(text)
+                    if (blank) onReset() else onSave(text)
                     onDismiss()
                 },
                 modifier = Modifier.testTag("btn-rename-save"),
