@@ -76,6 +76,12 @@ class FakeBridgePort(
         flow.value = on
     }
 
+    /** A restart faster than the screen collects: off and on again in one synchronous step, so a collector sees up, up. */
+    fun restartBridge() {
+        flow.value = false
+        flow.value = true
+    }
+
     override suspend fun clearCache(): Int? {
         clearCalls++
         clearGate?.await()
@@ -642,5 +648,44 @@ class SettingsPresenterTest {
 
         assertEquals(0, bridge.restartCalls)
         assertFalse(p.restart.visible.value)
+    }
+
+    // ------------------------------------------------------------------------------------------ quick 261102-i9h: refresh after a restart
+
+    @Test
+    fun `a bridge restart that never shows as off still refreshes the usage and the version`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(bridge = bridge)
+        assertEquals(2, p.state.value.cacheUsage?.files)
+        assertEquals("2026.08.19", p.state.value.ytdlpVersion)
+
+        bridge.info = CacheInfo(files = 0, bytes = 0, limitBytes = 256L * 1024 * 1024)
+        bridge.version = "2026.10.20"
+        bridge.restartBridge()
+        runCurrent()
+
+        assertTrue(p.state.value.bridgeRunning)
+        assertEquals(0, p.state.value.cacheUsage?.files)
+        assertEquals("2026.10.20", p.state.value.ytdlpVersion)
+    }
+
+    @Test
+    fun `a first read that answers null is retried until the bridge answers`() = runTest {
+        val bridge = FakeBridgePort(running = false).also { it.info = null; it.version = null }
+        val p = presenter(bridge = bridge)
+
+        bridge.setRunning(true)
+        runCurrent()
+        assertTrue(p.state.value.bridgeRunning)
+        assertNull(p.state.value.cacheUsage)
+        assertEquals("-", p.state.value.ytdlpVersion)
+
+        bridge.info = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
+        bridge.version = "2026.08.19"
+        advanceTimeBy(2_001)
+        runCurrent()
+
+        assertEquals(2, p.state.value.cacheUsage?.files)
+        assertEquals("2026.08.19", p.state.value.ytdlpVersion)
     }
 }
