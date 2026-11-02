@@ -9,6 +9,7 @@ Where the Kotlin port stands against the Node project it is ported from. This fi
 | Node project | tube2upnp (fork of upnpTube, github.com/deaksa/tube2upnp) |
 | Ported commit | `5bd3025cee730d3f5464ae585917af3d90e1dfc6` |
 | Branch | `deaksa-fixes` (upstream main `1714a9d` plus `fix/stable-receiver-ports` and `fix/gapless-adopt`) |
+| Upstream base | `1714a9dcd0d1a16097f8f9f5f1b2e797182b57d2` (deaksa/tube2upnp `main` that `deaksa-fixes` starts from; `tools/upstream-commits.py` starts here while (f) has no rows) |
 | Snapshot taken | 2026-10-19 |
 | Local copy | `reference/` (gitignored, read-only; `reference/SOURCE.txt` records the commit). It is not part of the repository, so this file is the tracked record. |
 | Libraries | yt-cast-receiver 2.1.0 (MIT) and peer-dial (LGPL-3.0-or-later), copied from the npm packages the Node project depends on |
@@ -192,3 +193,12 @@ Deliberate differences from the Node code, each with its reason. Filled during t
 - **tube2upnp** (the Node project this app is ported from): GPL-3.0-only. This repository is a derivative work and is released under GPL-3.0-only.
 - **yt-cast-receiver 2.1.0**: MIT, Copyright (c) Patrick Kan. The notice is kept in every `lounge/` file derived from it.
 - **peer-dial**: LGPL-3.0-or-later, Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS. The header is kept in the DIAL files derived from it (`dial/`, `upnp/SsdpResponder.kt`).
+
+## (f) Upstream commits
+
+Every commit on deaksa/tube2upnp `main` after the upstream base of (a), oldest first, in the order the GitHub compare view lists them, merges included (PAR-03). `python3 -I tools/upstream-commits.py` reads the newest row, asks the GitHub API for the commits after it, and lists those not recorded plus the rows still `pending`; it prints only `up to date` when there are none. Rows are added in upstream order and never removed, because the newest row is where the next run starts. `GITHUB_TOKEN` raises the anonymous limit of 60 requests per hour.
+
+Status values: `ported` (the port has this change: in the snapshot, ported from the Node code, or reached the same behaviour on its own; the reason names the Kotlin files or tests or the adaptation number, and the differences), `skipped` (not in the port; the reason says why), `pending` (not classified yet; allowed only while a triage is in progress).
+
+| Upstream commit | Date | Subject | Status | Reason |
+|-----------------|------|---------|--------|--------|
