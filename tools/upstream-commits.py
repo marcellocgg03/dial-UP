@@ -1,45 +1,71 @@
 #!/usr/bin/env python3
 """List the deaksa/tube2upnp commits that PARITY.md section (f) does not record yet (PAR-03).
 
-Run as:  python3 -I tools/upstream-commits.py
+Run as:  python3 -I tools/upstream-commits.py                (the listing)
+         python3 -I tools/upstream-commits.py --all          (every (f) row, then the new commits)
+         python3 -I tools/upstream-commits.py --markdown     (the new commits as (f) table rows)
          python3 -I tools/upstream-commits.py --self-test
 
 Reads PARITY.md: the "Upstream base" row of section (a) and the table under "## (f) Upstream commits".
 Asks the GitHub API compare view (no clone) for the commits on upstream main after the newest commit
-recorded in (f), or after the upstream base while (f) has no rows. Prints, in upstream order,
+recorded in (f), or after the upstream base while (f) has no rows. Default output, in upstream order:
     PENDING <sha10> <date> <subject>    one per (f) row whose status is still "pending"
     NEW <sha10> <date> <subject>        one per upstream commit that (f) does not record
-and then "BEHIND new=<n> pending=<p>" with exit 1. When there is nothing new and nothing pending it
-prints "up to date" and nothing else, exit 0. A GitHub problem (HTTP status, network) is one line on
-stderr and exit 3; a usage error is one line on stderr and exit 2.
+    BEHIND new=<n> pending=<p>          last line, exit 1
+When there is nothing new and nothing pending it prints "up to date" and nothing else, exit 0.
+--all prints every (f) row as "<STATUS> <sha10> <date> <subject>" (PORTED, SKIPPED, PENDING), then the NEW
+lines; exit 0 when nothing is new or pending, else 1 (with the BEHIND line). --markdown prints one
+"| `<sha40>` | <date> | <subject> | pending | not triaged yet |" row per NEW commit, ready to paste into (f),
+and exits 0.
 
-The script never writes PARITY.md. Standard library only; the GitHub answer is untrusted data, parsed
-as JSON and never executed, imported, passed to a shell or written to disk.
+Exit codes: 0 up to date, 1 commits listed, 2 usage error or a problem in PARITY.md or GITHUB_TOKEN
+(the offending row is named on stderr), 3 GitHub or network problem (one line on stderr: rate limit with
+the reset time, HTTP status, network reason).
+
+GITHUB_TOKEN, when set, raises the anonymous limit of 60 requests per hour. It is sent only to
+https://api.github.com as an unredirected Authorization header, so it is never repeated on a redirect;
+redirects to any other host or to plain http are refused. It is never printed.
+
+The script never writes PARITY.md. Standard library only; the GitHub answer is untrusted data: parsed as
+JSON only, read up to 20 MiB per page, every SHA checked as 40 lower-case hex, subjects reduced to one
+line without control characters, and nothing from it is executed, imported, passed to a shell or
+written to disk.
 """
+import datetime
+import http.client
 import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 
 OWNER = "deaksa"
 REPO = "tube2upnp"
 BRANCH = "main"
-API_ROOT = "https://api.github.com"
+API_HOST = "api.github.com"
+API_ROOT = "https://" + API_HOST
 SECTION = "## (f) Upstream commits"
 BASE_ITEM = "Upstream base"
 PER_PAGE = 100
 MAX_PAGES = 10
+MAX_BODY = 20 * 1024 * 1024
+MAX_SUBJECT = 100
 TIMEOUT_S = 20
 USER_AGENT = "dialup-upstream-commits/1"
+STATUSES = ("ported", "skipped", "pending")
+MODE_LIST, MODE_ALL, MODE_MARKDOWN = "list", "all", "markdown"
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+TOKEN_RE = re.compile(r"[A-Za-z0-9_.=-]{1,255}")
 CELL_SPLIT = re.compile(r"(?<!\\)\|")
 
 
 class RecordError(Exception):
-    """PARITY.md does not hold what this script needs (exit 2)."""
+    """PARITY.md or the environment does not hold what this script needs (exit 2)."""
 
 
 class ApiError(Exception):
@@ -62,9 +88,13 @@ def unquote(cell):
 
 
 def parse_parity(text):
-    """Returns (base_sha, rows); rows are (sha, date, subject, status, reason) in table order."""
+    """Returns (base_sha, rows); rows are (sha, date, subject, status, reason) in table order.
+
+    Raises RecordError, naming the row, for anything the script cannot rely on (D-04: a ported or skipped
+    row carries a reason)."""
     base = None
     rows = []
+    seen = set()
     in_section = False
     for line in text.splitlines():
         if line.startswith("## "):
@@ -74,6 +104,8 @@ def parse_parity(text):
             cells = split_cells(line)
             if len(cells) >= 2:
                 base = unquote(cells[1])
+            if not SHA_RE.fullmatch(base or ""):
+                raise RecordError("(a) '%s' row is not a 40-character lower-case hex SHA: %s" % (BASE_ITEM, (base or "")[:60]))
             continue
         if not in_section or not line.startswith("|"):
             continue
@@ -82,7 +114,18 @@ def parse_parity(text):
             continue
         if len(cells) != 5:
             raise RecordError("(f) row does not have 5 cells: %s" % line[:120])
-        rows.append((unquote(cells[0]), cells[1], cells[2], cells[3], cells[4]))
+        sha, date, subject, status, reason = unquote(cells[0]), cells[1], cells[2], cells[3], cells[4]
+        name = "(f) row %s" % (sha[:10] if SHA_RE.fullmatch(sha) else sha[:44])
+        if not SHA_RE.fullmatch(sha):
+            raise RecordError("%s: the commit is not a 40-character lower-case hex SHA" % name)
+        if status not in STATUSES:
+            raise RecordError("%s: unknown status '%s' (ported, skipped or pending)" % (name, status[:20]))
+        if sha in seen:
+            raise RecordError("%s: the commit is recorded twice" % name)
+        if status != "pending" and not reason:
+            raise RecordError("%s: status %s needs a reason" % (name, status))
+        seen.add(sha)
+        rows.append((sha, date, subject, status, reason))
     if base is None:
         raise RecordError("PARITY.md (a) has no '%s' row" % BASE_ITEM)
     return base, rows
@@ -92,9 +135,77 @@ def start_point(base, rows):
     return rows[-1][0] if rows else base
 
 
+def clean_subject(message):
+    """First line of a commit message made safe for a terminal and a Markdown table cell."""
+    first = re.split(r"[\r\n]", message, maxsplit=1)[0]
+    first = re.sub(r"\s+", " ", first)
+    first = "".join(ch for ch in first if unicodedata.category(ch) not in ("Cc", "Cf"))
+    first = first.strip().replace("|", "\\|")
+    if len(first) > MAX_SUBJECT:
+        first = first[:MAX_SUBJECT]
+        trailing = len(first) - len(first.rstrip("\\"))
+        if trailing % 2 == 1:
+            first = first[:-1]
+        first = first.rstrip()
+    return first
+
+
 def compare_url(start, page):
     return "%s/repos/%s/%s/compare/%s...%s?per_page=%d&page=%d" % (
         API_ROOT, OWNER, REPO, start, BRANCH, PER_PAGE, page)
+
+
+def api_problem(status, headers, start):
+    """One line saying what a non-200 answer means."""
+    remaining = headers.get("x-ratelimit-remaining")
+    if status in (403, 429) and remaining == "0":
+        reset = headers.get("x-ratelimit-reset", "")
+        when = "later"
+        if re.fullmatch(r"\d{1,12}", reset):
+            moment = datetime.datetime.fromtimestamp(int(reset), datetime.timezone.utc)
+            when = moment.strftime("%H:%M UTC")
+        return ("GitHub API rate limit reached (60 requests per hour without a token); "
+                "try again after %s, or set GITHUB_TOKEN" % when)
+    if status in (403, 429) and re.fullmatch(r"\d{1,6}", headers.get("retry-after", "")):
+        return "GitHub API asks to wait %s s before the next request (HTTP %d)" % (headers["retry-after"], status)
+    if status == 401:
+        return "GitHub refused GITHUB_TOKEN (HTTP 401); check the token or unset it"
+    if status == 404:
+        return "the newest recorded commit %s was not found on %s/%s (HTTP 404)" % (start[:10], OWNER, REPO)
+    if 300 <= status < 400:
+        return "GitHub API answered a redirect (HTTP %d); refused to follow it off https://%s" % (status, API_HOST)
+    return "GitHub API answered HTTP %d" % status
+
+
+def parse_page(body, start):
+    """Validates one compare answer; returns (compare status, total or None, commits)."""
+    if len(body) > MAX_BODY:
+        raise ApiError("API answer larger than %d MiB" % (MAX_BODY // (1024 * 1024)))
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise ApiError("unexpected API answer")
+    if not isinstance(data, dict) or not isinstance(data.get("commits"), list) or not isinstance(data.get("status"), str):
+        raise ApiError("unexpected API answer")
+    total = data.get("total_commits")
+    if total is not None and (not isinstance(total, int) or isinstance(total, bool)):
+        raise ApiError("unexpected API answer")
+    if data["status"] not in ("ahead", "identical"):
+        raise ApiError("upstream %s no longer contains the newest recorded commit %s (compare status %s)"
+                       % (BRANCH, start[:10], clean_subject(data["status"])[:20]))
+    commits = []
+    for c in data["commits"]:
+        try:
+            sha = c["sha"]
+            message = c["commit"]["message"]
+            date = c["commit"]["committer"]["date"]
+        except (KeyError, TypeError):
+            raise ApiError("unexpected API answer")
+        if not (isinstance(sha, str) and SHA_RE.fullmatch(sha) and isinstance(message, str)
+                and isinstance(date, str) and DATE_RE.match(date)):
+            raise ApiError("unexpected API answer")
+        commits.append((sha, date[:10], clean_subject(message)))
+    return data["status"], total, commits
 
 
 def fetch_commits(start, fetch):
@@ -105,55 +216,97 @@ def fetch_commits(start, fetch):
         "User-Agent": USER_AGENT,
     }
     commits = []
-    total = None
     for page in range(1, MAX_PAGES + 1):
-        status, _resp_headers, body = fetch(compare_url(start, page), headers)
+        status, resp_headers, body = fetch(compare_url(start, page), headers)
         if status != 200:
-            raise ApiError("GitHub API answered HTTP %d" % status)
-        try:
-            data = json.loads(body)
-            page_commits = data["commits"]
-            total = data.get("total_commits", total)
-        except (ValueError, KeyError, TypeError):
-            raise ApiError("unexpected API answer")
+            raise ApiError(api_problem(status, resp_headers, start))
+        _compare_status, total, page_commits = parse_page(body, start)
         if not page_commits:
             break
-        for c in page_commits:
-            message = c["commit"]["message"]
-            commits.append((c["sha"], c["commit"]["committer"]["date"][:10], message.splitlines()[0] if message else ""))
-        if isinstance(total, int) and len(commits) >= total:
+        commits.extend(page_commits)
+        if total is not None and len(commits) >= total:
             break
     return commits
 
 
-def real_fetch(url, headers):
-    request = urllib.request.Request(url, headers=headers)
+def allowed_target(url):
+    """True only for https on host api.github.com (port 443), without credentials in the URL."""
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
-            return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read()
-    except urllib.error.HTTPError as e:
-        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
-    except (urllib.error.URLError, OSError) as e:
-        raise ApiError("cannot reach api.github.com: %s" % getattr(e, "reason", e))
+        parts = urllib.parse.urlsplit(url)
+        return (parts.scheme == "https" and parts.hostname == API_HOST and parts.username is None
+                and parts.port in (None, 443))
+    except ValueError:
+        return False
 
 
-def report(rows, commits, out):
+def valid_token(token):
+    return bool(token) and TOKEN_RE.fullmatch(token) is not None
+
+
+def build_request(url, headers, token):
+    request = urllib.request.Request(url, headers=headers)
+    if token:
+        # unredirected: urllib does not copy it onto a redirected request
+        request.add_unredirected_header("Authorization", "Bearer " + token)
+    return request
+
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses a redirect to anything but https on api.github.com."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not allowed_target(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def make_fetch(token):
+    """The real fetch: (url, headers) -> (status, lower-case headers, body)."""
+    opener = urllib.request.build_opener(SafeRedirect)
+
+    def fetch(url, headers):
+        if not allowed_target(url):
+            raise ApiError("refusing to call %s" % url[:60])
+        request = build_request(url, headers, token)
+        try:
+            with opener.open(request, timeout=TIMEOUT_S) as response:
+                return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read(MAX_BODY + 1)
+        except urllib.error.HTTPError as e:
+            return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read(MAX_BODY + 1)
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            raise ApiError("cannot reach %s: %s" % (API_HOST, getattr(e, "reason", e)))
+    return fetch
+
+
+def report(rows, commits, out, mode=MODE_LIST):
     """Prints the listing; returns the exit code."""
     recorded = {r[0] for r in rows}
     pending = [r for r in rows if r[3] == "pending"]
     new = [c for c in commits if c[0] not in recorded]
-    if not pending and not new:
-        print("up to date", file=out)
+    if mode == MODE_MARKDOWN:
+        for sha, date, subject in new:
+            print("| `%s` | %s | %s | pending | not triaged yet |" % (sha, date, subject), file=out)
         return 0
-    for sha, date, subject, _status, _reason in pending:
-        print("PENDING %s %s %s" % (sha[:10], date, subject), file=out)
+    if not pending and not new:
+        if mode == MODE_LIST or not rows:
+            print("up to date", file=out)
+        elif mode == MODE_ALL:
+            for sha, date, subject, status, _reason in rows:
+                print("%s %s %s %s" % (status.upper(), sha[:10], date, subject), file=out)
+        return 0
+    if mode == MODE_ALL:
+        for sha, date, subject, status, _reason in rows:
+            print("%s %s %s %s" % (status.upper(), sha[:10], date, subject), file=out)
+    else:
+        for sha, date, subject, _status, _reason in pending:
+            print("PENDING %s %s %s" % (sha[:10], date, subject), file=out)
     for sha, date, subject in new:
         print("NEW %s %s %s" % (sha[:10], date, subject), file=out)
     print("BEHIND new=%d pending=%d" % (len(new), len(pending)), file=out)
     return 1
 
 
-def run(parity_text, fetch, out, err):
+def run(parity_text, fetch, out, err, mode=MODE_LIST):
     try:
         base, rows = parse_parity(parity_text)
         commits = fetch_commits(start_point(base, rows), fetch)
@@ -163,7 +316,7 @@ def run(parity_text, fetch, out, err):
     except ApiError as e:
         print(str(e), file=err)
         return 3
-    return report(rows, commits, out)
+    return report(rows, commits, out, mode)
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -412,15 +565,26 @@ def _self_test_modes():
 
 
 def main(argv):
-    if argv == ["--self-test"]:
+    usage = "usage: upstream-commits.py [--all | --markdown | --self-test]"
+    flags = set(argv)
+    if len(flags) != len(argv) or not flags <= {"--all", "--markdown", "--self-test"} or len(flags) > 1:
+        print(usage, file=sys.stderr)
+        return 2
+    if flags == {"--self-test"}:
         return self_test()
-    if argv:
-        print("usage: upstream-commits.py [--self-test]", file=sys.stderr)
+    mode = MODE_ALL if flags == {"--all"} else MODE_MARKDOWN if flags == {"--markdown"} else MODE_LIST
+    token = os.environ.get("GITHUB_TOKEN", "").strip() or None
+    if token is not None and not valid_token(token):
+        print("GITHUB_TOKEN holds characters a GitHub token never has; fix or unset it", file=sys.stderr)
         return 2
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "PARITY.md"), encoding="utf-8") as f:
-        text = f.read()
-    return run(text, real_fetch, sys.stdout, sys.stderr)
+    try:
+        with open(os.path.join(root, "PARITY.md"), encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        print("cannot read PARITY.md: %s" % e.__class__.__name__, file=sys.stderr)
+        return 2
+    return run(text, make_fetch(token), sys.stdout, sys.stderr, mode)
 
 
 if __name__ == "__main__":
