@@ -12,10 +12,7 @@ import dev.t2u.media.CacheInfo
 import dev.t2u.media.YtDlpUpdateOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
 
 /**
@@ -46,9 +43,9 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
     }
 
     private val bridgePort = object : BridgePort {
+        // The identity of the cast feature: a restart always shows as a new value, also when the bridge is up before and after.
         // Up means the service runs and has built its cast feature; the cast calls below answer null before that.
-        override val running: StateFlow<Boolean> =
-            model.cast.map { it != null }.stateIn(scope, SharingStarted.Eagerly, model.cast.value != null)
+        override val instance: StateFlow<Any?> = model.cast
 
         override suspend fun clearCache(): Int? = withContext(Dispatchers.IO) { model.cast.value?.clearCache() }
 

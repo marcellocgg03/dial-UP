@@ -54,8 +54,8 @@ class FakeBridgePort(
     /** What the running bridge was started with; null means no bridge. */
     var started: RestartFields? = RestartFields(gapless = true, outputFormat = "auto"),
 ) : BridgePort {
-    private val flow = MutableStateFlow(running)
-    override val running: StateFlow<Boolean> get() = flow
+    private val flow = MutableStateFlow<Any?>(if (running) Any() else null)
+    override val instance: StateFlow<Any?> get() = flow
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
     var outcome: YtDlpUpdateOutcome? = null
@@ -72,14 +72,15 @@ class FakeBridgePort(
     var failWith: Throwable? = null
     var clearGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
+    var infoCalls = 0
+
     fun setRunning(on: Boolean) {
-        flow.value = on
+        flow.value = if (on) (flow.value ?: Any()) else null
     }
 
-    /** A restart faster than the screen collects: off and on again in one synchronous step, so a collector sees up, up. */
+    /** A restart: a fresh bridge object, the bridge is never off during the swap. */
     fun restartBridge() {
-        flow.value = false
-        flow.value = true
+        flow.value = Any()
     }
 
     override suspend fun clearCache(): Int? {
@@ -96,6 +97,7 @@ class FakeBridgePort(
     }
 
     override suspend fun cacheInfo(): CacheInfo? {
+        infoCalls++
         failWith?.let { throw it }
         return info
     }
@@ -658,12 +660,15 @@ class SettingsPresenterTest {
         val p = presenter(bridge = bridge)
         assertEquals(2, p.state.value.cacheUsage?.files)
         assertEquals("2026.08.19", p.state.value.ytdlpVersion)
+        assertTrue(bridge.running)
 
         bridge.info = CacheInfo(files = 0, bytes = 0, limitBytes = 256L * 1024 * 1024)
         bridge.version = "2026.10.20"
         bridge.restartBridge()
+        assertTrue(bridge.running)
         runCurrent()
 
+        assertTrue(bridge.running)
         assertTrue(p.state.value.bridgeRunning)
         assertEquals(0, p.state.value.cacheUsage?.files)
         assertEquals("2026.10.20", p.state.value.ytdlpVersion)
@@ -687,5 +692,41 @@ class SettingsPresenterTest {
 
         assertEquals(2, p.state.value.cacheUsage?.files)
         assertEquals("2026.08.19", p.state.value.ytdlpVersion)
+    }
+
+    @Test
+    fun `the retry stops after the attempt limit`() = runTest {
+        val bridge = FakeBridgePort(running = false).also { it.info = null; it.version = null }
+        val p = presenter(bridge = bridge)
+
+        bridge.setRunning(true)
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(USAGE_ATTEMPTS, bridge.infoCalls)
+
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(USAGE_ATTEMPTS, bridge.infoCalls)
+        assertNull(p.state.value.cacheUsage)
+    }
+
+    @Test
+    fun `the bridge going off cancels the pending retries`() = runTest {
+        val bridge = FakeBridgePort(running = false).also { it.info = null; it.version = null }
+        val p = presenter(bridge = bridge)
+
+        bridge.setRunning(true)
+        runCurrent()
+        advanceTimeBy(2_001)
+        runCurrent()
+        assertEquals(2, bridge.infoCalls)
+
+        bridge.setRunning(false)
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(2, bridge.infoCalls)
+        assertNull(p.state.value.cacheUsage)
     }
 }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The saved app settings the Settings tab reads and writes (settings.json behind it). */
@@ -42,7 +43,15 @@ data class EffectiveSettings(
  * false then.
  */
 interface BridgePort {
-    val running: StateFlow<Boolean>
+    /**
+     * The identity of the running bridge (its CastFeature in the app), null while there is none; every restart gives a new
+     * value, also when the bridge is up before and after.
+     */
+    val instance: StateFlow<Any?>
+
+    /** Whether there is a running bridge now. */
+    val running: Boolean get() = instance.value != null
+
     suspend fun clearCache(): Int?
 
     /** Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then); true when cleared. */
@@ -86,6 +95,12 @@ sealed interface UpdateUi {
     /** The bridge is off, so there is no updater to ask. */
     data object Unavailable : UpdateUi
 }
+
+/** Pause between two reads while the new bridge has not answered yet (CastFeature fills its updater and bridge after it is published). */
+internal const val USAGE_RETRY_MS = 2_000L
+
+/** Most reads after a bridge comes up before the tab gives up (about 30 s in all). */
+internal const val USAGE_ATTEMPTS = 15
 
 private const val BUSY_STATUS = "BUSY"
 
@@ -170,7 +185,8 @@ class SettingsPresenter(
             }
         }
         scope.launch {
-            bridge.running.collectLatest { up ->
+            bridge.instance.collectLatest { inst ->
+                val up = inst != null
                 ui.update {
                     it.copy(
                         bridgeRunning = up,
@@ -183,31 +199,44 @@ class SettingsPresenter(
                         },
                     )
                 }
-                if (up) refreshUsage()
+                if (up) refreshUntilAnswered()
             }
+        }
+    }
+
+    /** Reads until the cache info and the version both answer, at most [USAGE_ATTEMPTS] reads [USAGE_RETRY_MS] apart. */
+    private suspend fun refreshUntilAnswered() {
+        var reads = 0
+        while (true) {
+            reads++
+            if (refreshUsage() || reads >= USAGE_ATTEMPTS) return
+            delay(USAGE_RETRY_MS)
         }
     }
 
     /**
      * Re-reads the cache usage and the yt-dlp version. A bridge or file-system fault keeps the last values (review IN-04): this
      * runs in coroutines whose exceptions would reach the composition scope's handler and end the process. Cancellation propagates.
+     * True only when both answers came back non-null.
      */
-    private suspend fun refreshUsage() {
+    private suspend fun refreshUsage(): Boolean {
         try {
             val info = bridge.cacheInfo()
             val version = bridge.ytdlpVersion()
             ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info, ytdlpVersion = version ?: it.ytdlpVersion) else it }
+            return info != null && version != null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // keep what the screen shows; the next refresh tries again
+            return false
         }
     }
 
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
     fun refresh() {
         ui.update { it.copy(message = null, logMessage = null) }
-        scope.launch { if (bridge.running.value) refreshUsage() }
+        scope.launch { if (bridge.running) refreshUsage() }
     }
 
     /**
@@ -235,7 +264,7 @@ class SettingsPresenter(
     }
 
     private fun changed(key: SettingKey): Boolean {
-        restart.onSettingChanged(key, bridge.running.value)
+        restart.onSettingChanged(key, bridge.running)
         return key.needsRestart
     }
 
@@ -294,7 +323,7 @@ class SettingsPresenter(
 
     /** Empties the cache of every file no stream uses. Does nothing while the bridge is off. */
     fun clearCache() {
-        if (!bridge.running.value) return
+        if (!bridge.running) return
         scope.launch {
             try {
                 val n = bridge.clearCache()
