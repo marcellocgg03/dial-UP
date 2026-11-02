@@ -55,7 +55,7 @@ fun RenameDialog(
                     } else if (blank) {
                         Text("Leave empty to use the default name")
                     } else {
-                        Text("Shown on this card and in the YouTube and YouTube Music cast menus")
+                        Text("Shown on this card and in the YouTube and YouTube Music cast menus; they may take a moment to update")
                     }
                 },
                 modifier = Modifier.fillMaxWidth().testTag("field-rename"),
