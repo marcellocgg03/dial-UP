@@ -541,6 +541,39 @@ class BridgeManualTest {
         h.awaitUntil("a DIAL search reply again", timeoutMs = 2_000) { h.dialSearchAt(bridge, h.loopback) != null }
     }
 
+    // ------------------------------------------------------------------------------------------ quick 261102-dmv: D-11, stale saved address
+
+    @Test
+    @DisplayName("a saved entry with a stale address does not drop the live renderer of the same UDN and adopts the live address")
+    fun aStaleSavedAddressDoesNotDropTheLiveRendererOfTheSameUdn() = h.run<Unit> {
+        // the speaker moved: manual.json still holds an address that never answers; discovery finds it at 127.0.0.1
+        val store = ManualSpeakers(h.dataDir).load()
+        val stale = ManualSpeaker("127.0.0.2", HARNESS_RENDERER_UDN, "Old name", "http://127.0.0.2:${h.speakerPort}/xml/device.xml")
+        assertTrue(store.add(stale))
+        val bridge = h.newBridge(manual = store, manualProbeIntervalMs = 200)
+        bridge.start()
+        h.awaitUntil("the speaker found by discovery", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it is discovered")
+
+        // far more than the two missed rounds the old code needed to drop it (200 ms rounds)
+        val until = System.nanoTime() + 1_500_000_000L
+        while (System.nanoTime() < until) {
+            assertTrue(bridge.speakers.value.singleOrNull()?.online == true, "it went offline or left: ${bridge.speakers.value}")
+            delay(50)
+        }
+
+        assertFalse(h.events.any { it.first == "manual-offline" }, "no manual-offline event for the live renderer")
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "still a cast target")
+        val saved = store.entries.value.single()
+        assertEquals(HARNESS_RENDERER_UDN, saved.udn)
+        assertEquals("127.0.0.1", saved.ip, "manual.json follows the speaker to its discovered address")
+        assertEquals("Old name", saved.name)
+        assertTrue(saved.location.startsWith("http://127.0.0.1:"), "location follows too: ${saved.location}")
+        assertTrue(h.events.any { it.first == "manual-moved" }, "the move is logged")
+        val onDisk = java.io.File(h.dataDir, "manual.json").readText()
+        assertTrue("127.0.0.1" in onDisk && "127.0.0.2" !in onDisk, "the file holds the new address: $onDisk")
+    }
+
     @Test
     @DisplayName("saved addresses are not evicted from the reply table")
     fun savedAddressesAreNotEvictedFromTheReplyTable() = h.run<Unit> {

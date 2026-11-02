@@ -503,6 +503,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * speaker that only answers unicast from being pruned after 45 minutes. A round is skipped while the network is down
      * (nothing could have answered). The client is read from the field, so a rebind's replacement is followed. [since] is when
      * the start-up probe went out. At most [MAX_MANUAL] datagrams per round (T-07-33).
+     *
+     * Quick 261102-dmv, D-11: a saved speaker whose UDN is running in the registry at another address than the saved one has
+     * moved (new subnet or DHCP lease) and discovery already found it there. Its saved address is replaced by the live one
+     * (`manual-moved`, manual.json rewritten, keyed by UDN) at the start of the round, and the old address gets no verdict,
+     * because it would never answer and would drop the live renderer. When the live address is not a private LAN address or the
+     * store refuses it, nothing is adopted but the entry is still not judged. A UDN that is not running keeps the old
+     * behaviour: two missed rounds, then `manual-offline`.
      */
     private fun watchManualSpeakers(reg: RendererRegistry, since: Long) {
         val store = deps.manual ?: return
@@ -513,15 +520,19 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             while (true) {
                 delay(deps.manualProbeIntervalMs)
                 if (networkDown) continue
+                // D-11: entries whose renderer is running at another address are moved to it (or at least not judged) first
+                val movedAway = adoptMovedSpeakers(reg, store)
                 val saved = store.entries.value
                 val udns = saved.map { it.udn }.toSet()
                 liveness.keys.retainAll(udns)
                 offline.retainAll(udns)
+                for (udn in movedAway) liveness.remove(udn)
                 // plan 07-18: the description fetches finish before the verdicts, so an HTTP answer in this round counts
                 coroutineScope { for (entry in saved.take(MAX_MANUAL)) launch { describeSaved(entry, reg) } }
                 // taken after the fetches: an answer from this round must not count again in the next one
                 val roundAt = System.currentTimeMillis()
                 for (entry in saved) {
+                    if (entry.udn in movedAway) continue
                     val replied = (replySources[entry.ip]?.at ?: Long.MIN_VALUE) >= last
                     when (liveness.getOrPut(entry.udn) { ManualLiveness() }.round(replied)) {
                         ManualVerdict.ONLINE -> if (offline.remove(entry.udn)) {
@@ -539,6 +550,29 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 for (entry in saved) sendManualProbe(client, entry)
             }
         }
+    }
+
+    /**
+     * D-11: for every saved speaker whose UDN runs in [reg] at an address other than the saved one, saves the live address
+     * (and the live description URL when it belongs to that address, else the default one) in place of the stale one and logs
+     * `manual-moved`. Returns the UDNs of all such speakers, adopted or not, so the caller skips their liveness verdict: the
+     * saved address is wrong, so its silence says nothing about the renderer. A live address that fails [manualTargetAllowed]
+     * or a store that refuses the entry leaves the saved entry as it was.
+     */
+    private suspend fun adoptMovedSpeakers(reg: RendererRegistry, store: ManualSpeakers): Set<String> {
+        val moved = HashSet<String>()
+        val running = reg.renderers()
+        for (entry in store.entries.value) {
+            val live = running.firstOrNull { it.udn == entry.udn } ?: continue
+            if (live.address == entry.ip) continue
+            moved.add(entry.udn)
+            val ip = parseIpv4Literal(live.address)
+            if (ip == null || !manualTargetAllowed(ip)) continue
+            val location = live.location.takeIf { descriptionUrlAllowed(it, ip) } ?: deps.manualDescriptionUrl(live.address)
+            if (!store.add(entry.copy(ip = live.address, location = location))) continue
+            emit("manual-moved", "udn" to entry.udn, "from" to entry.ip, "to" to live.address)
+        }
+        return moved
     }
 
     /**
