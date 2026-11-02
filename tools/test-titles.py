@@ -313,6 +313,53 @@ def suite_self_test():
         assert lines[-1] == "SUITE OK found=3 deferred=2 helpers=1", lines
         assert not any("abc" in l for l in lines), lines
 
+    # D-06: a Node title with no (c) row fails
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, node_a=SUITE_NODE + "test('brand new title', () => {});\n")
+        assert code == 1 and "NO ROW a.test.js | brand new title" in lines, lines
+        assert lines[-1].startswith("SUITE FAILED") and "no-row=1" in lines[-1], lines
+    # a (c) row whose title is gone fails
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, parity=SUITE_PARITY + "| `a.test.js` | long gone title | Phase 2 | kt A |\n")
+        assert code == 1 and "STALE ROW a.test.js | long gone title" in lines and "stale=1" in lines[-1], lines
+    # a renamed title is one NO ROW and one STALE ROW
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, node_a=SUITE_NODE.replace("plain title", "plain titel"))
+        assert code == 1, lines
+        assert "NO ROW a.test.js | plain titel" in lines and "STALE ROW a.test.js | plain title" in lines, lines
+        assert "no-row=1" in lines[-1] and "stale=1" in lines[-1], lines
+    # a Phase row with no Kotlin @DisplayName fails; one under build/ or in src/main does not count
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, kotlin=False)
+        assert code == 1 and "MISSING a.test.js | plain title (Phase 2)" in lines and "missing=3" in lines[-1], lines
+    with tempfile.TemporaryDirectory() as tmp:
+        for rel in (("mod", "build", "src", "test", "kotlin"), ("mod", "src", "main", "kotlin")):
+            os.makedirs(os.path.join(tmp, *rel))
+            with open(os.path.join(tmp, *rel, "Z.kt"), "w", encoding="utf-8") as f:
+                f.write('@DisplayName("plain title")\n')
+        code, lines = run_suite(tmp, kotlin=False)
+        assert code == 1 and "MISSING a.test.js | plain title (Phase 2)" in lines, lines
+    # v2 and out of scope rows never fail, even with no Kotlin title at all
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp)
+        assert code == 0 and sum(1 for l in lines if l.startswith("DEFERRED ")) == 2, lines
+    # an unknown status fails
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, parity=SUITE_PARITY.replace("| plain title | Phase 2 |", "| plain title | Phase two |"))
+        assert code == 1 and "UNKNOWN STATUS a.test.js | plain title (Phase two)" in lines and "unknown=1" in lines[-1], lines
+    # a helper whose Kotlin file is gone, or that has no (b) row, fails
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, fixture=False)
+        assert code == 1 and "MISSING HELPER fake.js" in lines and "helpers-missing=1" in lines[-1], lines
+    with tempfile.TemporaryDirectory() as tmp:
+        code, lines = run_suite(tmp, parity=SUITE_PARITY.replace("| `test/fake.js` | `mod/src/testFixtures/.../Fake.kt` | ported |\n", ""))
+        assert code == 1 and "MISSING HELPER fake.js" in lines, lines
+    # usage errors and a missing reference directory
+    with tempfile.TemporaryDirectory() as tmp:
+        assert main(["--reference", os.path.join(tmp, "nope")]) == 2
+    assert main(["--reference"]) == 2
+    assert main(["--bogus"]) == 2
+
 
 def self_test():
     parity = (
