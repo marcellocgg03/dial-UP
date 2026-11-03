@@ -44,6 +44,18 @@ class FileCache(
     /** Files created while the limit was 0: the only ones a zero limit may delete, once nothing reads them. */
     private val uncached = HashSet<String>()
 
+    /** Persists [uncached] in the cache dir, so a restart of the media server does not adopt those files as kept ones. */
+    private val manifest get() = File(dir, MANIFEST)
+
+    private fun saveManifest() {
+        runCatching {
+            if (uncached.isEmpty()) manifest.delete() else {
+                dir.mkdirs()
+                manifest.writeText(uncached.sorted().joinToString("\n"))
+            }
+        }
+    }
+
     /** The video ids of the last two builds seen under a zero limit: the track that plays and the one queued next stay (gapless). */
     private val recentIds = ArrayList<String>()
 
@@ -102,7 +114,10 @@ class FileCache(
         val present = entries.map { it.name }.toHashSet()
         if (limit <= 0L) return@synchronized pruneUncached(entries, keep, busy)
         known.addAll(present)
-        uncached.clear()
+        if (uncached.isNotEmpty()) {
+            uncached.clear()
+            saveManifest()
+        }
         val sizes = entries.associate { it.name to it.size }
         var total = entries.sumOf { it.size }
         var evicted = 0
@@ -162,7 +177,8 @@ class FileCache(
      * count as uncached; the uncached ones that are neither in [keep], pinned nor busy go.
      */
     private fun pruneUncached(entries: List<Entry>, keep: Set<String>, busy: (String) -> Boolean): Int {
-        for (e in entries) if (e.name in keep && e.name !in known) uncached.add(e.name)
+        var changed = false
+        for (e in entries) if (e.name in keep && e.name !in known && uncached.add(e.name)) changed = true
         for (name in keep) {
             val id = idOf(name) ?: continue
             if (name in known) continue
@@ -178,8 +194,10 @@ class FileCache(
             if (File(dir, name).let { it.delete() || !it.exists() }) {
                 uncached.remove(name)
                 evicted++
+                changed = true
             }
         }
+        if (changed) saveManifest()
         return evicted
     }
 
@@ -193,6 +211,7 @@ class FileCache(
                 removed++
             }
         }
+        saveManifest()
         removed
     }
 
@@ -208,11 +227,13 @@ class FileCache(
         var kept = 0
         var keptBytes = 0L
         synchronized(lock) {
+            // Files made under a zero limit by an earlier run of the server stay uncached, not adopted as kept.
+            runCatching { if (manifest.isFile) uncached.addAll(manifest.readLines().filter { it.isNotBlank() }) }
             for (name in dir.list().orEmpty()) {
                 val f = File(dir, name)
-                if (!f.isFile) continue
+                if (!f.isFile || name == MANIFEST) continue
                 if (isCacheFileName(name) && f.length() > 0) {
-                    known.add(name)
+                    if (name !in uncached) known.add(name)
                     kept++
                     keptBytes += f.length()
                 } else if (f.delete()) {
@@ -246,7 +267,7 @@ class FileCache(
     fun deleteTempFiles() {
         synchronized(lock) {
             for (name in dir.list().orEmpty()) {
-                if (isCacheFileName(name)) continue
+                if (isCacheFileName(name) || name == MANIFEST) continue
                 val f = File(dir, name)
                 if (f.isFile) runCatching { f.delete() }
             }
@@ -285,6 +306,7 @@ class FileCache(
     }
 
     private companion object {
+        const val MANIFEST = ".uncached"
         val BUILT = Regex("([A-Za-z0-9_-]{11})-[a-z0-9]+-\\d+\\.(?:m4a|flac)")
     }
 }

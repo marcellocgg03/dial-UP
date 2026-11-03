@@ -27,7 +27,7 @@ class FileCacheTest {
         }
     }
 
-    private fun names(): List<String> = dir.list().orEmpty().sorted()
+    private fun names(): List<String> = dir.list().orEmpty().filter { it != ".uncached" }.sorted()
 
     @Test
     fun evictionOrderIsOldestModifiedFirstTiesByName() {
@@ -292,5 +292,17 @@ class FileCacheTest {
         put("ccccccccccc-mp4-0.m4a", 500, 3_000)
         assertEquals(2, cache.prune(keep = setOf("ccccccccccc-mp4-0.m4a")), "the track before the playing one goes")
         assertEquals(listOf("$idB-mp4-0.m4a", "$idB.source", "ccccccccccc-mp4-0.m4a"), names())
+    }
+
+    @Test
+    fun filesMadeUnderZeroStayUncachedAcrossARestartOfTheCache() {
+        limit = 0
+        cache.scan()
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        cache.prune(keep = setOf("$idA-mp4-0.m4a"))
+        val restarted = FileCache(dir, { limit }, { events.add(it) })
+        restarted.scan()
+        assertEquals(emptyList(), names(), "the restart did not adopt the file as a kept one")
+        assertEquals(0, restarted.dropUncachedFiles())
     }
 }
