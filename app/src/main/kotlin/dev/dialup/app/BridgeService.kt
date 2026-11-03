@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
@@ -159,6 +160,7 @@ class BridgeService : Service(), SpikeHost {
             // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on (D-04, RESEARCH A1)
             AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
             evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
+            NetworkResume.disarm(this)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -202,10 +204,12 @@ class BridgeService : Service(), SpikeHost {
             return false
         }
         ServiceHub.service = this
+        NetworkResume.disarm(this)
         acquireLocks()
         logExitInfo()
         startFeatures()
         scope.launch { castCountLoop() }
+        scope.launch { pauseWhenNoNetworkLoop() }
         scope.launch { heartbeatLoop() }
         return true
     }
@@ -457,8 +461,6 @@ class BridgeService : Service(), SpikeHost {
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
-        // Minimum importance: no status bar icon, a quiet line in the shade. Used while there is no network (see NetworkStateSource).
-        nm.createNotificationChannel(NotificationChannel(CHANNEL_QUIET_ID, "DialUP, no network", NotificationManager.IMPORTANCE_MIN))
     }
 
     private fun buildNotification(count: CastCount, networkUp: Boolean = true): Notification {
@@ -475,7 +477,7 @@ class BridgeService : Service(), SpikeHost {
             Intent(this, BridgeService::class.java).setAction(ACTION_CLEAR_LOG),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(this, if (networkUp) CHANNEL_ID else CHANNEL_QUIET_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
             .setContentText(notificationText(count, networkUp))
             .setSmallIcon(R.drawable.ic_stat_dialup)
@@ -489,6 +491,23 @@ class BridgeService : Service(), SpikeHost {
      * The count is derived from feature state (every [CastCountSource] feature), never from events.
      * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
      */
+    /**
+     * No Wi-Fi and no hotspot address for [NO_NETWORK_GRACE_MS]: the bridge has nothing to serve, so the service stops and
+     * takes its notification with it. The switch is left on, and [NetworkResume] starts the service again with Wi-Fi.
+     */
+    private suspend fun pauseWhenNoNetworkLoop() {
+        val sources = features.filterIsInstance<NetworkStateSource>()
+        if (sources.isEmpty()) return
+        combine(sources.map { it.networkUp }) { ups -> ups.all { it } }.distinctUntilChanged().collectLatest { up ->
+            if (up) return@collectLatest
+            delay(NO_NETWORK_GRACE_MS)
+            if (!AppSettings.of(this).data.value.bridgeEnabled) return@collectLatest
+            evidence.event("net-pause", mapOf("graceMs" to NO_NETWORK_GRACE_MS))
+            NetworkResume.arm(this)
+            stopSelf()
+        }
+    }
+
     private suspend fun castCountLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()
         val networkUp: Flow<Boolean> =
@@ -513,9 +532,9 @@ class BridgeService : Service(), SpikeHost {
         const val ACTION_STOP = "dev.dialup.STOP"
         const val ACTION_CLEAR_LOG = "dev.dialup.CLEAR_LOG"
         const val CHANNEL_ID = "dialup"
-        const val CHANNEL_QUIET_ID = "dialup-quiet"
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
+        const val NO_NETWORK_GRACE_MS = 60_000L
     }
 }
 

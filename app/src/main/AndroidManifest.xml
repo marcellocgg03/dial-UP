@@ -82,6 +82,10 @@
         <!-- The AlarmManager housekeeping tick (plan 05-11). No intent-filter: the alarm's PendingIntent names this
              class, so nothing else can reach it (T-05-29). -->
         <receiver
+            android:name=".NetworkResumeReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".HousekeepingReceiver"
             android:exported="false" />
 
