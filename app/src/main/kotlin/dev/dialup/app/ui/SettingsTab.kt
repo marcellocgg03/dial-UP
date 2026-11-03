@@ -164,8 +164,7 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
             Column {
                 Text(
                     if (usage != null) {
-                        "${usage.files} ${if (usage.files == 1) "file" else "files"}, ${megabytes(usage.bytes)} of " +
-                            "${megabytes(usage.limitBytes)}"
+                        "${usage.files} ${if (usage.files == 1) "file" else "files"}, ${megabytes(usage.bytes)}"
                     } else {
                         "Start the bridge to see the cache usage"
                     },
