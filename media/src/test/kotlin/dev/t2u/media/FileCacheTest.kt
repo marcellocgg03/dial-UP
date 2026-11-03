@@ -235,8 +235,10 @@ class FileCacheTest {
         // the build just finished: its file is in keep, so it stays for now and counts as a file made under the zero limit
         assertEquals(0, cache.prune(keep = setOf("$idB-mp4-0.m4a")))
         put("ccccccccccc-mp4-0.m4a", 500, 3_000)
-        assertEquals(1, cache.prune(keep = setOf("ccccccccccc-mp4-0.m4a")))
-        assertEquals(listOf("$idA-mp4-0.m4a", "ccccccccccc-mp4-0.m4a"), names())
+        assertEquals(0, cache.prune(keep = setOf("ccccccccccc-mp4-0.m4a")), "the playing track and the next one stay")
+        put("ddddddddddd-mp4-0.m4a", 500, 4_000)
+        assertEquals(1, cache.prune(keep = setOf("ddddddddddd-mp4-0.m4a")))
+        assertEquals(listOf("$idA-mp4-0.m4a", "ccccccccccc-mp4-0.m4a", "ddddddddddd-mp4-0.m4a"), names())
     }
 
     @Test
@@ -275,5 +277,20 @@ class FileCacheTest {
         assertEquals(listOf("$idA-mp4-0.m4a", "$idA.source"), new.list().orEmpty().sorted())
         assertEquals(99L, File(new, "$idA.source").length(), "an existing file is not replaced")
         assertEquals(0, migrateCacheDir(File(root, "missing"), new))
+    }
+
+    @Test
+    fun aZeroLimitKeepsTheTrackThatPlaysAndTheOneQueuedNext() {
+        limit = 0
+        cache.scan()
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        put("$idA.source", 500, 1_000)
+        cache.prune(keep = setOf("$idA-mp4-0.m4a", "$idA.source"))
+        put("$idB-mp4-0.m4a", 500, 2_000)
+        put("$idB.source", 500, 2_000)
+        assertEquals(0, cache.prune(keep = setOf("$idB-mp4-0.m4a", "$idB.source")), "the playing track survives the next build")
+        put("ccccccccccc-mp4-0.m4a", 500, 3_000)
+        assertEquals(2, cache.prune(keep = setOf("ccccccccccc-mp4-0.m4a")), "the track before the playing one goes")
+        assertEquals(listOf("$idB-mp4-0.m4a", "$idB.source", "ccccccccccc-mp4-0.m4a"), names())
     }
 }

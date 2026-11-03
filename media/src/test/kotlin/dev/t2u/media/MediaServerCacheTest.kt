@@ -107,7 +107,7 @@ class MediaServerCacheTest {
     @Test
     @DisplayName("cache: a file larger than CACHE_MB is still served; older files are evicted first")
     fun aFileLargerThanTheCapIsStillServedAndOlderFilesAreEvictedFirst() = runBlocking {
-        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 60)), cacheLimitBytes = 0)
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 60)), cacheLimitBytes = 1)
         val a = VideoEntry("mmmmmmmmmmm", "mp4")
         ms.prepare(a)
         val pathA = ms.registerVideo(a)
@@ -196,7 +196,7 @@ class MediaServerCacheTest {
 
     @Test
     fun evictingAFileTokenAtMaxTokensReleasesItsPin() = runBlocking {
-        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 1)
         val a = VideoEntry("aaaaaaaaaaa", "mp4")
         ms.prepare(a)
         val pathA = ms.registerVideo(a)

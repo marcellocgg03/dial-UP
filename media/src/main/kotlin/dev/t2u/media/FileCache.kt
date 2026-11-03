@@ -44,6 +44,9 @@ class FileCache(
     /** Files created while the limit was 0: the only ones a zero limit may delete, once nothing reads them. */
     private val uncached = HashSet<String>()
 
+    /** The video ids of the last two builds seen under a zero limit: the track that plays and the one queued next stay (gapless). */
+    private val recentIds = ArrayList<String>()
+
     /** Sets the modification time of [file] to now: LRU order that survives a restart (Node `#reuse` uses utimes). */
     fun touch(file: File) {
         runCatching { file.setLastModified(System.currentTimeMillis()) }
@@ -160,10 +163,17 @@ class FileCache(
      */
     private fun pruneUncached(entries: List<Entry>, keep: Set<String>, busy: (String) -> Boolean): Int {
         for (e in entries) if (e.name in keep && e.name !in known) uncached.add(e.name)
+        for (name in keep) {
+            val id = idOf(name) ?: continue
+            if (name in known) continue
+            recentIds.remove(id)
+            recentIds.add(id)
+            while (recentIds.size > 2) recentIds.removeAt(0)
+        }
         var evicted = 0
         for (e in entries) {
             val name = e.name
-            if (name !in uncached || name in keep || pins.containsKey(name)) continue
+            if (name !in uncached || name in keep || pins.containsKey(name) || idOf(name) in recentIds) continue
             if (name.endsWith(".source") && busy(name.removeSuffix(".source"))) continue
             if (File(dir, name).let { it.delete() || !it.exists() }) {
                 uncached.remove(name)
@@ -262,6 +272,8 @@ class FileCache(
     }
 
     /** The video id of a built file name `<11-char id>-<format>-<int>.<ext>`, or null for anything else. */
+    private fun idOf(name: String): String? = builtId(name) ?: name.takeIf { it.endsWith(".source") }?.removeSuffix(".source")
+
     private fun builtId(name: String): String? = BUILT.matchEntire(name)?.groupValues?.get(1)
 
     private fun emit(event: Map<String, Any?>) {
