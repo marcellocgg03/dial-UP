@@ -1187,7 +1187,7 @@ class Renderer(
     private suspend fun prepareItem(video: Video, position: Double, format: String?, forceOffset: Boolean = false): PreparedItem {
         val info = deps.resolver.resolve(video.id)
         val address = checkNotNull(ip) { "renderer was not initialised" }
-        var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        var fmt = format ?: cachedAutoFormat(video.id, info.mime) ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
         while (true) {
             try {
                 return buildItem(video, position, info, fmt, address, forceOffset)
@@ -1199,6 +1199,22 @@ class Renderer(
                 note("warn", "Preparing $fmt failed (${e.message}) - trying $next")
                 fmt = next
             }
+        }
+    }
+
+    /**
+     * Auto mode only: a format already built and cached for [videoId] that the speaker accepts, best first, so the track starts
+     * from the cache and nothing is built again. A forced format never takes this path.
+     */
+    private fun cachedAutoFormat(videoId: String, sourceMime: String): String? {
+        if (config.outputFormat != "auto") return null
+        val cached = try {
+            deps.media.cachedFormats(videoId)
+        } catch (_: Exception) {
+            return null
+        }
+        return cached.firstOrNull { formatAccepted(protocols, it, sourceMime) }?.also {
+            note("info", "Using the cached $it of this track")
         }
     }
 

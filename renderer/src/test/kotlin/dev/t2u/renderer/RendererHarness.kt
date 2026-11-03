@@ -74,6 +74,8 @@ internal class RendererHarness(
     private val clock: () -> Long = System::currentTimeMillis,
     private val pause: suspend (Long) -> Unit = { delay(it) },
 ) : AutoCloseable {
+    /** Formats the fake media server reports as already cached, for any video. */
+    @Volatile var cachedFormats: List<String> = emptyList()
     val registered = CopyOnWriteArrayList<VideoEntry>()
     val prepared = CopyOnWriteArrayList<VideoEntry>()
     val resolves = CopyOnWriteArrayList<String>()
@@ -125,6 +127,8 @@ internal class RendererHarness(
             prepareFailure(entry)?.let { throw it }
             directDelegate?.takeIf { entry.format == "direct" }?.prepare(entry)
         }
+
+        override fun cachedFormats(videoId: String): List<String> = this@RendererHarness.cachedFormats
 
         override fun release(path: String) {
             released.add(path)

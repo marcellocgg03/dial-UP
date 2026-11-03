@@ -38,6 +38,12 @@ class FileCache(
     private val lock = Any()
     private val pins = HashMap<String, Int>()
 
+    /** Names seen by a scan or by a prune under a positive limit: files that were kept, and so are never dropped by a zero limit. */
+    private val known = HashSet<String>()
+
+    /** Files created while the limit was 0: the only ones a zero limit may delete, once nothing reads them. */
+    private val uncached = HashSet<String>()
+
     /** Sets the modification time of [file] to now: LRU order that survives a restart (Node `#reuse` uses utimes). */
     fun touch(file: File) {
         runCatching { file.setLastModified(System.currentTimeMillis()) }
@@ -91,6 +97,9 @@ class FileCache(
         val limit = limitBytes()
         val entries = listCacheFiles().sortedWith(compareBy<Entry> { it.modified }.thenBy { it.name })
         val present = entries.map { it.name }.toHashSet()
+        if (limit <= 0L) return@synchronized pruneUncached(entries, keep, busy)
+        known.addAll(present)
+        uncached.clear()
         val sizes = entries.associate { it.name to it.size }
         var total = entries.sumOf { it.size }
         var evicted = 0
@@ -145,6 +154,39 @@ class FileCache(
     }
 
     /**
+     * The zero limit: nothing that was kept before is ever evicted ("0 MB" stops new files from being cached, it does not
+     * empty the cache). The files in [keep] that no scan or positive-limit prune has seen are the ones this run made, so they
+     * count as uncached; the uncached ones that are neither in [keep], pinned nor busy go.
+     */
+    private fun pruneUncached(entries: List<Entry>, keep: Set<String>, busy: (String) -> Boolean): Int {
+        for (e in entries) if (e.name in keep && e.name !in known) uncached.add(e.name)
+        var evicted = 0
+        for (e in entries) {
+            val name = e.name
+            if (name !in uncached || name in keep || pins.containsKey(name)) continue
+            if (name.endsWith(".source") && busy(name.removeSuffix(".source"))) continue
+            if (File(dir, name).let { it.delete() || !it.exists() }) {
+                uncached.remove(name)
+                evicted++
+            }
+        }
+        return evicted
+    }
+
+    /** Deletes the unpinned files made under a zero limit (a bridge stop): nothing that was cached before is touched. */
+    fun dropUncachedFiles(): Int = synchronized(lock) {
+        var removed = 0
+        for (name in uncached.toList()) {
+            if (pins.containsKey(name)) continue
+            if (File(dir, name).let { it.delete() || !it.exists() }) {
+                uncached.remove(name)
+                removed++
+            }
+        }
+        removed
+    }
+
+    /**
      * The start scan (D-12, Node `start`): the whole directory belongs to the builder, so every regular file that is
      * not a finished non-empty cache file goes (`.part`, `.source.download`, `.info.json`, yt-dlp leftovers such as
      * `.ytdl` and `.part-Frag`, empty files, anything foreign); the rest is kept, then pruned to the current cap.
@@ -160,6 +202,7 @@ class FileCache(
                 val f = File(dir, name)
                 if (!f.isFile) continue
                 if (isCacheFileName(name) && f.length() > 0) {
+                    known.add(name)
                     kept++
                     keptBytes += f.length()
                 } else if (f.delete()) {
@@ -232,4 +275,23 @@ class FileCache(
     private companion object {
         val BUILT = Regex("([A-Za-z0-9_-]{11})-[a-z0-9]+-\\d+\\.(?:m4a|flac)")
     }
+}
+
+/**
+ * Moves the finished cache files of [from] into [to] once (the cache used to live in the app's cache directory, which Android may
+ * empty): a name that already exists in [to] is left alone, anything else in [from] (part files, leftovers) is ignored.
+ * @return how many files moved
+ */
+fun migrateCacheDir(from: File, to: File): Int {
+    val names = from.list() ?: return 0
+    to.mkdirs()
+    var moved = 0
+    for (name in names) {
+        if (!isCacheFileName(name)) continue
+        val src = File(from, name)
+        val dst = File(to, name)
+        if (!src.isFile || dst.exists()) continue
+        if (src.renameTo(dst) || runCatching { src.copyTo(dst); src.delete(); true }.getOrDefault(false)) moved++
+    }
+    return moved
 }

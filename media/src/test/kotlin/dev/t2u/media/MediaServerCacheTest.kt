@@ -212,7 +212,7 @@ class MediaServerCacheTest {
 
     @Test
     fun stopReleasesEveryTokenPin() = runBlocking {
-        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 0)
+        val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 1)
         val a = VideoEntry("aaaaaaaaaaa", "mp4")
         ms.prepare(a)
         ms.registerVideo(a)

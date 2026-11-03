@@ -95,6 +95,10 @@ class FileBuilder(
 
     private val cache = FileCache(this.dir, cacheLimitBytes, onEvent)
 
+    /** The cached file formats ([FILE_FORMATS], in chain order) already built for [videoId] from the start. */
+    fun cachedFormats(videoId: String): List<String> =
+        FILE_FORMATS.filter { isFinished(finalFile(videoId, it, 0)) }
+
     /** The finished file for the key, or null when it is not there. */
     fun fileFor(videoId: String, format: String, startAt: Int): File? {
         val file = finalFile(videoId, format, startAt)
@@ -133,6 +137,7 @@ class FileBuilder(
     fun close() {
         scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
         cache.deleteTempFiles()
+        cache.dropUncachedFiles()
     }
 
     /** Deletes every cache file (Node `clearCache`) and returns how many went. */

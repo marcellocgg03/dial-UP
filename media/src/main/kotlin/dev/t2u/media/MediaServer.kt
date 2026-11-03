@@ -97,6 +97,12 @@ interface MediaRegistrar {
      */
     suspend fun prepare(entry: VideoEntry) {}
 
+    /**
+     * The file formats already built and cached for [videoId], best first. Auto mode plays one of these (when the speaker takes
+     * it) instead of building the format the priority list would pick. The default is empty, for stubs.
+     */
+    fun cachedFormats(videoId: String): List<String> = emptyList()
+
     /** @return `/stream/<token>.<ext>`. @throws IllegalArgumentException for an invalid ID or a non-pipe format. */
     fun registerVideo(entry: VideoEntry): String
 
@@ -362,6 +368,9 @@ class MediaServer(
         readAhead.drop(token)
         if (forget) scans.remove(token)
     }
+
+    override fun cachedFormats(videoId: String): List<String> =
+        runCatching { files?.cachedFormats(videoId) }.getOrNull().orEmpty()
 
     override suspend fun prepare(entry: VideoEntry) {
         if (entry.format !in FILE_FORMATS) return

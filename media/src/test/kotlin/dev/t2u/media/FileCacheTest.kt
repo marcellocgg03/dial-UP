@@ -44,10 +44,10 @@ class FileCacheTest {
         put("$idA-mp4-0.m4a", 500, 1_000)
         put("$idA.source", 500, 1_000)
         put("$idB-mp4-0.m4a", 500, 2_000)
-        limit = 0
+        limit = 1
         cache.prune(keep = setOf("$idB-mp4-0.m4a"))
         assertEquals(listOf("$idB-mp4-0.m4a"), names())
-        limit = 0
+        limit = 1
         assertEquals(0, cache.prune(keep = setOf("$idB-mp4-0.m4a")))
         assertEquals(listOf("$idB-mp4-0.m4a"), names())
     }
@@ -58,7 +58,7 @@ class FileCacheTest {
         put("$idB-mp4-0.m4a", 80, 2_000)
         val release = cache.pin(a)
         assertTrue(cache.isPinned(a.name))
-        limit = 0
+        limit = 1
         cache.prune()
         assertEquals(listOf("$idA-mp4-0.m4a"), names(), "the pinned, older file stays; the unpinned one went")
         assertEquals(0, cache.clear())
@@ -160,7 +160,7 @@ class FileCacheTest {
         val info = cache.info()
         assertEquals(1, info.files)
         assertEquals(50L, info.bytes)
-        limit = 0
+        limit = 1
         cache.prune()
         assertEquals(3, names().size, "only the finished file went: ${names()}")
         assertEquals(0, cache.clear())
@@ -172,7 +172,7 @@ class FileCacheTest {
         put("$idA-mp4-0.m4a", 50, 1_000)
         put("$idA.source", 50, 1_000)
         val b = put("$idB-mp4-0.m4a", 50, 2_000)
-        limit = 0
+        limit = 1
         // busy(idA) runs after a's deletion started the pairing: remove b behind the cache's back
         cache.prune(busy = { b.delete(); false })
         assertEquals(emptyList(), names())
@@ -214,5 +214,66 @@ class FileCacheTest {
         put("$idB-mp4-0.m4a", 50, 2_000)
         assertEquals(1, cache.scan().files)
         assertEquals(listOf("$idB-mp4-0.m4a"), names())
+    }
+
+    @Test
+    fun aZeroLimitNeverEvictsFilesThatAlreadyExisted() {
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        put("$idA.source", 500, 1_000)
+        limit = 0
+        cache.scan()
+        assertEquals(0, cache.prune())
+        assertEquals(listOf("$idA-mp4-0.m4a", "$idA.source"), names())
+    }
+
+    @Test
+    fun aZeroLimitDropsFilesCreatedAfterTheScanOnceTheNextBuildIsKept() {
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        limit = 0
+        cache.scan()
+        put("$idB-mp4-0.m4a", 500, 2_000)
+        // the build just finished: its file is in keep, so it stays for now and counts as a file made under the zero limit
+        assertEquals(0, cache.prune(keep = setOf("$idB-mp4-0.m4a")))
+        put("ccccccccccc-mp4-0.m4a", 500, 3_000)
+        assertEquals(1, cache.prune(keep = setOf("ccccccccccc-mp4-0.m4a")))
+        assertEquals(listOf("$idA-mp4-0.m4a", "ccccccccccc-mp4-0.m4a"), names())
+    }
+
+    @Test
+    fun aZeroLimitDeleteNewFilesRemovesOnlyTheOnesMadeUnderIt() {
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        limit = 0
+        cache.scan()
+        put("$idB-mp4-0.m4a", 500, 2_000)
+        cache.prune(keep = setOf("$idB-mp4-0.m4a"))
+        assertEquals(1, cache.dropUncachedFiles())
+        assertEquals(listOf("$idA-mp4-0.m4a"), names())
+    }
+
+    @Test
+    fun aFileMadeWhileTheLimitWasPositiveStaysWhenTheLimitDropsToZero() {
+        limit = 1_000
+        cache.scan()
+        put("$idA-mp4-0.m4a", 500, 1_000)
+        cache.prune(keep = setOf("$idA-mp4-0.m4a"))
+        limit = 0
+        put("$idB-mp4-0.m4a", 500, 2_000)
+        cache.prune(keep = setOf("$idB-mp4-0.m4a"))
+        assertEquals(1, cache.dropUncachedFiles())
+        assertEquals(listOf("$idA-mp4-0.m4a"), names())
+    }
+
+    @Test
+    fun migrateMovesFinishedFilesOnceAndNeverOverwrites() {
+        val old = File(root, "old").also { it.mkdirs() }
+        File(old, "$idA-mp4-0.m4a").writeBytes(ByteArray(10))
+        File(old, "$idA.source").writeBytes(ByteArray(20))
+        File(old, "leftover.part").writeBytes(ByteArray(5))
+        val new = File(root, "new").also { it.mkdirs() }
+        File(new, "$idA.source").writeBytes(ByteArray(99))
+        assertEquals(1, migrateCacheDir(old, new))
+        assertEquals(listOf("$idA-mp4-0.m4a", "$idA.source"), new.list().orEmpty().sorted())
+        assertEquals(99L, File(new, "$idA.source").length(), "an existing file is not replaced")
+        assertEquals(0, migrateCacheDir(File(root, "missing"), new))
     }
 }

@@ -400,7 +400,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,
-                bufferDir = File(h.context.cacheDir, "media-buffer").also { it.mkdirs() },
+                bufferDir = mediaBufferDir(h.context),
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
@@ -632,4 +632,15 @@ class CastFeature : SpikeFeature, CastCountSource {
         const val MAX_CONFIG_WARNING_EVENTS = 20
         const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
     }
+}
+
+/**
+ * The media cache lives in the app's files directory, which Android never empties on its own (the cache directory is cleared
+ * when storage runs low and by the system's Clear cache). Only the in-app Clear cache button deletes finished files. The files of
+ * the old location are moved over once, so an update loses nothing.
+ */
+internal fun mediaBufferDir(context: android.content.Context): File {
+    val dir = File(context.filesDir, "media-buffer").also { it.mkdirs() }
+    runCatching { dev.t2u.media.migrateCacheDir(File(context.cacheDir, "media-buffer/files"), File(dir, "files")) }
+    return dir
 }
