@@ -309,16 +309,17 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `clear cache with the bridge off is disabled and does not call the bridge`() = runTest {
+    fun `clear cache works with the bridge off`() = runTest {
         val bridge = FakeBridgePort(running = false)
         val p = presenter(bridge = bridge)
+        runCurrent()
         assertFalse(p.state.value.bridgeRunning)
-        assertNull(p.state.value.cacheUsage)
+        assertEquals(2, p.state.value.cacheUsage?.files)
 
         p.clearCache()
         runCurrent()
-        assertEquals(0, bridge.clearCalls)
-        assertNull(p.state.value.message)
+        assertEquals(1, bridge.clearCalls)
+        assertEquals("Cleared 3 files", p.state.value.message)
     }
 
     @Test
@@ -367,14 +368,15 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `with the bridge off the update is unavailable and the bridge is not called`() = runTest {
-        val bridge = FakeBridgePort(running = false)
+    fun `the update runs with the bridge off`() = runTest {
+        val bridge = FakeBridgePort(running = false).also { it.outcome = outcome() }
         val p = presenter(bridge = bridge)
-        assertEquals(UpdateUi.Unavailable, p.state.value.update)
+        runCurrent()
+        assertEquals(UpdateUi.Idle, p.state.value.update)
         p.updateNow()
         runCurrent()
-        assertEquals(0, bridge.updateCalls)
-        assertEquals(UpdateUi.Unavailable, p.state.value.update)
+        assertEquals(1, bridge.updateCalls)
+        assertTrue(p.state.value.update is UpdateUi.Done)
     }
 
     @Test
@@ -413,10 +415,11 @@ class SettingsPresenterTest {
 
         bridge.setRunning(false)
         runCurrent()
-        assertEquals("-", p.state.value.ytdlpVersion)
+        assertEquals("2026.08.19", p.state.value.ytdlpVersion)
 
         val off = presenter(bridge = FakeBridgePort(running = false))
-        assertEquals("-", off.state.value.ytdlpVersion)
+        runCurrent()
+        assertEquals("2026.08.19", off.state.value.ytdlpVersion)
     }
 
     @Test
@@ -698,35 +701,38 @@ class SettingsPresenterTest {
     fun `the retry stops after the attempt limit`() = runTest {
         val bridge = FakeBridgePort(running = false).also { it.info = null; it.version = null }
         val p = presenter(bridge = bridge)
+        runCurrent()
+        // the read for the bridge-off start was cancelled by the new instance below after its first attempt
+        val first = bridge.infoCalls
 
         bridge.setRunning(true)
         runCurrent()
         advanceTimeBy(60_000)
         runCurrent()
-        assertEquals(USAGE_ATTEMPTS, bridge.infoCalls)
+        assertEquals(first + USAGE_ATTEMPTS, bridge.infoCalls)
 
         advanceTimeBy(60_000)
         runCurrent()
-        assertEquals(USAGE_ATTEMPTS, bridge.infoCalls)
+        assertEquals(first + USAGE_ATTEMPTS, bridge.infoCalls)
         assertNull(p.state.value.cacheUsage)
     }
 
     @Test
-    fun `the bridge going off cancels the pending retries`() = runTest {
+    fun `a bridge change cancels the pending retries and starts one fresh read`() = runTest {
         val bridge = FakeBridgePort(running = false).also { it.info = null; it.version = null }
         val p = presenter(bridge = bridge)
+        runCurrent()
+        val first = bridge.infoCalls
 
         bridge.setRunning(true)
         runCurrent()
         advanceTimeBy(2_001)
         runCurrent()
-        assertEquals(2, bridge.infoCalls)
+        assertEquals(first + 2, bridge.infoCalls)
 
         bridge.setRunning(false)
         runCurrent()
-        advanceTimeBy(60_000)
-        runCurrent()
-        assertEquals(2, bridge.infoCalls)
+        assertEquals(first + 3, bridge.infoCalls)
         assertNull(p.state.value.cacheUsage)
     }
 
@@ -773,13 +779,14 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `the poll never calls the bridge while the bridge is off`() = runTest {
+    fun `the poll reads the cache usage while the bridge is off`() = runTest {
         val bridge = FakeBridgePort(running = false)
         val p = presenter(bridge = bridge)
-        p.onVisible()
-        advanceTimeBy(3 * USAGE_POLL_MS)
         runCurrent()
-        assertEquals(0, bridge.infoCalls)
-        assertNull(p.state.value.cacheUsage)
+        val before = bridge.infoCalls
+        p.onVisible()
+        advanceTimeBy(USAGE_POLL_MS + 1)
+        runCurrent()
+        assertEquals(before + 1, bridge.infoCalls)
     }
 }

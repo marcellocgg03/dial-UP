@@ -135,7 +135,7 @@ data class SettingsUi(
     /** The installed yt-dlp version; "-" while the bridge is off or the version cannot be read. */
     val ytdlpVersion: String = "-",
     val ytdlpChannel: String = "stable",
-    val update: UpdateUi = UpdateUi.Unavailable,
+    val update: UpdateUi = UpdateUi.Idle,
     /** A one-line result of the last action (cleared cache and so on); null when there is none. */
     val message: String? = null,
     /** The one-line result of the last Clear log, shown under the log buttons; null when there is none. */
@@ -194,16 +194,11 @@ class SettingsPresenter(
                 ui.update {
                     it.copy(
                         bridgeRunning = up,
-                        cacheUsage = if (up) it.cacheUsage else null,
-                        ytdlpVersion = if (up) it.ytdlpVersion else "-",
-                        update = when {
-                            !up -> UpdateUi.Unavailable
-                            it.update == UpdateUi.Unavailable -> UpdateUi.Idle
-                            else -> it.update
-                        },
+                        update = if (it.update == UpdateUi.Unavailable) UpdateUi.Idle else it.update,
                     )
                 }
-                if (up) refreshUntilAnswered()
+                // The cache and yt-dlp answer with the bridge off too (the bridge port falls back to the files on disk).
+                refreshUntilAnswered()
             }
         }
     }
@@ -227,7 +222,7 @@ class SettingsPresenter(
         try {
             val info = bridge.cacheInfo()
             val version = bridge.ytdlpVersion()
-            ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info, ytdlpVersion = version ?: it.ytdlpVersion) else it }
+            ui.update { it.copy(cacheUsage = info ?: it.cacheUsage, ytdlpVersion = version ?: it.ytdlpVersion) }
             return info != null && version != null
         } catch (e: CancellationException) {
             throw e
@@ -248,10 +243,9 @@ class SettingsPresenter(
         pollJob = scope.launch {
             while (true) {
                 delay(USAGE_POLL_MS)
-                if (!bridge.running) continue
                 try {
                     val info = bridge.cacheInfo()
-                    ui.update { if (it.bridgeRunning) it.copy(cacheUsage = info) else it }
+                    ui.update { it.copy(cacheUsage = info ?: it.cacheUsage) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -355,9 +349,8 @@ class SettingsPresenter(
         return changed(SettingKey.FORMAT)
     }
 
-    /** Empties the cache of every file no stream uses. Does nothing while the bridge is off. */
+    /** Empties the cache of every file no stream uses, with the bridge on or off. */
     fun clearCache() {
-        if (!bridge.running) return
         scope.launch {
             try {
                 val n = bridge.clearCache()
@@ -394,11 +387,11 @@ class SettingsPresenter(
         return changed(SettingKey.CHANNEL)
     }
 
-    /** Runs one yt-dlp update now. One at a time; unavailable while the bridge is off. */
+    /** Runs one yt-dlp update now, with the bridge on or off. One at a time. */
     fun updateNow() {
         var start = false
         ui.update {
-            if (it.bridgeRunning && it.update != UpdateUi.Running) {
+            if (it.update != UpdateUi.Running) {
                 start = true
                 it.copy(update = UpdateUi.Running)
             } else {
@@ -410,7 +403,7 @@ class SettingsPresenter(
             val outcome = try {
                 bridge.updateNow() ?: YtDlpUpdateOutcome(
                     ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
-                    status = "UNAVAILABLE", ms = 0, error = "the bridge is not running",
+                    status = "UNAVAILABLE", ms = 0, error = "yt-dlp is not available",
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -421,7 +414,7 @@ class SettingsPresenter(
                     status = "ERROR", ms = 0, error = e.javaClass.simpleName,
                 )
             }
-            ui.update { if (it.bridgeRunning) it.copy(update = UpdateUi.Done(outcome)) else it }
+            ui.update { it.copy(update = UpdateUi.Done(outcome)) }
             refreshUsage()
         }
     }

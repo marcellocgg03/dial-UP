@@ -132,10 +132,9 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
                 OutlinedButton(
                     onClick = presenter::updateNow,
-                    enabled = ui.bridgeRunning && !running,
+                    enabled = !running,
                     modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
                 ) { Text("Update now") }
-                if (!ui.bridgeRunning) Text("Start the bridge to update yt-dlp", style = MaterialTheme.typography.bodySmall)
                 if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 (ui.update as? UpdateUi.Done)?.let {
                     Text(updateMessage(it.outcome), modifier = Modifier.padding(top = 8.dp).testTag("update-result"))
@@ -166,7 +165,7 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
                     if (usage != null) {
                         "${usage.files} ${if (usage.files == 1) "file" else "files"}, ${megabytes(usage.bytes)}"
                     } else {
-                        "Start the bridge to see the cache usage"
+                        "Reading the cache"
                     },
                     modifier = Modifier.testTag("cache-usage"),
                 )
@@ -177,10 +176,8 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
                 ui.message?.let { Text(it, modifier = Modifier.testTag("cache-message")) }
                 OutlinedButton(
                     onClick = presenter::clearCache,
-                    enabled = ui.bridgeRunning,
                     modifier = Modifier.padding(top = 8.dp).testTag("btn-clear-cache"),
                 ) { Text("Clear cache") }
-                if (!ui.bridgeRunning) Text("Start the bridge to clear the cache", style = MaterialTheme.typography.bodySmall)
             }
         },
         trailingContent = {
