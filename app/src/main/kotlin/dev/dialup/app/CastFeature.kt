@@ -66,7 +66,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * the playing track survive. Only `reload-config` still restarts it. A start that throws, or finds no Wi-Fi, is logged
  * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on (GUI-10).
  */
-class CastFeature : SpikeFeature, CastCountSource {
+class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     override val name = "cast"
     override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "housekeeping")
 
@@ -140,6 +140,11 @@ class CastFeature : SpikeFeature, CastCountSource {
 
     /** What the last bridge start applied from files/config.json (counts and switches only, never pattern text). */
     @Volatile private var configSummaryJson: JsonObject? = null
+
+    private val networkUpState = MutableStateFlow(true)
+
+    /** False while the phone has no Wi-Fi or hotspot address to bind to; the notification goes quiet then. */
+    override val networkUp: StateFlow<Boolean> = networkUpState.asStateFlow()
 
     /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log and the DIAL self check. */
     @Volatile private var lastIp: String? = null
@@ -219,6 +224,7 @@ class CastFeature : SpikeFeature, CastCountSource {
      * stays short.
      */
     override fun stop() {
+        networkUpState.value = true
         host?.let { HousekeepingAlarm.cancel(it.context) }
         updaterJob?.cancel()
         updaterJob = null
@@ -357,10 +363,12 @@ class CastFeature : SpikeFeature, CastCountSource {
         val network = bridgeNetwork(h)
         if (network == null) {
             lastIp = null
+            networkUpState.value = false
             h.evidence.event("net", mapOf("wifi" to false))
             return
         }
         lastIp = network.wifiIp.hostAddress
+        networkUpState.value = true
         val appSettings = checkNotNull(settings) { "settings not initialised" }
         val payloads = h.payloads()
         val cacheDir = File(h.context.cacheDir, "yt-dlp").also { it.mkdirs() }
@@ -479,9 +487,11 @@ class CastFeature : SpikeFeature, CastCountSource {
     private suspend fun applyRebind(h: SpikeHost, reason: String) {
         val oldIp = lastIp
         when (rebindAction(reason, bridge != null, h.wifiIpv4()?.hostAddress)) {
-            RebindAction.MARK_LOST_ONLY ->
+            RebindAction.MARK_LOST_ONLY -> {
                 // no Wi-Fi address now: the bridge stays, frozen, and the next address change moves it
+                networkUpState.value = false
                 h.evidence.event("net", mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp))
+            }
 
             RebindAction.START -> {
                 // a move is never cut in half by a newer event; that one waits for the lock instead
@@ -523,6 +533,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 val network = bridgeNetwork(h)
                 val b = bridge
                 if (network == null || b == null) {
+                    networkUpState.value = false
                     h.evidence.event(
                         "net",
                         mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp, "validated" to validated, "waitedMs" to waitedMs),
@@ -531,6 +542,7 @@ class CastFeature : SpikeFeature, CastCountSource {
                 }
                 withContext(NonCancellable) { b.rebindNetwork(network) }
                 lastIp = network.wifiIp.hostAddress
+                networkUpState.value = true
                 h.evidence.event(
                     "net",
                     mapOf(

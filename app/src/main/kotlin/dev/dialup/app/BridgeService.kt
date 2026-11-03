@@ -23,6 +23,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -453,9 +457,11 @@ class BridgeService : Service(), SpikeHost {
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
+        // Minimum importance: no status bar icon, a quiet line in the shade. Used while there is no network (see NetworkStateSource).
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_QUIET_ID, "DialUP, no network", NotificationManager.IMPORTANCE_MIN))
     }
 
-    private fun buildNotification(count: CastCount): Notification {
+    private fun buildNotification(count: CastCount, networkUp: Boolean = true): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -469,9 +475,9 @@ class BridgeService : Service(), SpikeHost {
             Intent(this, BridgeService::class.java).setAction(ACTION_CLEAR_LOG),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, if (networkUp) CHANNEL_ID else CHANNEL_QUIET_ID)
             .setContentTitle("DialUP")
-            .setContentText(notificationText(count))
+            .setContentText(notificationText(count, networkUp))
             .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
@@ -484,14 +490,21 @@ class BridgeService : Service(), SpikeHost {
      * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
      */
     private suspend fun castCountLoop() {
-        sumCastCounts(features.filterIsInstance<CastCountSource>()).collect { count ->
-            casting = count.casting
-            applyPlayLocks(playLocks.onCasting(count.casting), "casting")
-            evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
-            val text = notificationText(count)
+        val sources = features.filterIsInstance<NetworkStateSource>()
+        val networkUp: Flow<Boolean> =
+            if (sources.isEmpty()) flowOf(true) else combine(sources.map { it.networkUp }) { ups -> ups.all { it } }.distinctUntilChanged()
+        var lastCount: CastCount? = null
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), networkUp) { count, up -> count to up }.collect { (count, up) ->
+            if (count != lastCount) {
+                lastCount = count
+                casting = count.casting
+                applyPlayLocks(playLocks.onCasting(count.casting), "casting")
+                evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
+            }
+            val text = notificationText(count, up)
             if (text != lastNotifiedText) {
                 lastNotifiedText = text
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count))
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, up))
             }
         }
     }
@@ -500,6 +513,7 @@ class BridgeService : Service(), SpikeHost {
         const val ACTION_STOP = "dev.dialup.STOP"
         const val ACTION_CLEAR_LOG = "dev.dialup.CLEAR_LOG"
         const val CHANNEL_ID = "dialup"
+        const val CHANNEL_QUIET_ID = "dialup-quiet"
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
     }

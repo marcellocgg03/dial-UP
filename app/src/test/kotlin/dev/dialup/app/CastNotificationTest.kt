@@ -23,12 +23,19 @@ class CastNotificationTest {
 
     @Test
     fun `text reads casting of total speakers being cast to`() {
-        assertEquals("1 of 4 renderers being cast to", notificationText(CastCount(1, 4)))
+        assertEquals("1 renderer being cast to", notificationText(CastCount(1, 4)))
+        assertEquals("2 renderers being cast to", notificationText(CastCount(2, 4)))
+    }
+
+    @Test
+    fun `with no network the text says it is waiting, whatever the count`() {
+        assertEquals(NOTIFICATION_NO_NETWORK_TEXT, notificationText(CastCount(1, 3), networkUp = false))
+        assertEquals("1 renderer being cast to", notificationText(CastCount(1, 3), networkUp = true))
     }
 
     @Test
     fun `no speakers reads 0 of 0`() {
-        assertEquals("0 of 0 renderers being cast to", notificationText(CastCount(0, 0)))
+        assertEquals("0 renderers being cast to", notificationText(CastCount(0, 0)))
     }
 
     @Test
