@@ -472,7 +472,7 @@ class BridgeService : Service(), SpikeHost {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
             .setContentText(notificationText(count))
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
             .addAction(0, "Clear log", clearLog)
