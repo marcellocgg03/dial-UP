@@ -306,8 +306,8 @@ class RendererRegistryTest {
     }
 
     @Test
-    @DisplayName("an init that returns false releases the port, remembers nothing and is never retried for that LOCATION")
-    fun rejectedInitIsNeverRetried() = runBlocking {
+    @DisplayName("an init that returns false is held back for the retry hold, then looked at again by the first alive after it; the timer never retries it")
+    fun rejectedInitIsHeldThenLookedAtByALaterAlive() = runBlocking {
         val h = Harness(initBehaviour = { false })
         h.alive()
         assertEquals(1, h.created.size)
@@ -317,14 +317,21 @@ class RendererRegistryTest {
         assertEquals(3000, h.ports.claim("probe"))
         h.ports.release(3000)
 
-        repeat(5) {
-            h.now.addAndGet(60L * 60 * 1000)
-            h.alive()
-        }
+        h.now.addAndGet(4 * 60_000L)
+        h.alive()
+        assertEquals(1, h.created.size, "4 minutes in, the hold still applies")
+        assertEquals(0, h.registry.retryDue(), "the timer never attempts a speaker that answered but is not usable")
         assertEquals(1, h.created.size)
-        // a different LOCATION for the same UDN is a new device description and is tried
+
+        h.now.addAndGet(2 * 60_000L)
+        assertEquals(0, h.registry.retryDue(), "still not the timer's job at 6 minutes")
+        h.alive()
+        assertEquals(2, h.created.size, "6 minutes in, an alive looks at the speaker again")
+        assertTrue(h.events.retries.isEmpty())
+
+        // a different LOCATION for the same UDN is a new device description and is tried at once
         h.alive(location = "http://192.168.50.42:1401/xml/device_description.xml")
-        assertEquals(2, h.created.size)
+        assertEquals(3, h.created.size)
     }
 
     @Test
@@ -798,21 +805,24 @@ class RendererRegistryTest {
     }
 
     @Test
-    @DisplayName("a refused device is neither retried nor set up by an alive, after a backward or a forward clock jump")
-    fun aRefusedDeviceStaysRefusedWhateverTheClockDoes() = runBlocking {
+    @DisplayName("a refused device is never touched by the timer whatever the clock does; an alive sets it up again, also after a backward jump")
+    fun aRefusedDeviceIsOnlyEverRetriedByAnAliveWhateverTheClockDoes() = runBlocking {
         val h = Harness(initBehaviour = { false })
         h.alive()
         assertEquals(1, h.created.size)
         h.now.addAndGet(-oneHour)
         assertEquals(0, h.registry.retryDue())
-        h.alive()
         assertEquals(1, h.created.size)
+        h.alive()
+        assertEquals(2, h.created.size, "a hold that now lies more than one retry period ahead is not waiting: tried at once")
         h.now.addAndGet(oneHour + 24 * oneHour)
         assertEquals(0, h.registry.retryDue())
+        assertEquals(2, h.created.size)
         h.alive()
-        assertEquals(1, h.created.size)
+        assertEquals(3, h.created.size)
         assertTrue(h.events.retries.isEmpty())
     }
+
     // ---- Plan 07-11: hidden speakers (GUI-03, D-08) ----
 
     @Test

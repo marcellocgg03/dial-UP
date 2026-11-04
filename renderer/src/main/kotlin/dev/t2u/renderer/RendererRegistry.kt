@@ -60,7 +60,11 @@ class RendererRegistry(
     private val hidden: (String) -> Boolean = { false },
 ) {
     companion object {
-        /** index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. */
+        /**
+         * index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. A device that answered but is
+         * not a usable renderer is held back for this long too and looked at again by the first alive after it; the timer
+         * never retries it (WR-07).
+         */
         const val RETRY_FAILED_MS = 5 * 60 * 1000L
 
         /** How often the schedule looks for retries that are due (D-05: an attempt is at most about this late). */
@@ -77,9 +81,9 @@ class RendererRegistry(
     }
 
     /**
-     * A device that is not set up. [until] is the epoch ms of its next retry, or Long.MAX_VALUE for a device that
-     * is not a usable renderer (never retried by the timer). [src], [maxAge] and [attempts] let [retryDue] set a
-     * failed device up again without a new alive; [attempts] counts the timer retries already made.
+     * A device that is not set up. [until] is the epoch ms its hold ends. [src], [maxAge] and [attempts] let [retryDue] set
+     * a failed device up again without a new alive; [attempts] counts the timer retries already made. A device that is not
+     * a usable renderer has no [src], so only a later alive looks at it again (WR-07).
      *
      * [until] is wall-clock time and the clock can move backwards (NTP, carrier time). No legitimate wait is longer
      * than [RETRY_FAILED_MS], so an [until] further ahead than that is not waiting any more (see [isWaiting]).
@@ -94,7 +98,7 @@ class RendererRegistry(
 
     /** True while [skip] still holds its speaker back at time [now]; a due time more than one retry period ahead counts as due. */
     private fun isWaiting(skip: Skip, now: Long): Boolean =
-        skip.until == Long.MAX_VALUE || (skip.until > now && skip.until - now <= RETRY_FAILED_MS)
+        skip.until > now && skip.until - now <= RETRY_FAILED_MS
 
     private val lock = Mutex()
 
@@ -296,7 +300,7 @@ class RendererRegistry(
             } else {
                 ports.release(port)
                 holdsPort = false
-                lock.withLock { putSkip(udn, Skip(location, Long.MAX_VALUE)) }
+                lock.withLock { putSkip(udn, Skip(location, clock() + RETRY_FAILED_MS)) }
                 log("skipped", udn, renderer.name, location, reason = "not a usable renderer")
                 if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
             }
@@ -339,7 +343,7 @@ class RendererRegistry(
             val now = clock()
             val picked = skipped.entries
                 .filter { (udn, skip) ->
-                    skip.until != Long.MAX_VALUE && !isWaiting(skip, now) && skip.src != null &&
+                    !isWaiting(skip, now) && skip.src != null &&
                         udn !in pending && udn !in running && !hidden(udn)
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }

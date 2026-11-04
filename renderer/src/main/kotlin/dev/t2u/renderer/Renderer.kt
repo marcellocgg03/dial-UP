@@ -1541,9 +1541,12 @@ class Renderer(
         return false
     }
 
-    /** True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches (T-03-26). */
-    private fun isOurStream(uri: String): Boolean =
-        uri.contains("$ip:${config.mediaPort}/stream/") || ownHosts.any { uri.contains("$it:${config.mediaPort}/stream/") }
+    /**
+     * True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches
+     * (T-03-26). Host, port and path prefix are matched from the start of the string, so a foreign URL that merely mentions
+     * ours in a query string is not ours (WR-08).
+     */
+    private fun isOurStream(uri: String): Boolean = isOwnStreamUri(uri, listOfNotNull(ip) + ownHosts, config.mediaPort)
 
     /**
      * After an accepted empty URI: reads what the speaker holds (one GetMediaInfo) and writes the outcome as one evidence line.
