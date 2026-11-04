@@ -22,7 +22,7 @@ class ShareLogActivity : Activity() {
         try {
             // Make the file complete before it is handed over.
             ServiceHub.service?.evidence?.flush()
-            val file = File(logDirFor(getExternalFilesDir(null), filesDir).first, EvidenceLog.FILE_NAME)
+            val file = File(eventLogDir(filesDir), EvidenceLog.FILE_NAME)
             if (!file.isFile || file.length() == 0L) {
                 Toast.makeText(this, "No log yet", Toast.LENGTH_SHORT).show()
             } else {

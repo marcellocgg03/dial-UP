@@ -95,7 +95,7 @@ class BridgeService : Service(), SpikeHost {
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
     private var startForegroundFailed = false
-    private var logDirFact: Pair<File, String>? = null
+    private var logDirFact: File? = null
 
     /** The cast count last seen by [castCountLoop]; the heartbeat carries it so a sleep window shows whether casting was on. */
     @Volatile
@@ -135,14 +135,14 @@ class BridgeService : Service(), SpikeHost {
 
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
-        // D-08: the rotating event log goes to the app external files dir so `adb pull` reads it
-        // without run-as; state.json and payloads.json stay in the internal evidence dir.
-        val (logDir, where) = logDirFor(getExternalFilesDir(null), filesDir)
+        // RS-04: the rotating event log is app-private (filesDir/evidence), one shared writer for the process (CR-01).
+        val logDir = eventLogDir(filesDir)
         logDir.mkdirs()
-        evidence = EvidenceLog(logDir)
+        evidence = EvidenceLog.shared(logDir)
         // D-11: the level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
         evidence.setLevel(logLevelOf(loadAppConfig(filesDir).config.logLevel))
-        logDirFact = logDir to where
+        logDirFact = logDir
+        scope.launch { removeLegacyLogs() }
         if (foregroundError != null) {
             startForegroundFailed = true
             evidence.event(
@@ -150,6 +150,24 @@ class BridgeService : Service(), SpikeHost {
                 mapOf("where" to "startForeground", "error" to foregroundError.javaClass.name, "message" to foregroundError.message),
             )
             stopSelf()
+        }
+    }
+
+    /**
+     * RS-04: earlier builds wrote the event log to the shared external files directory (logs/, readable by other apps on Android 8
+     * to 10). Removes those files and the directory once per start; best effort, every failure is swallowed.
+     */
+    private fun removeLegacyLogs() {
+        try {
+            val dir = File(getExternalFilesDir(null) ?: return, "logs")
+            if (!dir.isDirectory) return
+            var removed = 0
+            dir.listFiles()?.forEach { f ->
+                if ((f.name.startsWith("spike-events.jsonl") || f.name.startsWith("dialup-events.jsonl")) && f.delete()) removed++
+            }
+            dir.delete() // only succeeds when empty
+            if (removed > 0) evidence.event("legacy-log-removed", mapOf("count" to removed))
+        } catch (_: Throwable) {
         }
     }
 
@@ -197,7 +215,7 @@ class BridgeService : Service(), SpikeHost {
                 "enabled" to enabled,
             ),
         )
-        logDirFact?.let { (logDir, where) -> evidence.event("logdir", mapOf("where" to where, "path" to logDir.absolutePath)) }
+        logDirFact?.let { logDir -> evidence.event("logdir", mapOf("where" to "internal", "path" to logDir.absolutePath)) }
         if (!gateDecision(exempt, enabled, reason)) {
             evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled))
             stopSelf()

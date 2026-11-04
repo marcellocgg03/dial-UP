@@ -89,8 +89,7 @@ class RotatingFile(
 }
 
 /**
- * Where the rotating event log lives: the app external files directory (readable by `adb pull`
- * without run-as, decision D-08) or, when that is unavailable, the internal evidence directory.
+ * Where the rotating event log lives: the app-private files directory (RS-04). Nothing else on the device can read it; the shell
+ * reads it with run-as on debug builds and users hand it over with Share log.
  */
-fun logDirFor(external: File?, internal: File): Pair<File, String> =
-    if (external != null) File(external, "logs") to "external" else File(internal, "evidence") to "internal"
+fun eventLogDir(filesDir: File): File = File(filesDir, "evidence")

@@ -31,7 +31,7 @@ class EvidenceLogTest {
         return cond()
     }
 
-    private fun shared(dir: File): EvidenceLog = EvidenceLog.shared(dir, logcat = {}).also { opened += it }
+    private fun shared(dir: File): EvidenceLog = EvidenceLog.shared(dir, logcat = {}, monoNanos = { 1L }).also { opened += it }
 
     @Test
     fun `close ends the writer thread and is idempotent`() {

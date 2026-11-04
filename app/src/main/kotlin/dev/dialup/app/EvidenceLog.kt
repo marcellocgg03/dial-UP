@@ -6,6 +6,8 @@ import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Pure formatter for one evidence line (no android.* so it runs in a plain JVM unit test).
@@ -141,12 +143,13 @@ object EvidenceLine {
 }
 
 /**
- * Append-only JSONL evidence file, mirrored to logcat. Never throws to callers.
- * Rotation (current -> .1 -> .2, old .2 deleted at [ROTATE_BYTES]) lives in [RotatingFile]; every
+ * Append-only JSONL evidence file (`dialup-events.jsonl`), mirrored to logcat. Never throws to callers.
+ * The app owns one instance per process, obtained with [shared]; it has one writer thread and one open file handle. [close]
+ * ends the thread and releases the handle. Rotation (current -> .1 -> .2, old .2 deleted at [ROTATE_BYTES]) lives in [RotatingFile]; every
  * file operation runs on the single writer thread.
  */
 class EvidenceLog(
-    private val dir: File,
+    val dir: File,
     private val tag: String = "T2U",
     private val monoNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
     private val logcat: (String) -> Unit = { Log.i(tag, it) },
@@ -157,6 +160,31 @@ class EvidenceLog(
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
     private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = KEEP_ROTATED)
+    private val closed = AtomicBoolean(false)
+
+    val isClosed: Boolean get() = closed.get()
+
+    /**
+     * Drains queued writes, stops the writer thread and releases the file handle. Idempotent; once closed, [event], [clear] and
+     * [flush] return quickly and write nothing.
+     */
+    fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        try {
+            executor.submit {}.get(2000, TimeUnit.MILLISECONDS)
+        } catch (_: Throwable) {
+        }
+        executor.shutdown()
+        try {
+            if (!executor.awaitTermination(2000, TimeUnit.MILLISECONDS)) executor.shutdownNow()
+        } catch (_: Throwable) {
+            executor.shutdownNow()
+        }
+        try {
+            rotating.close()
+        } catch (_: Throwable) {
+        }
+    }
 
     fun setLevel(value: LogLevel) {
         level = value
@@ -165,6 +193,7 @@ class EvidenceLog(
     fun level(): LogLevel = level
 
     fun event(kind: String, fields: Map<String, Any?> = emptyMap()) {
+        if (closed.get()) return
         // D-08: one filter governs both the file and the logcat mirror; checked before any work
         if (!shouldWrite(level, kind, fields)) return
         val ts = OffsetDateTime.now().format(tsFormat)
@@ -195,6 +224,7 @@ class EvidenceLog(
      * within 2 s; false (after a warning) on any failure or timeout.
      */
     fun clear(): Boolean {
+        if (closed.get()) return false
         return try {
             executor.submit { rotating.clear() }.get(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
             true
@@ -206,6 +236,7 @@ class EvidenceLog(
 
     /** Drains queued writes (used before the service stops). */
     fun flush(timeoutMs: Long = 2000) {
+        if (closed.get()) return
         try {
             executor.submit {}.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (t: Throwable) {
@@ -222,17 +253,31 @@ class EvidenceLog(
     }
 
     companion object {
-        const val FILE_NAME = "spike-events.jsonl"
+        const val FILE_NAME = "dialup-events.jsonl"
         const val ROTATE_BYTES = 8L * 1024 * 1024
 
         /** How many rotated files are kept next to the current one. */
         const val KEEP_ROTATED = 2
+
+        private val lock = Any()
+        private var instance: EvidenceLog? = null
+
+        /**
+         * The process-wide log (CR-01): the same directory returns the existing live instance, a different directory closes the
+         * previous one and opens a new one, so a service restart or the Settings tab never starts a second writer.
+         */
+        fun shared(dir: File, logcat: ((String) -> Unit)? = null, monoNanos: (() -> Long)? = null): EvidenceLog = synchronized(lock) {
+            val current = instance
+            if (current != null && !current.isClosed && current.dir == dir) return current
+            current?.close()
+            val created = when {
+                logcat == null && monoNanos == null -> EvidenceLog(dir)
+                logcat == null -> EvidenceLog(dir, monoNanos = monoNanos!!)
+                monoNanos == null -> EvidenceLog(dir, logcat = logcat)
+                else -> EvidenceLog(dir, monoNanos = monoNanos, logcat = logcat)
+            }
+            instance = created
+            created
+        }
     }
 }
-
-/**
- * Deletes the event log and its rotated files (fixed names only), for when no service writes the log; a running service clears
- * through its own writer thread with [EvidenceLog.clear]. Returns how many existed.
- */
-fun clearEventLogFiles(dir: File): Int =
-    RotatingFile(dir, EvidenceLog.FILE_NAME, EvidenceLog.ROTATE_BYTES, EvidenceLog.KEEP_ROTATED).clear()

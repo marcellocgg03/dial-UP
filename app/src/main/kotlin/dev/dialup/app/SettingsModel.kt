@@ -59,7 +59,7 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
 
     /** One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping. */
     private val offlineUpdater: YtDlpUpdater by lazy {
-        val log = evidence() ?: EvidenceLog(logDirFor(app.getExternalFilesDir(null), app.filesDir).first)
+        val log = evidence() ?: EvidenceLog.shared(eventLogDir(app.filesDir))
         YtDlpUpdater(
             gateway = AndroidYtDlpGateway(app, log),
             channel = { settings.data.value.ytdlpChannel ?: loadAppConfig(app.filesDir).config.ytdlpChannel },
@@ -84,8 +84,7 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
                 if (done) evidence.event("log-cleared", mapOf("source" to "settings"))
                 done
             } else {
-                clearEventLogFiles(logDirFor(app.getExternalFilesDir(null), app.filesDir).first)
-                true
+                EvidenceLog.shared(eventLogDir(app.filesDir)).clear()
             }
         }
 
