@@ -5,7 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -29,7 +29,9 @@ class DownloadException(message: String, val forbidden: Boolean) : Exception(mes
  * new), next to [target]. Whatever is already at that path, a leftover or a symlink somebody planted, is removed
  * first and never written through (T-03-22, T-03-23). The file is deleted afterwards whether the download worked or not.
  *
- * One attempt only: retries with a fresh extraction belong to [FileBuilder].
+ * One attempt only: retries with a fresh extraction belong to [FileBuilder]. Reaching [timeoutMs] is an error
+ * ([DownloadException]), not a cancellation, so the builder retries and finally reports it; a cancellation or an
+ * outer time limit from the caller still propagates as a cancellation (WR-02).
  */
 class YtDlpSourceDownloader(
     private val gateway: YtDlpGateway,
@@ -47,7 +49,10 @@ class YtDlpSourceDownloader(
             } else {
                 downloadCall(videoId, target.path, cacheDir)
             }
-            val result = withTimeout(timeoutMs) { runInterruptible(Dispatchers.IO) { gateway.run(call) } }
+            // withTimeoutOrNull, never a catch of TimeoutCancellationException: an outer limit (the file builder's
+            // build limit) must still arrive as a cancellation, only this downloader's own limit becomes an error.
+            val result = withTimeoutOrNull(timeoutMs) { runInterruptible(Dispatchers.IO) { gateway.run(call) } }
+                ?: throw DownloadException("yt-dlp download timed out after $timeoutMs ms for $videoId", forbidden = false)
             if (result.exitCode != 0) {
                 val tail = lastLines(result.stderrTail)
                 throw DownloadException(
