@@ -1,6 +1,6 @@
 package dev.t2u.renderer
 
-// Track-end handling of plan 03-09 (PLAY-06/07, ROADMAP criteria 1 and 2: "plays through"), driven against the
+// Track-end handling of plan 03-09 (PLAY-06/07, the "plays through" criteria), driven against the
 // upnp FakeRenderer. GPL-3.0-only.
 //
 // Kotlin additions over Node (plan 03-12 copies these into PARITY.md "Adaptations"):
