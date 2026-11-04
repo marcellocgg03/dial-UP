@@ -214,6 +214,9 @@ class MediaServer(
 
     private var server: EmbeddedServer<*, *>? = null
 
+    /** True while an engine is bound and accepting; false before [start], after [stop] and after a [rebindHost] whose bind failed (WR-05). */
+    @Volatile private var listening = false
+
     @Volatile private var boundPort: Int = port
     private val tokens = LinkedHashMap<String, StreamEntry>()
     private val random = SecureRandom()
@@ -268,6 +271,7 @@ class MediaServer(
                 ?: BindException("media server cannot bind $bindHost:$bindPort: ${cause.message}").also { it.initCause(cause) }
         }
         server = s
+        listening = true
     }
 
     private fun requireBindable(bindHost: String, bindPort: Int) {
@@ -286,11 +290,12 @@ class MediaServer(
      * the registered tokens, the pins on cached files, the range cache and the file builder are kept, so a stream URL a
      * speaker was given before the move still answers after it. [stop] is never used to rebind, because it clears the range
      * cache, releases every pin and closes the file builder, which would 404 the track that is playing. A bind failure
-     * propagates and leaves the server not listening ([isRunning] stays true, so the call can be repeated).
+     * propagates and leaves the server not listening ([isListening] is false, [isRunning] stays true, so the call can be repeated).
      */
     fun rebindHost(newHost: String) {
         check(server != null) { "not started" }
         val keepPort = boundPort
+        listening = false
         // [server] keeps pointing at the stopped engine until the new one is up, so a failed bind can be retried
         server?.stop(200, 1000)
         host = newHost
@@ -298,6 +303,7 @@ class MediaServer(
     }
 
     fun stop() {
+        listening = false
         server?.stop(200, 1000)
         server = null
         rangeCache?.clear()
@@ -305,7 +311,11 @@ class MediaServer(
         files?.close()
     }
 
+    /** Only says the server object was started and not stopped. After a failed [rebindHost] it stays true; [isListening] is the truth about the socket. */
     fun isRunning(): Boolean = server != null
+
+    /** True while the socket is bound and accepting. A housekeeping pass rebinds a running server that is not listening (WR-05). */
+    fun isListening(): Boolean = listening
 
     /** Node `clearCache`: deletes every cached built and source file and returns how many went. */
     fun clearCache(): Int = files?.clear() ?: 0

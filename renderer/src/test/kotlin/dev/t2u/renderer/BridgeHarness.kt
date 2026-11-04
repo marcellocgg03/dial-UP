@@ -263,6 +263,8 @@ internal class BridgeHarness(
         manualSsdpGraceMs: Long? = null,
         // null: no renderer-names store (GUI rename), so nothing is ever renamed
         names: RendererNames? = null,
+        // null: leave BridgeDeps' own default (1 s, 2 s, 4 s) in place
+        mediaRebindBackoffMs: List<Long>? = null,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -289,6 +291,7 @@ internal class BridgeHarness(
             manualDescriptionUrl = manualDescriptionUrl ?: ::sonosDescriptionUrl,
             manualSsdpGraceMs = manualSsdpGraceMs ?: MANUAL_SSDP_GRACE_MS,
             names = names,
+            mediaRebindBackoffMs = mediaRebindBackoffMs ?: MEDIA_REBIND_BACKOFF_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

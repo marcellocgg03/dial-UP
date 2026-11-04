@@ -176,6 +176,11 @@ data class BridgeDeps(
      * while the bridge is off. Null renames nothing ([Bridge.rename] answers false).
      */
     val names: RendererNames? = null,
+    /**
+     * WR-05: the waits between the attempts to rebind the media server on a new address. A busy address is tried again after
+     * each delay (so [Bridge.rebindNetwork] makes up to one more attempt than there are delays); an empty list tries once.
+     */
+    val mediaRebindBackoffMs: List<Long> = MEDIA_REBIND_BACKOFF_MS,
 )
 
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
@@ -187,6 +192,13 @@ private const val DROP_LOG_WINDOW_MS = 60_000L
  * sends it.
  */
 const val HOUSEKEEPING_INTERVAL_MS = 300_000L
+
+/**
+ * WR-05: the waits between the media-server rebind attempts after a Wi-Fi move. The old Wi-Fi address can still be held for a
+ * second or two (TIME_WAIT, a socket the system has not released), so a single failed bind is retried before it is given up;
+ * a server that is still down after the last wait is rebound by the next housekeeping pass.
+ */
+val MEDIA_REBIND_BACKOFF_MS: List<Long> = listOf(1_000L, 2_000L, 4_000L)
 
 /** How many sources the per-address reply record holds (GUI-04, T-07-32); the oldest goes when a new source arrives at the cap. */
 private const val MANUAL_REPLY_CAP = 64
@@ -1242,6 +1254,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         if (rebuild && repairResponder(trigger)) repairs++
         if (clientFailed && repairClient(trigger)) repairs++
+        if (repairMedia(trigger)) repairs++
         return repairs
     }
 
@@ -1381,7 +1394,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * address, every running receiver's DIAL server moved by [YouTubeCastReceiver.rebindDial]. Renderers, players and lounge
      * sessions stay, so the phone's cast session survives, and nothing is cleared on any speaker. Each step is isolated, so
      * one failure leaves the rest moved and logged. A move onto the same address runs the same path. Does nothing unless
-     * the bridge is running; never retries (D-05) and is only called on network events (D-06).
+     * the bridge is running and is only called on network events (D-06). It does not retry (D-05) with one exception: the
+     * media bind is tried again after [BridgeDeps.mediaRebindBackoffMs] (WR-05), and a media server that is still down
+     * afterwards is rebound by housekeeping ([repairMedia]).
      */
     suspend fun rebindNetwork(newNet: BridgeNetwork) {
         netLock.withLock {
@@ -1394,7 +1409,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             val oldClient = ssdp
 
             // the media server first: URLs built after the move must point at a server that answers; tokens are kept
-            step("media", "rebind") { withContext(Dispatchers.IO) { mediaServer?.rebindHost(newIp) } }
+            step("media", "rebind") { rebindMedia(newIp) }
             // a stopped responder is never left installed: the field is cleared as soon as the old one is stopped, and only a
             // replacement that started is assigned (review WR-03); housekeeping rebuilds what a failed step leaves missing
             step("responder-stop", "rebind") {
@@ -1440,6 +1455,62 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             networkDown = false
             emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
         }
+    }
+
+    /**
+     * WR-05: moves the media server to [host], trying again after each [BridgeDeps.mediaRebindBackoffMs] delay when the bind
+     * fails. One `media-rebind` event per attempt. The last failure is rethrown, so [step] logs it as before. The caller holds
+     * [netLock], which a retry holds for the length of the waits.
+     */
+    private suspend fun rebindMedia(host: String) {
+        val media = mediaServer ?: return
+        val waits = deps.mediaRebindBackoffMs
+        var attempt = 0
+        while (true) {
+            attempt++
+            try {
+                withContext(Dispatchers.IO) { media.rebindHost(host) }
+                emit("media-rebind", "attempt" to attempt, "ok" to true)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                emit("media-rebind", "attempt" to attempt, "ok" to false, "error" to t.javaClass.simpleName)
+                if (attempt > waits.size || stopped.get()) throw t
+                delay(waits[attempt - 1])
+                if (stopped.get()) return
+            }
+        }
+    }
+
+    /**
+     * WR-05: rebinds a media server that is running but not listening (a move whose bind kept failing) on the bridge's own
+     * address. Does nothing when there is no media server or it is listening; skipped when the system address differs from the
+     * bridge's (T-05-50: that is the rebind's job). The caller holds [netLock]. Returns true when a rebind was attempted.
+     */
+    private suspend fun repairMedia(trigger: String): Boolean {
+        val media = mediaServer ?: return false
+        if (media.isListening()) return false
+        if (addressChanged()) {
+            emit("media-repair", "skipped" to "address-changed", "trigger" to trigger)
+            return false
+        }
+        val host = net.wifiIp.hostAddress.orEmpty()
+        var error: String? = null
+        try {
+            withContext(Dispatchers.IO) { media.rebindHost(host) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("repair:media", t)
+            error = t.javaClass.simpleName
+        }
+        val fields = ArrayList<Pair<String, Any?>>()
+        fields.add("ok" to (error == null))
+        fields.add("trigger" to trigger)
+        if (error != null) fields.add("error" to error)
+        emit("media-repair", *fields.toTypedArray())
+        return true
     }
 
     /** Tests only: the current SSDP client, so a test can break it the way a failed rebind step or bind does. */
