@@ -22,6 +22,15 @@ android {
         }
     }
 
+    buildTypes {
+        release {
+            // D-06: the app depends on youtubedl-android payloads and Ktor engines that load classes by name, and
+            // nothing has proven them under R8, so the beta ships unminified. Revisit after 1.0.
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

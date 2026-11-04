@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <!-- Debug builds only (CR-02). Exported so `adb shell am broadcast` can reach it, but guarded by DUMP, which
+             only the adb shell holds (threat T-01-01). Never remove the permission; if the shell is refused, switch
+             tools/spike.sh to the run-as command-file fallback (Plan 01-07). -->
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="dev.dialup.CMD" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

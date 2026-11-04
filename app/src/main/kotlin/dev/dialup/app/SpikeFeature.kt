@@ -34,9 +34,9 @@ interface SpikeHost {
 }
 
 /**
- * One feature of the service. [CastFeature] is the product: it runs the cast bridge. [ResolverFeature] and
- * [MediaFeature] are adb diagnostics from Phase 1 (resolve timings, ffmpeg pipes); the media diagnostic listens on
- * its own port 8100, so it never collides with the bridge's media server.
+ * One feature of the service. [CastFeature] is the product: it runs the cast bridge. The resolver and media features
+ * (resolve timings, ffmpeg pipes; the media diagnostic listens on its own port 8100) and the adb command channel are
+ * Phase 1 diagnostics that exist in debug builds only; release builds ship [CastFeature] alone ([DebugFeatures]).
  *
  * Originally one wave-3 plan filled one feature. A feature is started in the service's onCreate and stopped in
  * onDestroy; commands named in [commands] reach [handle]; [state] is merged into state.json under [name].
@@ -56,5 +56,5 @@ interface SpikeFeature {
 }
 
 object SpikeFeatures {
-    fun all(): List<SpikeFeature> = listOf(CastFeature(), ResolverFeature(), MediaFeature())
+    fun all(): List<SpikeFeature> = listOf(CastFeature()) + DebugFeatures.all()
 }

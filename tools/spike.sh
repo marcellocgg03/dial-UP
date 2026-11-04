@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# adb wrapper for the Phase 1 spike. Per decision D-02 there is no GUI: this script is the only
+# adb wrapper for the Phase 1 spike. The adb command channel and the diagnostics exist in debug builds only
+# (CR-02): install app-debug.apk to use this script; a release APK has no CommandReceiver.
+# Per decision D-02 there is no GUI: this script is the only
 # way spike actions are triggered. Commands reach the running service through the DUMP-protected
 # CommandReceiver (`am broadcast` is ordered, so the reply comes back as the result data).
 set -euo pipefail
