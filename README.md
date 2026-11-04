@@ -41,3 +41,14 @@ Only arm64 devices are targeted. The APK is sideloaded; yt-dlp based apps are un
 ## Licence
 
 GPL-3.0-only, see `LICENSE`. Third-party components are listed in `THIRD_PARTY_NOTICES.md`.
+
+DialUP is a derivative of Tube2U[PnP] / upnpTube (GPL-3.0-only), so it is released under the same licence.
+The APK also bundles GPL-covered binaries (FFmpeg and ffprobe from the Termux build, and the youtubedl-android
+modules) together with CPython, QuickJS and yt-dlp.
+
+### Source offer
+
+- The source of DialUP is this repository; every release is tagged, and the tag matches the APK.
+- The source of the bundled binaries is linked, pinned to the exact versions, in `THIRD_PARTY_NOTICES.md`
+  (youtubedl-android tag `0.18.1`, FFmpeg 7.1.1, the Termux ffmpeg build recipe at commit `c7585599a9`).
+- If a link is unavailable, open an issue and the complete corresponding source will be provided.
