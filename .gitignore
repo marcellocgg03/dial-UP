@@ -10,13 +10,23 @@ local.properties
 tools/lounge-capture/node_modules/
 tools/lounge-capture/out/
 
-# Claude Code / GSD workflow files (kept local for now)
+# Signing material, byte code, build outputs, logs
+__pycache__/
+*.pyc
+*.jks
+*.keystore
+keystore.properties
+*.apk
+*.aab
+.env
+*.log
+captures/
+.DS_Store
+dist/
+soak-out/
+
+# Local development tooling files (never published)
 .claude/
 .gsd/
 .planning/
 CLAUDE.md
-*.md
-# ...except the project documents that are published
-!README.md
-!PARITY.md
-!THIRD_PARTY_NOTICES.md
