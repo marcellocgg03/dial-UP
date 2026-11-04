@@ -1,7 +1,7 @@
 package dev.t2u.lounge
 
 // Test fake of the InnerTube /youtubei/v1/next endpoint (CAST-04, CAST-05). A Ktor CIO server on 127.0.0.1 that serves
-// the hand-trimmed responses under resources/innertube/ (shapes recorded in 03-RESEARCH.md Pattern 1) and records every
+// the hand-trimmed responses under resources/innertube/ (shapes recorded from real responses) and records every
 // request. The handler under test gets [endpoints] instead of https://www.youtube.com.
 
 import io.ktor.http.ContentType
@@ -89,8 +89,8 @@ class FakeInnerTubeServer : AutoCloseable {
     }
 
     /**
-     * Scripts the answer for [videoId] in the shapes of the next-middle and next-last-item fixtures (03-RESEARCH.md
-     * Pattern 1), so the handler's real parser paths run. [index] is the index of [videoId] in its list: the previous
+     * Scripts the answer for [videoId] in the shapes of the next-middle and next-last-item fixtures,
+     * so the handler's real parser paths run. [index] is the index of [videoId] in its list: the previous
      * video gets index - 1 and the next one index + 1. With a [nextId] the answer is the middle shape (the next video
      * is also the autoplay video unless [autoplayId] names another). With only an [autoplayId] it is the last-item
      * shape: the next renderer is the maybeHistory endpoint (no playlist, no index) and the autoplay renderer the

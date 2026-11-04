@@ -469,7 +469,7 @@ class PlayerTest {
         assertEquals(1, got.size)
     }
 
-    // ---- autoplay chain (plan 03-04, RESEARCH Pitfall 3)
+    // ---- autoplay chain (plan 03-04)
 
     private fun vid(id: String, index: Int? = null) =
         Video(id, Client.YT, if (index != null) VideoContext("L", index) else null)

@@ -8,7 +8,7 @@ import java.util.Base64
 import java.util.Random
 
 /**
- * A locally generated InnerTube visitorData value (03-RESEARCH.md Pattern 1): a protobuf message with field 1 an
+ * A locally generated InnerTube visitorData value: a protobuf message with field 1 an
  * 11-character id and field 5 the Unix seconds, base64url encoded and then URL-encoded (the padding becomes %3D).
  * It is random, not linked to an account and not persisted; the server's own value replaces it after the first answer.
  */

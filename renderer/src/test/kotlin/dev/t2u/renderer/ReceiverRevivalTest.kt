@@ -1,6 +1,6 @@
 package dev.t2u.renderer
 
-// DISC-05 (plan 05-04, RESEARCH Pattern 4): a cast receiver that stopped itself after a lounge failure is given a
+// DISC-05 (plan 05-04): a cast receiver that stopped itself after a lounge failure is given a
 // new one by its renderer, 10 s later and then every 5 minutes until it starts. GPL-3.0-only.
 
 import dev.t2u.lounge.CastReceiver

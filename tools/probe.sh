@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tools/probe.sh -- run tools/probe.ps1 on the Windows host from WSL.
 #
-# WSL in mirrored networking mode cannot receive SSDP replies (RESEARCH Pitfall 1: Hyper-V firewall
+# WSL in mirrored networking mode cannot receive SSDP replies (Hyper-V firewall
 # default inbound Block), so the prober must run on the Windows host. PowerShell can refuse scripts on
 # \\wsl.localhost UNC paths, so the script is copied to the Windows %TEMP% first.
 #

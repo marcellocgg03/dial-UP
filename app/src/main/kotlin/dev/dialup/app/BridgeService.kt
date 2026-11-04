@@ -175,7 +175,7 @@ class BridgeService : Service(), SpikeHost {
         if (startForegroundFailed) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
             evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
-            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on (D-04, RESEARCH A1)
+            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on (D-04)
             AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
             evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
             NetworkResume.disarm(this)
@@ -202,7 +202,7 @@ class BridgeService : Service(), SpikeHost {
      */
     private fun bootstrap(reason: StartReason): Boolean {
         val exempt = BatteryGate.isOpen(this)
-        // D-04: the author's switch, persisted; a sticky restart after it went off is denied below (RESEARCH Pitfall 1)
+        // D-04: the author's switch, persisted; a sticky restart after it went off is denied below
         val enabled = AppSettings.of(this).data.value.bridgeEnabled
         evidence.event(
             "service-start",

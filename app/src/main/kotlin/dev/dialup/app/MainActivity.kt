@@ -109,7 +109,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * The notifications banner's Grant: the system dialog, or after a denial for good the app's notification
-     * settings page, because a request then returns at once without asking (RESEARCH Pitfall 6).
+     * settings page, because a request then returns at once without asking.
      */
     private fun grantNotifications() {
         val action = notificationGrantAction(

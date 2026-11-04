@@ -68,7 +68,7 @@ interface BridgePort {
     suspend fun restart(source: String): Boolean
 }
 
-/** The settings the tab changes, and whether the running bridge needs a restart to pick the change up (D-09, RESEARCH A2). */
+/** The settings the tab changes, and whether the running bridge needs a restart to pick the change up (D-09). */
 enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),

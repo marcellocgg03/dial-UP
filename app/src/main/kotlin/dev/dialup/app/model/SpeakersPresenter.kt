@@ -25,7 +25,7 @@ data class CardButtons(val playPause: PlayPause, val stop: Boolean, val previous
 private val NO_BUTTONS = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false, clear = false)
 
 /**
- * Enables a button only when its action can do something (RESEARCH Pattern 5): pause while playing; play while paused, or
+ * Enables a button only when its action can do something: pause while playing; play while paused, or
  * while stopped with something to play; stop while loading, playing or paused; previous and next from the queue's navigation
  * info; clear whenever the speaker is online. An offline speaker, or one whose last command is still running ([busy], Pitfall 9),
  * has every button off.
@@ -115,7 +115,7 @@ fun addRefusal(serviceUp: Boolean, bridgeUp: Boolean): String? = when {
 }
 
 /**
- * Sends card taps to [command] and keeps one command in flight per speaker (RESEARCH Pitfall 9: the Player has no mutex). A press
+ * Sends card taps to [command] and keeps one command in flight per speaker (the Player has no mutex). A press
  * for a speaker already in [busy] is dropped, so a double tap or a tap during a slow SOAP call sends one command; another speaker's
  * press runs in parallel. A command that throws still frees its card. Pure: no Android types.
  */

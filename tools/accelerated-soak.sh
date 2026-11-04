@@ -6,7 +6,7 @@
 # the adb drop caused by a Wi-Fi toggle does not stop it. Results are pulled afterwards.
 #
 #   tools/accelerated-soak.sh start [minutes=45] [every_min=5] [wifi_off_seconds=0 (0 = no toggle)]
-#   tools/accelerated-soak.sh pull   [outdir]     # waits for the end, pulls, summarises
+#   tools/accelerated-soak.sh pull   [outdir]     # waits for the end, pulls, summarises (default soak-out/soak-h0)
 #
 # Needs ANDROID_SERIAL or .t2u/device. Does not touch the battery state or install anything.
 set -euo pipefail
@@ -51,7 +51,7 @@ EOF
   sleep 3; adb shell "cat $DIR/events.txt; cat $DIR/mem.csv"
   ;;
 pull)
-  OUT=${2:-.planning/phases/05-unattended-background-running/evidence/soak-h0}
+  OUT=${2:-soak-out/soak-h0}
   mkdir -p "$OUT"
   until adb shell "test -e $DIR/done" 2>/dev/null; do sleep 30
     adb connect "$(adb mdns services 2>/dev/null | awk '/tls-connect/{print $NF}' | head -1)" >/dev/null 2>&1 || true

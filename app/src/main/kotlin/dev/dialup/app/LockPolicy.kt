@@ -5,7 +5,7 @@ package dev.dialup.app
 /** How long the Wi-Fi and wake locks stay held after the last speaker stops casting (D-16). */
 const val PLAY_LOCK_GRACE_MS = 60_000L
 
-/** Every wake lock acquire carries this timeout, re-armed by the heartbeat (RESEARCH Pitfall 9). */
+/** Every wake lock acquire carries this timeout, re-armed by the heartbeat. */
 const val WAKE_LOCK_TIMEOUT_MS = 600_000L
 
 /**
@@ -15,7 +15,7 @@ const val WAKE_LOCK_TIMEOUT_MS = 600_000L
  * track change or a queue advance that passes through a non-casting state does not drop them. The
  * grace starts at the last drop to 0; repeated idle counts do not move it.
  *
- * RESEARCH Pattern 2 finding: no Wi-Fi lock mode has an effect with the screen off on current
+ * Finding: no Wi-Fi lock mode has an effect with the screen off on current
  * Android, so the Wi-Fi lock stays for the screen-on benefit and the wake lock plus the battery
  * exemption carry screen-off playback. The multicast lock is not governed by this policy.
  */

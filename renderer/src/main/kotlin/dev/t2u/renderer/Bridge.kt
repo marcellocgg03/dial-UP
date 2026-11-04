@@ -123,7 +123,7 @@ data class BridgeDeps(
     val innerTubeEndpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
     val sourceDownloader: SourceDownloader? = null,
     val upstreamPolicy: UpstreamPolicy = UpstreamPolicy.GOOGLEVIDEO,
-    /** Wall clock in ms: it keeps counting while the CPU sleeps, unlike delay and nanoTime (RESEARCH Pitfall 3). Tests inject one. */
+    /** Wall clock in ms: it keeps counting while the CPU sleeps, unlike delay and nanoTime. Tests inject one. */
     val clock: () -> Long = System::currentTimeMillis,
     /** How often the bridge runs [Bridge.housekeeping] by itself while the CPU is awake. */
     val housekeepingIntervalMs: Long = HOUSEKEEPING_INTERVAL_MS,
@@ -322,7 +322,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
 
-    /** Derived from the renderers' player status on every change, never counted by events (RESEARCH Pitfall 11). */
+    /** Derived from the renderers' player status on every change, never counted by events. */
     val castCount: StateFlow<BridgeCount> = _castCount.asStateFlow()
 
     private val _speakers = MutableStateFlow<List<SpeakerUi>>(emptyList())
@@ -385,7 +385,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /**
      * GUI-03, D-08: drops the speaker [udn] as a DIAL target at once and keeps it out until [unhide]. The speaker joins the
      * hidden set first, so every guard (alive, retry, a setup in flight) refuses it before the receiver goes; then a playing
-     * speaker is stopped (and emptied only when clear-when-cast-ends is on, RESEARCH A7) and its receiver stopped, which sends
+     * speaker is stopped (and emptied only when clear-when-cast-ends is on) and its receiver stopped, which sends
      * ssdp:byebye, closes its DIAL port and ends the lounge session. The other speakers are not touched. A saved renderer that
      * does not answer (no running speaker, but an entry in manual.json) is hidden too (PD-3): there is nothing to stop, its greyed
      * card leaves the list, and its probes go on while the registry's hidden guard refuses their answers. False when there is
@@ -513,7 +513,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-04, D-07, RESEARCH Pitfall 5: once per [BridgeDeps.manualProbeIntervalMs] decides for every saved speaker whether it
+     * GUI-04, D-07: once per [BridgeDeps.manualProbeIntervalMs] decides for every saved speaker whether it
      * answered since the previous round (any search reply or NOTIFY from its address counts, see [noteReply]); a speaker that
      * missed two rounds in a row is removed from the registry, so it stops being a cast target, and a later answer sets it up
      * again through the registry's ordinary alive path. Then every saved speaker is asked again, which is also what keeps a
@@ -805,7 +805,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder keeps its
         // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
         // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
-        // directory itself (RESEARCH Pitfall 7). The media server owns the builder's lifetime.
+        // directory itself. The media server owns the builder's lifetime.
         val launcher = deps.launcher
         val bufferDir = deps.bufferDir
         val downloader = deps.sourceDownloader
@@ -993,7 +993,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * The responder's port-1900 listener already sees every NOTIFY, so those go to the SSDP client's onNotify instead of
-     * a second socket (RESEARCH Pattern 7). Datagrams are not logged one by one: a NOTIFY flood would drown the log.
+     * a second socket. Datagrams are not logged one by one: a NOTIFY flood would drown the log.
      */
     private fun responderEvents() = object : SsdpEvents {
         override fun onBind(specId: String, ok: Boolean, boundPort: Int, error: String?) =
@@ -1390,7 +1390,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * Moves the running bridge to [newNet] in place (SVC-04, RESEARCH Pattern 3): a new SSDP responder and client on the new
+     * Moves the running bridge to [newNet] in place (SVC-04): a new SSDP responder and client on the new
      * address, every running receiver's DIAL server moved by [YouTubeCastReceiver.rebindDial]. Renderers, players and lounge
      * sessions stay, so the phone's cast session survives, and nothing is cleared on any speaker. Each step is isolated, so
      * one failure leaves the rest moved and logged. A move onto the same address runs the same path. Does nothing unless
@@ -1520,7 +1520,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     fun ssdpPorts(): Map<String, Int> = responder?.boundPorts().orEmpty()
 
     /**
-     * One resolve so the first real cast does not pay the cold start of yt-dlp on top of the handshake (RESEARCH Pitfall 4).
+     * One resolve so the first real cast does not pay the cold start of yt-dlp on top of the handshake.
      * Returns the duration in ms, or -1 when the resolve failed (also logged). Never throws except on cancellation.
      */
     suspend fun warmUp(videoId: String): Long {

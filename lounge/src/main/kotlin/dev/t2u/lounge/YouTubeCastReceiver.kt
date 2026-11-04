@@ -4,7 +4,7 @@ package dev.t2u.lounge
 // (MIT, Copyright (c) Patrick Kan). One cast target per speaker: a DIAL server, the two lounge sessions and one SSDP
 // advertisement, with an identity (DIAL uuid, app pid, lounge screen and device IDs) that survives restarts (CAST-03).
 //
-// Kotlin addition (RESEARCH Pitfall 2): yt-cast-receiver picks a random uuid per start, which would make the phone see a
+// Kotlin addition: yt-cast-receiver picks a random uuid per start, which would make the phone see a
 // second cast target after every restart; the uuid is stored next to app.pid and mdxContext.
 
 import dev.t2u.dial.DialConfig

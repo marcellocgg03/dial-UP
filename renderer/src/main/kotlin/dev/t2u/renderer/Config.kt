@@ -73,11 +73,11 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
 
 /**
  * Runtime configuration with the Node defaults. Built in code, optionally overlaid by config.json
- * (see [parseConfigFile], SVC-07). RESEARCH Open Question 3 / A1: the Docker server runs on another
+ * (see [parseConfigFile], SVC-07). The Docker server runs on another
  * host, so the Node ports (DIAL 3000+, media 8000) do not collide.
  *
  * @property excludeServers case-insensitive SERVER-header substrings of devices that are never speakers
- *   (RESEARCH Open Question 5: the QuickShare NOTIFY flood). This is not the DISC-04 include/exclude
+ *   (the QuickShare NOTIFY flood). This is not the DISC-04 include/exclude
  *   filter, which is [nameFilter].
  * @property nameFilter DISC-04 include/exclude patterns on the friendly name; applied in Renderer.init (plan 03-06).
  * @property mp3Bitrate ffmpeg bitrate for the mp3 format.
@@ -105,7 +105,7 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  *   leaves the speaker as it is; when true the speaker's queue is cleared. Set only from the app's own settings
  *   (settings.json), never read from config.json; plan 07-07 reads it.
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
- *   cold yt-dlp start does not count (RESEARCH A8; plan 02-14 records the real first-cast timing).
+ *   cold yt-dlp start does not count (plan 02-14 records the real first-cast timing).
  */
 data class Config(
     val dataDir: File,

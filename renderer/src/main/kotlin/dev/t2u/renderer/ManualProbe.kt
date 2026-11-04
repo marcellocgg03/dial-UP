@@ -15,7 +15,7 @@ import java.net.URI
 /** The UDP port a speaker listens on for SSDP searches. */
 const val MANUAL_SSDP_PORT = 1900
 
-/** GUI-04, D-07: how often the bridge asks every saved manual speaker again (RESEARCH Pitfall 5: prune alone takes 45 minutes). */
+/** GUI-04, D-07: how often the bridge asks every saved manual speaker again (prune alone takes 45 minutes). */
 const val MANUAL_PROBE_INTERVAL_MS = 60_000L
 
 /** How long an add waits for the speaker to answer the probe and its description to load. */

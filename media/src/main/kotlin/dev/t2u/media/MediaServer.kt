@@ -176,14 +176,12 @@ data class MediaRequest(
  * Only `GET` and `HEAD` on `/stream/<32 lowercase hex>.<ext>` for a registered token are served; every other
  * path, method or token answers 404 (Node parity, and there is no route that takes a URL or a path, which
  * keeps the server from becoming an open proxy, threat T-01-14). Body lengths are set only through the
- * OutgoingContent content length: a Content-Length header written by hand is duplicated by Ktor CIO
- * (RESEARCH Pitfall 4).
+ * OutgoingContent content length: a Content-Length header written by hand is duplicated by Ktor CIO.
  *
  * [mp3Bitrate] and [ffmpegLogLevel] are the `mp3Bitrate` and `ffmpegLogLevel` config switches (plan 03-10): the caller
  * passes values that already passed `Config.validate`, so only a whitelisted name or a `NNNk` shape reaches ffmpeg.
  *
- * [bufferDir] is where HTTP/1.0 clients get ffmpeg output buffered first (they cannot parse chunked framing,
- * RESEARCH Pitfall 6).
+ * [bufferDir] is where HTTP/1.0 clients get ffmpeg output buffered first (they cannot parse chunked framing).
  *
  * Ranged GETs on video pipe tokens (plan 02-16, G4): the first response is always the live chunked stream, with no
  * length and no Accept-Ranges. While it streams, the bytes are also kept in a bounded file under
@@ -388,7 +386,7 @@ class MediaServer(
     override suspend fun prepare(entry: VideoEntry) {
         if (entry.format !in FILE_FORMATS) return
         val builder = files ?: throw IllegalStateException("no file builder: format ${entry.format} cannot be prepared")
-        // RESEARCH Pitfall 6: the total build time is bounded apart from the speaker's start clock. Giving up only
+        // The total build time is bounded apart from the speaker's start clock. Giving up only
         // stops waiting: the builder's shared job lives in its own scope, so a later prepare joins it.
         val done = withTimeoutOrNull(prepareTimeoutMs) { builder.ensure(entry.videoId, entry.format, entry.startAt) }
         if (done == null) {

@@ -66,7 +66,7 @@ fun fileBuildArgs(
 
 /**
  * Builds the complete files of the file formats ([FILE_FORMATS]) in [dir]. [ensure] returns when the file is
- * finished, so the renderer can finish the build before it hands the speaker a URL (RESEARCH Pitfall 6).
+ * finished, so the renderer can finish the build before it hands the speaker a URL.
  *
  * Jobs are coalesced per key and live in a private scope: one caller giving up does not cancel the build the
  * others wait for, and a failed job is forgotten so the next call tries again. Output goes to `.part` and is
@@ -279,7 +279,7 @@ class FileBuilder(
                 downloader.download(videoId, info, part)
                 check(isFinished(part)) { "the download left no file" }
                 withContext(Dispatchers.IO) { Files.move(part.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING) }
-                // RESEARCH Pattern 5: sources downloaded for the pipe rung are bounded by the same cap.
+                // Sources downloaded for the pipe rung are bounded by the same cap.
                 cache.prune(keep = setOf(dest.name), busy = ::isBusy)
                 emit("downloaded", videoId, "source", 0)
                 return dest

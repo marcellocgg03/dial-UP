@@ -69,7 +69,7 @@ class YtDlpUpdater(
     private val elapsedMs: (() -> Long)? = null,
     /** Longest single wait of [run]; the deadline is re-checked after each, so a long sleep cannot hide it. */
     private val maxPauseMs: Long = Long.MAX_VALUE,
-    /** True while a yt-dlp lookup runs: a due update waits for it (RESEARCH Pitfall 4). */
+    /** True while a yt-dlp lookup runs: a due update waits for it. */
     private val busy: () -> Boolean = { false },
     private val busyWaitMs: Long = 60_000L,
     private val busyMaxWaitMs: Long = 600_000L,
@@ -158,7 +158,7 @@ class YtDlpUpdater(
     /**
      * Sets the first deadline [startDelayMs] away, then updates at every deadline forever; it only ends by cancellation.
      * The wait is cut into pauses of at most [maxPauseMs] and the deadline is compared with the clock after each one, so
-     * with an elapsed clock a deadline that passed in deep sleep is caught at the next wake (RESEARCH Pitfall 3).
+     * with an elapsed clock a deadline that passed in deep sleep is caught at the next wake.
      */
     suspend fun run() {
         nextDueAt = now() + startDelayMs

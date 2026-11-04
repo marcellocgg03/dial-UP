@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/media-check.sh -- curl acceptance checks for the Phase 1 media server (SPK-05, RESEARCH Pattern 7).
+# tools/media-check.sh -- curl acceptance checks for the Phase 1 media server (SPK-05).
 #
 # Usage:
 #   tools/media-check.sh BASE_URL TOKENS_JSON [--orphan-cmd CMD]

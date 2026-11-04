@@ -172,7 +172,7 @@ abstract class Player {
         setStatusAndEmit(if (result) PlayerStatus.PLAYING else PlayerStatus.STOPPED, aid)
         if (result && hop) {
             // Playback already runs; look up the videos around the autoplay video so previous is no longer
-            // stale and the next autoplay video exists (RESEARCH Pitfall 3), then tell the listeners.
+            // stale and the next autoplay video exists, then tell the listeners.
             try {
                 queue.refreshAfterHop()
             } catch (e: CancellationException) {

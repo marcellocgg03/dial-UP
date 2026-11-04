@@ -10,7 +10,7 @@
 # verified before it is extracted; a mismatch deletes the download and exits 1.
 set -euo pipefail
 
-# ---- pins (see .planning/phases/01-.../01-RESEARCH.md, Standard Stack) -------------------
+# ---- pins -----------------------------------------------------------------------------
 JDK_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz"
 JDK_SHA256="ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94"
 JDK_VERSION="21.0.12.1"
@@ -189,7 +189,7 @@ else
   cp "$scratch/gradlew" "$REPO_ROOT/gradlew"
   cp "$scratch/gradle/wrapper/gradle-wrapper.jar" "$scratch/gradle/wrapper/gradle-wrapper.properties" "$REPO_ROOT/gradle/wrapper/"
   chmod +x "$REPO_ROOT/gradlew"
-  # gradlew.bat is deliberately not copied: development is WSL-only (CLAUDE.md); the wrapper
+  # gradlew.bat is deliberately not copied: development is WSL-only; the wrapper
   # task regenerates it if ever needed.
   actual="$(sha256sum "$REPO_ROOT/gradle/wrapper/gradle-wrapper.jar" | cut -d' ' -f1)"
   [ "$actual" = "$WRAPPER_JAR_SHA256" ] || die "gradle-wrapper.jar sha256 mismatch: expected $WRAPPER_JAR_SHA256, got $actual"

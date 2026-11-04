@@ -10,7 +10,7 @@ import dev.t2u.media.YtDlpCall
 import dev.t2u.media.YtDlpGateway
 
 /**
- * youtubedl-android 0.18.1 behind [YtDlpGateway] (the swap-out seam: CLAUDE.md keeps the library
+ * youtubedl-android 0.18.1 behind [YtDlpGateway] (the swap-out seam: the library stays
  * replaceable because upstream is stale). Never call from the main thread.
  *
  * Facts from the 0.18.1 classes (javap on library-0.18.1.aar, which differs slightly from master):

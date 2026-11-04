@@ -120,7 +120,7 @@ fun xmlEsc(s: String): String {
 
 /**
  * Drops code points outside the XML 1.0 Char production: controls below 0x20 except tab, LF and CR,
- * U+FFFE, U+FFFF and unpaired surrogates (RESEARCH Pitfall 10). A single such character in a title
+ * U+FFFE, U+FFFF and unpaired surrogates. A single such character in a title
  * makes the whole DIDL, and so the whole SetAVTransportURI, unparseable on the speaker.
  */
 fun stripInvalidXmlChars(s: String): String {

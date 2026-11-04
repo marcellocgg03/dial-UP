@@ -1,6 +1,6 @@
 # tools/probe.ps1 -- Windows-host SSDP/DIAL prober (matrix row 1 positive control, rows 5 and 6 timeline).
 #
-# Run from WSL via tools/probe.sh (WSL mirrored networking cannot receive SSDP replies, RESEARCH Pitfall 1), or directly:
+# Run from WSL via tools/probe.sh (WSL mirrored networking cannot receive SSDP replies), or directly:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File <winpath> -Target <phone-ip> -LoopSeconds 60 -Minutes 35
 #
 # Safety: this script only sends M-SEARCH datagrams and default HTTP GET requests (no explicit method
@@ -9,7 +9,7 @@
 # Output, one tab-separated line per probe:
 #   ISO-timestamp  mcast=N  ucast=N  from=ip,ip  ports=p,p  desc=...  app=...
 # mcast is the primary signal. ucast is diagnostic only: unicast to port 1900 reaches one of several
-# listeners (RESEARCH Pitfall 3), so a missing unicast reply does not prove a broken responder.
+# listeners, so a missing unicast reply does not prove a broken responder.
 param([int]$PortMin=3100,[int]$PortMax=3109,[string]$Target="",[int]$LoopSeconds=0,[int]$Minutes=1,
       [string]$ST="urn:dial-multiscreen-org:service:dial:1")
 

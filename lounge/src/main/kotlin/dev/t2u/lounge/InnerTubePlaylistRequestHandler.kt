@@ -41,7 +41,7 @@ import kotlin.coroutines.resumeWithException
  * body, a ctt or a visitorData (T-03-01).
  *
  * The recently-asked guard replaces markWatched (a /player call plus a stats ping, not reproducible anonymously) only
- * as far as stopping a two-video Mix loop (03-RESEARCH.md Pitfall 1): at the last queue item an autoplay candidate that
+ * as far as stopping a two-video Mix loop: at the last queue item an autoplay candidate that
  * was asked about in the last [InnerTubeConstants.RECENT_LIMIT] calls is dropped. It never applies to explicit
  * previous or next navigation inside a list.
  */

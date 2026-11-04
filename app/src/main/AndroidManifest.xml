@@ -58,7 +58,7 @@
             android:foregroundServiceType="connectedDevice" />
 
         <!-- BOOT_COMPLETED is a protected broadcast, so only the system can send it. Not exported (least
-             privilege); plan 05-12 checks on the phone that a non-exported receiver still gets it (RESEARCH A1). -->
+             privilege); plan 05-12 checks on the phone that a non-exported receiver still gets it. -->
         <receiver
             android:name=".BootReceiver"
             android:exported="false">

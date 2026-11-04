@@ -6,7 +6,7 @@ package dev.dialup.app
  * Event log level (decisions D-08, D-09). Pure JVM so the classifier runs in a unit test.
  *
  * INFO is the default: discovery, DIAL launches, lounge messages, playback, net and retry events.
- * DEBUG adds the per-packet noise. Measured volumes (RESEARCH Pattern 5): about 0.15 MB/h idle at
+ * DEBUG adds the per-packet noise. Measured volumes: about 0.15 MB/h idle at
  * info; about 1 MB/h would remain if lounge noops were kept at info, which is why they are debug.
  *
  * tools/cast-timeline.py counts successful media GETs from `http-req` events, so its media GET

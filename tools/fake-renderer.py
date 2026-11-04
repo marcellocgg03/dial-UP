@@ -8,7 +8,7 @@
 """Minimal UPnP MediaRenderer for the laptop: just enough SOAP for tools/sonos-play.sh.
 AVTransport + RenderingControl on :1400 (same paths as a Sonos), plays the URL with ffplay.
 Logs every request (method, UA, Range-less since ffplay fetches) so the phone's media log can be compared."""
-import re, subprocess, sys, threading, time
+import os, re, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 1400
@@ -79,7 +79,7 @@ def handle(action, body):
             stop()
             state["proc"] = subprocess.Popen(
                 ["ffplay", "-nodisp", "-autoexit", "-loglevel", "info", "-volume", str(state["volume"]), state["uri"]],
-                stdout=open("/tmp/claude-1000/ffplay.log", "ab"), stderr=subprocess.STDOUT)
+                stdout=open(os.path.join(tempfile.gettempdir(), "ffplay.log"), "ab"), stderr=subprocess.STDOUT)
             state["t0"] = time.time()
             return env('<u:PlayResponse xmlns:u="%s"/>' % AVT)
         if action == "Stop":

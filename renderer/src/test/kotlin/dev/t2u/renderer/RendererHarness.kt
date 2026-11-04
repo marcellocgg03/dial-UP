@@ -57,7 +57,7 @@ internal class HarnessReceiver : CastReceiver {
  * as Node's test resolver does); [prepareDelayFor] adds a delay to the prepare of a chosen entry on top of
  * [prepareDelayMs] (plan 04-02, the gapless tests).
  * The default config has `prefetch = false`: Node's test setup() omits PREFETCH, and the Config default (true) would
- * otherwise make every renderer that has a next video prepare it behind the test's back (RESEARCH Pitfall 6).
+ * otherwise make every renderer that has a next video prepare it behind the test's back.
  * [close] destroys the renderer.
  */
 internal class RendererHarness(

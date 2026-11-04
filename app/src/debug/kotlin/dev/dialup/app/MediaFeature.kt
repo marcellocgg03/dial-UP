@@ -27,8 +27,7 @@ import java.net.URI
  * `tools/media-check.sh` / `tools/sonos-play.sh` consume.
  *
  * Every request the server sees becomes an `http-req` event with `server":"media"`, the HTTP version, the Range
- * header and the User-Agent: that is how the Sonos' HTTP version, Range use and User-Agent get measured
- * (RESEARCH Open Question 3).
+ * header and the User-Agent: that is how the Sonos' HTTP version, Range use and User-Agent get measured.
  */
 class MediaFeature : SpikeFeature {
     override val name = "media"
@@ -229,7 +228,7 @@ class MediaFeature : SpikeFeature {
     }
 
     /**
-     * Registers every way of serving [pipe] (RESEARCH Pattern 7, inputs 1-3 reported separately):
+     * Registers every way of serving [pipe] (inputs 1-3 reported separately):
      * a direct file token when the source is an m4a, pipe tokens for ADTS (offered as three MIME types, since the
      * Sonos sink list has no AAC type, Pitfall 7) and MP3, and file-backed ADTS and MP3 tokens (complete file
      * first, Content-Length and Range) so a renderer that needs them can be tested whatever its HTTP version.

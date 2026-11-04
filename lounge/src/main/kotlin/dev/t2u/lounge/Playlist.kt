@@ -215,7 +215,7 @@ class Playlist {
     /**
      * Asks the handler about the autoplay video the player just hopped to. An autoplay video comes from
      * the handler and has no playlist index, so the normal refresh would skip it and leave previous
-     * stale and next empty after the first hop (RESEARCH Pitfall 3); this one is forced.
+     * stale and next empty after the first hop; this one is forced.
      */
     suspend fun refreshAfterHop() {
         refreshPreviousNext(force = true)

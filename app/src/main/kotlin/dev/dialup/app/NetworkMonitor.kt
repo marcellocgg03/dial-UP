@@ -15,7 +15,7 @@ import java.net.Inet4Address
  * Logs every Wi-Fi network event as a `net` evidence line and calls [onChange] (with the event name)
  * whenever the phone's current Wi-Fi IPv4 address (a [WifiAddressTracker] over all Wi-Fi networks, so the loss of a
  * network that is not the current one changes nothing, review WR-04) differs from the last one seen, including going
- * to none and coming back (RESEARCH Pitfall 9: without this, matrix row 6 would measure the spike and not Android).
+ * to none and coming back (without this, matrix row 6 would measure the spike and not Android).
  * [seed] sets the address the owner is currently bound to so the initial callbacks cause no rebind.
  */
 class NetworkMonitor(
@@ -90,7 +90,7 @@ class NetworkMonitor(
 
     /**
      * True as soon as a Wi-Fi network has NET_CAPABILITY_VALIDATED (checked every 500 ms), false at [timeoutMs]. A LAN
-     * without internet never validates, so the caller moves anyway after the timeout (RESEARCH Pitfall 8).
+     * without internet never validates, so the caller moves anyway after the timeout.
      */
     suspend fun awaitValidated(timeoutMs: Long): Boolean = withContext(Dispatchers.IO) {
         val manager = cm ?: return@withContext false

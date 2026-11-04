@@ -31,7 +31,7 @@ interface NetworkStateSource {
 
 /**
  * Implemented by every feature that knows about speakers (the cast feature of plan 02-13). The count
- * is derived from feature state, never incremented or decremented by events (RESEARCH Pitfall 11).
+ * is derived from feature state, never incremented or decremented by events.
  */
 interface CastCountSource {
     val castCount: StateFlow<CastCount>

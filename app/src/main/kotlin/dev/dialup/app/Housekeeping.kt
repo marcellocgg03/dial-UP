@@ -1,6 +1,6 @@
 package dev.dialup.app
 
-// Plan 05-11: the idle-time heartbeat of the bridge's housekeeping (RESEARCH Pattern 6). Coroutine timers stall when the
+// Plan 05-11: the idle-time heartbeat of the bridge's housekeeping. Coroutine timers stall when the
 // CPU sleeps, and since plan 05-09 the wake lock is held only while casting, so one AlarmManager alarm wakes the phone
 // every few minutes, runs CastFeature.housekeeping and sets the next alarm. GPL-3.0-only.
 

@@ -191,7 +191,7 @@ class SsdpResponder(
 
     /**
      * Sends ssdp:byebye for one device's five DIAL notification types, then removes it. Sent whatever
-     * [announcePolicy] says: a byebye only removes cache entries (RESEARCH Pitfall 12).
+     * [announcePolicy] says: a byebye only removes cache entries.
      */
     fun withdraw(uuid: String) {
         val device = devices.firstOrNull { it.uuid == uuid } ?: return

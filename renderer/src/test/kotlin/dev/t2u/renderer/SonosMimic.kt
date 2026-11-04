@@ -3,9 +3,8 @@ package dev.t2u.renderer
 // A software Sonos speaker for the G4 end-to-end test (quick task 261021-c6t), GPL-3.0-only.
 //
 // Built on the shared upnp FakeRenderer (its SOAP side, device description and state) plus one raw-socket HTTP
-// client that behaves the way the SYMFONISK Lamp did in the device logs
-// (.planning/phases/02-first-cast-plays-on-a-speaker/evidence/g4-planning/early-pause-events.jsonl and
-// evidence/session-b/lamp-session-events.jsonl):
+// client that behaves the way the SYMFONISK Lamp did in the recorded
+// device logs (early-pause events and a full Lamp session):
 //
 //  * SetAVTransportURI + Play: one plain GET of the token URL (no Range); the whole body is consumed at once
 //    (the Lamp held the full 3-4.7 MB track within about a second) and the speaker reports PLAYING with the first

@@ -5,7 +5,7 @@ package dev.t2u.renderer
 // Per-renderer persistent store. yt-cast-receiver's DefaultDataStore uses one shared directory, so
 // every receiver in the process would read the same 'app.pid' / screenId and casts would land on the
 // wrong speaker. Each speaker therefore gets its own directory. node-persist (one file per key) is
-// replaced by one JSON object per speaker, as CLAUDE.md recommends.
+// replaced by one JSON object per speaker (plain JSON files, no database).
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex

@@ -4,7 +4,7 @@ package dev.t2u.renderer
 
 // GUI-03 (plan 07-11, D-08): Hide on a speaker's card drops its cast target at once and keeps it out. The receiver stops
 // (ssdp:byebye, DIAL port closed), the hidden set persists in hidden.json, a speaker that is mid-cast is stopped and its
-// lounge session ended, and the speaker is emptied only when clear-when-cast-ends is on (RESEARCH A7).
+// lounge session ended, and the speaker is emptied only when clear-when-cast-ends is on.
 //
 // Every test is `= h.run<Unit> { ... }`: JUnit silently skips a test whose expression body returns a value.
 

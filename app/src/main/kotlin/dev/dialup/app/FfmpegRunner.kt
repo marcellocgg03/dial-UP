@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Starts the youtubedl-android ffmpeg (`libffmpeg.so` in nativeLibraryDir) with the environment it needs:
  *  - `LD_LIBRARY_PATH` = python lib dir + ffmpeg lib dir, because `libc++_shared.so` exists only in the python
- *    payload (RESEARCH Pitfall 5, youtubedl-android issue 369);
+ *    payload (youtubedl-android issue 369);
  *  - `SSL_CERT_FILE` = the python payload's cert bundle, so ffmpeg can read https inputs;
  *  - `TMPDIR` = [cacheDir].
  *

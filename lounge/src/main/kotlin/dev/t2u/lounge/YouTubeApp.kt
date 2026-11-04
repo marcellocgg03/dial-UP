@@ -4,7 +4,7 @@ package dev.t2u.lounge
 // The lounge app: two sessions (YouTube `cl`, YouTube Music `m`), sender messages turned into player calls, player
 // state turned into messages to the sender, sender tracking, session switching, mute and autoplay policy.
 //
-// CLAUDE.md protocol-risk constraint: message names and payload keys the sender uses are handled in this one file.
+// Protocol-risk constraint: message names and payload keys the sender uses are handled in this one file.
 
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.NoEvents

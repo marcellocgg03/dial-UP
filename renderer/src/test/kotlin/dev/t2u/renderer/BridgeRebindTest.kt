@@ -1,7 +1,7 @@
 package dev.t2u.renderer
 
 // SVC-04 (plan 05-07): Bridge.rebindNetwork moves a running bridge to a new address without rebuilding it. Loopback
-// stands in for Wi-Fi: 127.0.0.1 is the old address, 127.0.0.2 the new one (both bindable in WSL, RESEARCH A5); a socket
+// stands in for Wi-Fi: 127.0.0.1 is the old address, 127.0.0.2 the new one (both bindable in WSL); a socket
 // bound to one of them refuses connections on the other. GPL-3.0-only.
 //
 // Every test is `= h.run<Unit> { ... }`: JUnit silently skips a test whose expression body returns a value.

@@ -4,7 +4,7 @@ package dev.t2u.lounge
 // (MIT, Copyright (c) Patrick Kan). The lounge transport for one client theme (YouTube `cl` or
 // YouTube Music `m`): screen id, lounge token, bind init POST, then the RPC long-poll.
 //
-// CLAUDE.md protocol-risk constraint: the lounge protocol is undocumented, so this code stays in its own module,
+// Protocol-risk constraint: the lounge protocol is undocumented, so this code stays in its own module,
 // reads protocol constants from Constants.kt and (from the logging step on) reports every message through LoungeLog.
 
 import dev.t2u.upnp.EventSink

@@ -161,7 +161,7 @@ internal const val NETWORK_RESET_STEP_MS = 100L
 
 /**
  * Polls a STOPPED reading at the end of a track is waited out while the speaker already holds the queued stream, before the
- * queue advances the normal way (plan 04-06, RESEARCH Pitfall 10): a Sonos may report STOPPED for a moment as it switches.
+ * queue advances the normal way (plan 04-06): a Sonos may report STOPPED for a moment as it switches.
  */
 internal const val GAPLESS_STOP_GRACE_POLLS = 3
 
@@ -544,8 +544,8 @@ class Renderer(
     @Volatile private var advanced: Queued? = null
 
     /**
-     * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream (plan 04-06,
-     * RESEARCH Pitfall 10). Touched only by the poll; reset by [adopt] and by any poll that reads PLAYING.
+     * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream (plan 04-06).
+     * Touched only by the poll; reset by [adopt] and by any poll that reads PLAYING.
      */
     private var stopGracePolls = 0
 
@@ -554,7 +554,7 @@ class Renderer(
 
     private val prefetchBackoff = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
 
-    /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one (RESEARCH Pitfall 1). */
+    /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one. */
     private val prefetching = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** This speaker's persistent store, created in [init] and shared with the cast receiver. */
@@ -1040,7 +1040,7 @@ class Renderer(
     /**
      * Keeps the next track prepared while this one plays (renderer.js `#maintainNext`, D-05). Called from the poll, so it only
      * launches: the preparing can take many seconds (a download, an ffmpeg build) and runs in its own coroutine, one at a time,
-     * so the poll keeps detecting the track end, the start failure and drift meanwhile (RESEARCH Pitfall 1, D-16).
+     * so the poll keeps detecting the track end, the start failure and drift meanwhile (D-16).
      * While a playlist refresh is in flight the queue's next is empty, so nothing is done then (it would read as end of queue).
      */
     private fun maintainNext() {
@@ -1079,7 +1079,7 @@ class Renderer(
         val held = queued
         if (held?.video?.id == upcoming.id) {
             // An unclear SetNextAVTransportURI failure (a bare 500, a timeout) is tried again from the next polls, at most 3
-            // attempts per queued track (RESEARCH Pitfall 7). A classified refusal made gaplessSupported false, so it is not retried.
+            // attempts per queued track. A classified refusal made gaplessSupported false, so it is not retried.
             if (!held.sentToRenderer && held.sendAttempts < 3 && config.prefetch && config.gapless && gaplessSupported != false) {
                 sendNextToRenderer(held)
             }
@@ -1282,7 +1282,7 @@ class Renderer(
     /**
      * Make [item] the current track after the speaker was told to play it. With [alreadyPlaying] (a gapless switch) the speaker
      * has been playing it since before we noticed: it counts as played at once, so its position is the speaker's, the drift check
-     * is on and the start watchdog has nothing to wait for (RESEARCH Pitfall 4).
+     * is on and the start watchdog has nothing to wait for.
      */
     private fun adopt(item: PreparedItem, alreadyPlaying: Boolean = false) {
         item.current.loadedAt = deps.clock()
@@ -2237,7 +2237,7 @@ class Renderer(
     /**
      * Has the speaker moved on to the track it was given with SetNextAVTransportURI? Returns the field that showed it ("TrackURI",
      * or "GetMediaInfo.CurrentURI" when the position info has none), else null. The speaker's URI is compared with
-     * `contains(streamPath)`, never equality: speakers rewrite host or escaping (RESEARCH Pattern 2). The URI itself is never returned.
+     * `contains(streamPath)`, never equality: speakers rewrite host or escaping. The URI itself is never returned.
      */
     private suspend fun rendererAdvancedVia(): String? {
         val q = queued

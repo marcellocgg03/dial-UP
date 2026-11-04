@@ -28,7 +28,7 @@ fun trackLines(track: NowPlaying): Pair<String, String?> {
 
 /**
  * Where the track is at [nowMs], from the last reported [p]: the report plus the elapsed time while [playing], clamped to the
- * duration when there is one. A clock before the report gives the reported position (RESEARCH Pitfall 8: no extra SOAP calls).
+ * duration when there is one. A clock before the report gives the reported position (no extra SOAP calls).
  */
 fun positionAt(p: SpeakerPosition, nowMs: Long, playing: Boolean): Double {
     if (!playing || nowMs <= p.atMs) return p.positionSec

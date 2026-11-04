@@ -4,7 +4,7 @@ package dev.t2u.upnp
 //
 // The SSDP client: M-SEARCH from one search socket per LAN address, plus NOTIFY dispatch. ssdp.js owns
 // a second socket on port 1900 for NOTIFY; here the responder's existing 1900 listener already sees
-// every NOTIFY, so the app feeds those into [Ssdp.onNotify] (RESEARCH Pattern 7: no second 1900 socket).
+// every NOTIFY, so the app feeds those into [Ssdp.onNotify] (no second 1900 socket).
 // parseMessage lives in SsdpMessage.kt, shared with the responder.
 
 import java.net.DatagramPacket

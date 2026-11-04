@@ -4,7 +4,7 @@ package dev.t2u.lounge
 // lib/app/Session.js, lib/app/RPCConnection.js and lib/app/YouTubeApp.js
 // (MIT, Copyright (c) Patrick Kan).
 //
-// CAST-08 / CLAUDE.md protocol-risk constraint: the YouTube lounge protocol is undocumented and can
+// CAST-08 / protocol-risk constraint: the YouTube lounge protocol is undocumented and can
 // change without notice, so every protocol constant (URLs, bind parameters, device info, client
 // themes, player status codes, store keys, timeouts, user agent) lives in this one file. A protocol
 // change is a one-file diff.
@@ -23,13 +23,13 @@ class LoungeEndpoints(val base: String = "https://www.youtube.com") {
 
 /**
  * The InnerTube API URLs. [base] is injectable so tests can point the handler at a fake /next server.
- * Source of every value here and in [InnerTubeConstants]: 03-RESEARCH.md Pattern 1.
+ * Every value here and in [InnerTubeConstants] was recorded from the response shapes the TVHTML5 client sees.
  */
 class InnerTubeEndpoints(val base: String = "https://www.youtube.com") {
     val next: String = "$base/youtubei/v1/next?prettyPrint=false&alt=json"
 }
 
-/** The TVHTML5 client identity and limits of the InnerTube /next call (03-RESEARCH.md Pattern 1). */
+/** The TVHTML5 client identity and limits of the InnerTube /next call. */
 object InnerTubeConstants {
     const val CLIENT_NAME = "TVHTML5"
     const val CLIENT_NAME_ID = "7"
@@ -42,7 +42,7 @@ object InnerTubeConstants {
     const val ORIGIN = "https://www.youtube.com"
     const val ORIGINAL_URL = "https://www.youtube.com/tv"
 
-    /** setPlaylist awaits the refresh, so first-play latency is bounded by this (RESEARCH Pitfall 4). */
+    /** setPlaylist awaits the refresh, so first-play latency is bounded by this. */
     const val CALL_TIMEOUT_MS = 10000L
 
     /** A hostile or broken response larger than this is refused unread (2 MiB). */
@@ -92,10 +92,10 @@ object LoungeConstants {
     /** lib/app/RPCConnection.js MAX_RETRIES. */
     const val RPC_MAX_RETRIES = 3
 
-    /** The Node server's undici body timeout (5 minutes) bounds the lounge long poll (RESEARCH A4). */
+    /** The Node server's undici body timeout (5 minutes) bounds the lounge long poll. */
     const val RPC_READ_TIMEOUT_MS = 300000L
 
-    /** The working Node server's User-Agent; the lounge endpoints are known to accept it (RESEARCH A3, Pitfall 8). */
+    /** The working Node server's User-Agent; the lounge endpoints are known to accept it (Pitfall 8). */
     const val USER_AGENT = "node"
 
     /** Volume changes from the sender are deferred this long so a slider drag does not flood the speaker. */

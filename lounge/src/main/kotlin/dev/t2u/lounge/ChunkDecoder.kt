@@ -1,7 +1,7 @@
 package dev.t2u.lounge
 
 // Replaces the incoming-message parsing of yt-cast-receiver 2.1.0 lib/app/Message.js (parseIncoming) and the
-// line reader of lib/app/RPCConnection.js (MIT, Copyright (c) Patrick Kan). CAST-08, RESEARCH Pattern 1 and Pitfall 1:
+// line reader of lib/app/RPCConnection.js (MIT, Copyright (c) Patrick Kan). CAST-08:
 // the lounge sends `<len>\n<payload>` chunks where len counts UTF-16 code units of the UTF-8-decoded text. The Node
 // version ran a regex over single lines, which breaks on accented titles, emoji and chunks split across reads. This
 // decoder buffers until a chunk is complete and never reports message text (it can hold credentials).

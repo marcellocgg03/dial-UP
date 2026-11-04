@@ -13,7 +13,7 @@ package dev.t2u.renderer
 //  * Node assigns `r.next = ...` to stand for yt-cast-receiver's Player.next(). Here Player.next() is final; it
 //    runs against the real queue, so the hand-off's next() reaches doPlay (or play -> stop -> doStop) for real.
 //  * Node's setup() omits PREFETCH, so most Node tests run with it off; these tests set prefetch and gapless on
-//    through cfg(), and every other renderer test helper sets prefetch = false (RESEARCH Pitfall 6).
+//    through cfg(), and every other renderer test helper sets prefetch = false.
 //  * Node's regex /stream/0{31}2\.m4a$ becomes 0{31}2\.aac$ because cfg() pins outputFormat to adts.
 //
 // Every test is a block-bodied function: JUnit silently skips a test whose expression body returns a value.

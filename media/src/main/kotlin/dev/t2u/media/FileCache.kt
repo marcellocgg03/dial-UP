@@ -163,7 +163,7 @@ class FileCache(
                     "totalBytes" to total,
                     "limitBytes" to limit,
                     "pinned" to skippedPinned,
-                    // RESEARCH Pitfall 12: the pipe range cache and the read-ahead windows are separate budgets.
+                    // The pipe range cache and the read-ahead windows are separate budgets.
                     "covers" to "built and source files",
                 ),
             )

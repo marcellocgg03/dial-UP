@@ -135,7 +135,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     /** GUI-07: the installed yt-dlp version; null when it cannot be read or the service is stopped. */
     suspend fun ytdlpVersion(): String? = updater?.version()
 
-    /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup or, through the bridge, a download running (RESEARCH Pitfall 4). */
+    /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup or, through the bridge, a download running. */
     @Volatile private var resolver: CachingResolver? = null
 
     /** What the last bridge start applied from files/config.json (counts and switches only, never pattern text). */
@@ -203,7 +203,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
         // The deadline runs on the elapsed-time clock (time the CPU slept counts), is re-checked at least every 15 minutes
-        // and at every housekeeping alarm (plan 05-11, RESEARCH Pitfall 3). It treats a lookup or a download as busy.
+        // and at every housekeeping alarm (plan 05-11). It treats a lookup or a download as busy.
         val u = YtDlpUpdater(
             gateway = AndroidYtDlpGateway(host.context, host.evidence),
             channel = { loadAppConfig(host.context.filesDir).config.ytdlpChannel },
@@ -442,7 +442,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 
     /**
-     * RESEARCH Pitfall 4: the first yt-dlp run pays Python and QuickJS start-up, so one resolve runs once the receivers
+     * The first yt-dlp run pays Python and QuickJS start-up, so one resolve runs once the receivers
      * are advertised (first speaker up, or 15 s) and its duration is logged as `warmup`.
      */
     private fun scheduleWarmUp(h: SpikeHost, b: Bridge) {

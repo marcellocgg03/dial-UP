@@ -74,7 +74,7 @@ class CommandReceiver : BroadcastReceiver() {
             "ping" -> CommandReply(true, """{"ok":true}""")
             "dump-state" -> CommandReply(true, service.currentState().toString())
             "stop" -> {
-                // the author's own stop from adb: persist off like the notification Stop (D-04, RESEARCH A1)
+                // the author's own stop from adb: persist off like the notification Stop (D-04)
                 AppSettings.of(context).update { it.copy(bridgeEnabled = false) }
                 service.evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "adb"))
                 service.stopSelf()

@@ -1,7 +1,7 @@
 package dev.t2u.lounge
 
 // Port of yt-cast-receiver 2.1.0 lib/app/BindParams.js (MIT, Copyright (c) Patrick Kan).
-// The query string of the lounge `bind` URL: sorted keys, strictly percent-encoded values (CAST-08, RESEARCH Pattern 2).
+// The query string of the lounge `bind` URL: sorted keys, strictly percent-encoded values (CAST-08).
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray

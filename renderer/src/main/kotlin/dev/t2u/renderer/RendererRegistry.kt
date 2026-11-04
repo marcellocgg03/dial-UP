@@ -560,7 +560,7 @@ class RendererRegistry(
             while (true) {
                 delay(config.pruneIntervalS * 1000L)
                 // After a sleep the phone's timers fire at once and every speaker looks stale although it simply could
-                // not announce itself (RESEARCH: wall-clock deltas after sleep). Search first, prune on the next round.
+                // not announce itself (wall-clock deltas after sleep). Search first, prune on the next round.
                 val sinceSearch = clock() - lastSearchAt
                 if (sinceSearch > config.discoveryIntervalS * 1000L * 2) {
                     log("prune-deferred", "-", reason = "last search ${sinceSearch / 1000} s ago")
