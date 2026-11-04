@@ -3,6 +3,7 @@ package dev.dialup.app
 import dev.t2u.media.JvmPipeLauncher
 import dev.t2u.media.PipeLauncher
 import dev.t2u.media.ProcessExit
+import dev.t2u.media.Resolver
 import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
@@ -58,18 +59,21 @@ class FfmpegRunner(
     fun liveCount(): Int = launcher.liveCount()
 
     private fun logExit(exit: ProcessExit) {
-        evidence.event(
-            "ffmpeg",
-            mapOf(
-                "args" to redact(exit.args),
-                "exitCode" to exit.exitCode,
-                "ms" to exit.millis,
-                "stderrTail" to exit.stderrTail.takeLast(512),
-            ),
-        )
+        evidence.event("ffmpeg", exitFields(exit))
     }
 
     companion object {
+        /**
+         * The fields of the `ffmpeg` event. ffmpeg prints the failing input URL, a signed googlevideo URL, to stderr, so the tail
+         * goes through [Resolver.redactUrls] (scheme and host only) before the 512-character cut (RS-02).
+         */
+        internal fun exitFields(exit: ProcessExit): Map<String, Any?> = mapOf(
+            "args" to redact(exit.args),
+            "exitCode" to exit.exitCode,
+            "ms" to exit.millis,
+            "stderrTail" to Resolver.redactUrls(exit.stderrTail).takeLast(512),
+        )
+
         /** Any http(s) URL becomes its host; the value after `-headers` is dropped (cookies, signed query). */
         fun redact(args: List<String>): List<String> {
             val out = ArrayList<String>(args.size)
