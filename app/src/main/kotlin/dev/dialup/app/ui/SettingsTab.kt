@@ -33,6 +33,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
+import dev.dialup.app.AppSettings
+import dev.dialup.app.AppUpdates
+import dev.dialup.app.BuildConfigFacts
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
@@ -63,6 +66,8 @@ private val THEMES = listOf(
 @Composable
 fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifier = Modifier) {
     val ui by presenter.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val appData by AppSettings.of(context).data.collectAsStateWithLifecycle()
     LifecycleResumeEffect(presenter) {
         presenter.refresh()
         presenter.onVisible()
@@ -109,6 +114,13 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         HorizontalDivider()
         YtDlpSection(ui, presenter)
         HorizontalDivider()
+        AppUpdatesSection(
+            model = AppUpdates.of(context),
+            autoEnabled = appData.updateCheckEnabled,
+            currentVersion = BuildConfigFacts.versionName(context) ?: "0",
+            onAutoChange = { on -> AppSettings.of(context).update { it.copy(updateCheckEnabled = on) } },
+        )
+        HorizontalDivider()
         ChoiceRow(
             title = "Theme",
             support = "System follows the phone's light or dark setting",
@@ -135,9 +147,12 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
                 OutlinedButton(
                     onClick = presenter::updateNow,
-                    enabled = !running,
+                    enabled = !running && !ui.updateBlockedByCast,
                     modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
                 ) { Text("Update now") }
+                if (ui.updateBlockedByCast) {
+                    Text("Not while a renderer is being cast to", modifier = Modifier.padding(top = 8.dp).testTag("update-blocked"))
+                }
                 if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 (ui.update as? UpdateUi.Done)?.let {
                     Text(updateMessage(it.outcome), modifier = Modifier.padding(top = 8.dp).testTag("update-result"))
