@@ -59,7 +59,11 @@ fun MainScreen(
     val settingsUi by settings.state.collectAsStateWithLifecycle()
     val openCount by opens.collectAsStateWithLifecycle()
     LaunchedEffect(openCount) {
-        if (openCount > 0) settings.onAppOpened { model.casting.value }
+        if (openCount > 0) {
+            settings.onAppOpened { model.casting.value }
+            // GUI-14: one extra search when the app comes to the foreground (throttled; nothing without a bridge)
+            model.searchOnForeground()
+        }
     }
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
     DialUpTheme(theme) {

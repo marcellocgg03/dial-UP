@@ -4,6 +4,8 @@ package dev.dialup.app.model
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class RefreshPhaseTest {
     @Test
@@ -25,5 +27,25 @@ class RefreshPhaseTest {
     @Test
     fun `the threshold is eight seconds`() {
         assertEquals(8_000L, REFRESH_AFTER_MS)
+    }
+
+    @Test
+    fun `the throttle grants the first call and then waits out the gap`() {
+        var now = 0L
+        val throttle = SearchThrottle({ now }, FOREGROUND_SEARCH_GAP_MS)
+        assertTrue(throttle.tryAcquire())
+        now = 9_999
+        assertFalse(throttle.tryAcquire())
+        now = 10_000
+        assertTrue(throttle.tryAcquire())
+    }
+
+    @Test
+    fun `a clock that went back grants again`() {
+        var now = 50_000L
+        val throttle = SearchThrottle({ now }, FOREGROUND_SEARCH_GAP_MS)
+        assertTrue(throttle.tryAcquire())
+        now = 1_000
+        assertTrue(throttle.tryAcquire())
     }
 }

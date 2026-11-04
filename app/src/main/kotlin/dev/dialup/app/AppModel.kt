@@ -3,7 +3,10 @@
 package dev.dialup.app
 
 import android.content.Context
+import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
+import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
+import dev.dialup.app.model.SearchThrottle
 import dev.dialup.app.model.addRefusal
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
@@ -95,6 +98,15 @@ class AppModel private constructor(context: Context) {
             // the list simply waits for the next periodic search
         }
     }
+
+    private val foregroundThrottle = SearchThrottle({ SystemClock.elapsedRealtime() }, FOREGROUND_SEARCH_GAP_MS)
+
+    /**
+     * GUI-14: the app came to the foreground: one [refreshRenderers] search, at most one per [FOREGROUND_SEARCH_GAP_MS]; null
+     * when the throttle holds it back. MainActivity.opens already skips the first start after a recreation, so a rotation does
+     * not search.
+     */
+    fun searchOnForeground(): Job? = if (foregroundThrottle.tryAcquire()) refreshRenderers("foreground") else null
 
     /** GUI-03: the hidden speakers; the store lives with the process, so the list is right while the bridge is off too. */
     val hidden: StateFlow<List<HiddenSpeaker>> = SpeakerStores.of(context).hidden.entries
