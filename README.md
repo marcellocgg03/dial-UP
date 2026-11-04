@@ -1,25 +1,22 @@
 # DialUP for Android
 
-DialUP is the Android port of Tube2U[PnP].
+A native Kotlin Android app (application ID `dev.dialup`) that makes the phone the whole cast bridge. It finds UPnP/DLNA
+speakers on the Wi-Fi network, shows each one as a cast target in the YouTube and YouTube Music apps (DIAL), resolves
+audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to the speaker. No always-on server is needed.
 
-A native Kotlin Android app (application ID `dev.dialup`) that makes the phone the whole cast bridge. It finds UPnP/DLNA speakers
-(Sonos Amp, Arc, SYMFONISK) on the Wi-Fi network, shows each one as a cast target in the YouTube and
-YouTube Music apps (DIAL), resolves audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves
-the stream to the speaker. No always-on server is needed.
-
-It is a port of [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) (a Node.js project, fork of upnpTube).
-`PARITY.md` records which upstream commit has been ported and how each Node file maps to Kotlin.
+DialUP is based on [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), a Node.js project (itself a fork of upnpTube),
+and is released under the same licence.
 
 **Status:** beta. The current build is the pre-release listed on the Releases page of this repository, and it was
 built for one phone and one set of speakers, so expect rough edges. The YouTube lounge/DIAL protocol is undocumented
 and can change without notice; when it does, casting can stop working until the app is updated. What each release
-contains, and what is still unverified, is listed in [CHANGELOG.md](CHANGELOG.md).
+contains, and what is still unverified, is listed in its release notes.
 
 ## Requirements
 
 - An Android 8.0 (API 26) or newer phone with an arm64 processor. Other processor types are not built.
 - The phone and the speakers on the same Wi-Fi network.
-- UPnP/DLNA speakers, such as Sonos Amp, Arc and SYMFONISK.
+- UPnP/DLNA speakers (network speakers and soundbars that accept a stream from a control app).
 - The YouTube or the YouTube Music app on the same phone.
 
 ## Install
@@ -75,21 +72,20 @@ Settings tab, every change is saved as soon as you make it:
   battery exemption granted, or the bridge does not start.
 - yt-dlp can break when YouTube changes something, until it is updated (Settings, Update now).
 - Not on Google Play: apps built on yt-dlp are unlikely to pass its review. It is sideloaded only.
-- Tested by the author on one phone and a few Sonos speakers only. Several features have not been checked on real
+- Tested by the author on one phone and a few UPnP/DLNA speakers only. Several features have not been checked on real
   speakers yet and are untested: hiding a renderer and renaming it as seen in the YouTube cast menus, the ask-first
   dialogs when you switch the bridge off during a cast, the card buttons on every speaker model, and how a speaker
-  that is unplugged is shown. The changelog in the release notes lists what is still unverified.
+  that is unplugged is shown. The release notes list what is still unverified.
 
-## Privacy
+## How it works
 
-- DialUP has no account, no analytics and no server of its own.
-- It talks to YouTube and Google servers (to receive casts and to find and fetch the audio), to GitHub (to download
-  yt-dlp updates), and to the speakers on your network. The cards load cover art from the address a speaker reports.
-- The event log stays on the phone, in the app's private storage, until you press **Share log**. Share log hands only the
-  current log file to the Android share sheet; you choose where it goes. **Clear log** deletes it.
-- The log can contain LAN addresses, speaker names, the name of the device that is casting, track titles and video ids,
-  so it shows what was played. Tokens, account and device ids and pairing codes are replaced before anything is
-  written. Look at the file before you send it to anyone.
+- The YouTube cast targets are emulated entirely on the phone (DIAL and the YouTube lounge protocol). There is no server
+  of its own, no account and no analytics.
+- No YouTube sign-in is needed: yt-dlp resolves the audio without logging in.
+- The phone talks to YouTube and Google (to receive casts and fetch the audio), to GitHub (yt-dlp updates) and to the
+  speakers on your network.
+- The event log stays on the phone until you press **Share log**, and you choose where it goes. It can contain LAN
+  addresses, speaker names and track titles, so look at it before you send it to anyone.
 
 ## Screenshots
 
@@ -105,7 +101,7 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 ```
 ./gradlew test                 # JVM unit tests
 ./gradlew :app:assembleDebug
-./gradlew :app:assembleRelease # unsigned unless signing material is provided, see CONTRIBUTING.md
+./gradlew :app:assembleRelease # unsigned unless signing material is provided (see keystore.properties.example)
 ```
 
 Only arm64 devices are targeted. The APK is sideloaded; yt-dlp based apps are unlikely to pass Play review.
@@ -121,17 +117,17 @@ Only arm64 devices are targeted. The APK is sideloaded; yt-dlp based apps are un
 
 `tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
 
-## Contributing, security and conduct
+## Contributing and security
 
-- Contributing: build setup, tests and the pull request flow are in [CONTRIBUTING.md](CONTRIBUTING.md).
-- Security: report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
-- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Issues and pull requests are welcome. Run `./gradlew test` before opening a pull request, and keep test fixtures
+synthetic (no real addresses, video ids or tokens). Report security problems privately through the repository's
+"Report a vulnerability" button on the Security tab, not in a public issue.
 
 ## Licence
 
 GPL-3.0-only, see `LICENSE`. Third-party components are listed in `THIRD_PARTY_NOTICES.md`.
 
-DialUP is a derivative of Tube2U[PnP] / upnpTube (GPL-3.0-only), so it is released under the same licence.
+DialUP is based on Tube2U[PnP] / upnpTube (GPL-3.0-only), so it is released under the same licence.
 The APK also bundles GPL-covered binaries (FFmpeg and ffprobe from the Termux build, and the youtubedl-android
 modules) together with CPython, QuickJS and yt-dlp.
 

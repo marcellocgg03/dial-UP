@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # DialUP release procedure: turns a clean checkout into the release files and, on request, a DRAFT release.
 #
-#   tools/release.sh VERSION --dry-run     build, verify and write dist/ ; nothing is uploaded or tagged
-#   tools/release.sh VERSION --publish     the same, then tag vVERSION, push that tag and create a DRAFT release
+#   tools/release.sh VERSION --notes FILE --dry-run    build, verify and write dist/ ; nothing is uploaded or tagged
+#   tools/release.sh VERSION --notes FILE --publish    the same, then tag vVERSION, push that tag and create a DRAFT release
 #   tools/release.sh -h                    this text
 #
 # VERSION is a semantic version such as 0.9.0-beta.1 (a hyphen makes the release a pre-release).
+# FILE is a Markdown file with the release notes (what changed, what is not verified yet); it is kept outside the
+# repository and is placed at the top of the release text, above the install and source sections.
 # Files written to dist/ (ignored by git, never committed):
 #   DialUP-VERSION.apk, SHA256SUMS, RELEASE_NOTES-VERSION.md
 # Signing material comes only from keystore.properties or the four DIALUP_* variables that Gradle reads itself;
@@ -21,13 +23,17 @@ REQUIRED_CHECKS=(build-test lint gitleaks)
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 log() { printf '[release] %s\n' "$*"; }
 fail() { printf '[release] FAILED: %s\n' "$*" >&2; exit 1; }
-usage_error() { printf '[release] %s\n' "$*" >&2; printf 'usage: tools/release.sh VERSION (--dry-run | --publish)\n' >&2; exit 64; }
+usage_error() { printf '[release] %s\n' "$*" >&2; printf 'usage: tools/release.sh VERSION --notes FILE (--dry-run | --publish)\n' >&2; exit 64; }
 
 # ---- arguments -----------------------------------------------------------------------------------
 VERSION=""
 MODE=""
+NOTES_FILE=""
+want_notes=0
 for arg in "$@"; do
+  if [ "$want_notes" = 1 ]; then NOTES_FILE="$arg"; want_notes=0; continue; fi
   case "$arg" in
+    --notes) want_notes=1 ;;
     -h|--help) usage; exit 0 ;;
     --dry-run|--publish)
       [ -z "$MODE" ] || usage_error "give exactly one of --dry-run and --publish"
@@ -38,7 +44,9 @@ for arg in "$@"; do
       VERSION="$arg" ;;
   esac
 done
+[ "$want_notes" = 0 ] || usage_error "--notes needs a file"
 [ -n "$VERSION" ] || usage_error "a version is required"
+[ -n "$NOTES_FILE" ] || usage_error "--notes FILE is required"
 [ -n "$MODE" ] || usage_error "exactly one of --dry-run and --publish is required"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] \
   || usage_error "not a semantic version: $VERSION (expected MAJOR.MINOR.PATCH with an optional -suffix)"
@@ -58,21 +66,9 @@ log "checking $VERSION in $MODE mode"
 gradle_version="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)"
 [ "$gradle_version" = "$VERSION" ] || fail "versionName in app/build.gradle.kts is '${gradle_version:-none}', not $VERSION"
 
-[ -f CHANGELOG.md ] || fail "CHANGELOG.md is missing"
-heading="$(awk -v want="## [$VERSION] - " 'index($0, want) == 1 { print; exit }' CHANGELOG.md)"
-[ -n "$heading" ] || fail "CHANGELOG.md has no heading '## [$VERSION] - YYYY-MM-DD'"
-heading_date="${heading##* - }"
-[[ "$heading_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "the CHANGELOG.md heading for $VERSION has no YYYY-MM-DD date"
-[ "$(date -d "$heading_date" +%F 2>/dev/null || true)" = "$heading_date" ] \
-  || fail "the CHANGELOG.md date $heading_date is not a real date"
-# Section body: from the line after the heading to the next '## ' heading, minus the link reference lines.
-changelog_body="$(awk -v want="## [$VERSION] - " '
-  f && /^## / { exit }
-  f && /^\[[^]]+\]: / { next }
-  !f && index($0, want) == 1 { f = 1; next }
-  f { print }
-' CHANGELOG.md | sed '/./,$!d')"
-[ -n "$(printf '%s' "$changelog_body" | tr -d '[:space:]')" ] || fail "the CHANGELOG.md section for $VERSION is empty"
+[ -f "$NOTES_FILE" ] || fail "the release notes file $NOTES_FILE does not exist"
+changelog_body="$(sed '/./,$!d' "$NOTES_FILE")"
+[ -n "$(printf '%s' "$changelog_body" | tr -d '[:space:]')" ] || fail "the release notes file $NOTES_FILE is empty"
 
 # Signing material present? Gradle reads each value from keystore.properties first and the variable second.
 signing_present() {

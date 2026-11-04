@@ -78,4 +78,4 @@ carried into the APK with that library.
 
 - yt-dlp downloads extractor code and EJS scripts from GitHub at the user's request (Settings, Update now).
   That code is not part of this repository.
-- This project is not affiliated with or endorsed by YouTube, Google, Sonos, or any speaker maker. The names are used only to say what the app works with.
+- This project is not affiliated with or endorsed by YouTube, Google, or any speaker maker. The names are used only to say what the app works with.

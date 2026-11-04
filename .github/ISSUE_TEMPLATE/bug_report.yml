@@ -28,7 +28,7 @@ body:
     id: speaker
     attributes:
       label: Speaker model and firmware
-      description: For example Sonos Amp, Arc or SYMFONISK, and the firmware version if you know it.
+      description: The brand and model of the speaker, and the firmware version if you know it.
     validations:
       required: true
   - type: dropdown
