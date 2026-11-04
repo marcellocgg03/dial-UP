@@ -24,6 +24,9 @@ const val CONFIG_FILE = "config.json"
  * Puts the overrides the app saved in settings.json on top of [base] (config.json or the defaults). Pure. Only the
  * non-null overrides change anything, so a hand-edited config.json value stays in force until the author changes that
  * setting in the app.
+ *
+ * The one exception is `clearOnCastEnd`: it is an app-only setting (GUI-08) and config.json has no key for it, so its
+ * value always comes from settings.json (false by default). `ConfigOverlayTest` pins this.
  */
 fun applySettings(base: Config, s: AppSettingsData): Config =
     base.copy(
