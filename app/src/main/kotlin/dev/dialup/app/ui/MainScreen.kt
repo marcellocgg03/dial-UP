@@ -98,7 +98,7 @@ fun MainScreen(
                     onGrantNotifications = onGrantNotifications,
                     onGrantBattery = onGrantBattery,
                 )
-                if (tab == TAB_SETTINGS) SettingsTab(settings, Modifier.weight(1f)) else SpeakersTab(model, Modifier.weight(1f))
+                if (tab == TAB_SETTINGS) SettingsTab(settings, model, Modifier.weight(1f)) else SpeakersTab(model, Modifier.weight(1f))
             }
         }
     }

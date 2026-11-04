@@ -2,11 +2,9 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,7 +14,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,7 +27,6 @@ import android.os.SystemClock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
@@ -42,14 +38,13 @@ import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.ListNote
 import dev.dialup.app.model.rendererListing
-import dev.t2u.renderer.HiddenSpeaker
 import kotlinx.coroutines.delay
 
 /**
  * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
  * ([rendererListing]): with the switch off only the renderers saved by address are listed, greyed, and the list says the bridge
- * is off. Each item is a [SpeakerCard]. Below the cards a collapsed Hidden section lists
- * the speakers the author hid, with Restore (GUI-03); it is there while the bridge is off too. Rename on a card opens a dialog
+ * is off. Each item is a [SpeakerCard]. The hidden renderers are managed in the Settings
+ * tab (GUI-13, [HiddenSection]), not here. Rename on a card opens a dialog
  * for that renderer's name (matched by UDN). While the running bridge's list is not shown (switch off, or the
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
@@ -63,7 +58,6 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     val names by model.names.collectAsStateWithLifecycle()
     // the UDN being renamed; the dialog goes when no card with that UDN is on the list any more
     var renaming by rememberSaveable { mutableStateOf<String?>(null) }
-    var hiddenExpanded by rememberSaveable { mutableStateOf(false) }
     var adding by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
@@ -145,30 +139,6 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         items(listing.saved, key = { "manual-${it.udn}" }) { card ->
             SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn }, onDelete = { model.deleteManual(card.udn) })
         }
-        if (hidden.isNotEmpty()) {
-            item(key = "hidden-header") {
-                Text(
-                    (if (hiddenExpanded) "Hidden (${hidden.size}) ▴" else "Hidden (${hidden.size}) ▾"),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { hiddenExpanded = !hiddenExpanded }
-                        .padding(vertical = 12.dp)
-                        .testTag("section-hidden"),
-                )
-            }
-            if (hiddenExpanded) {
-                items(hidden, key = { "hidden-${it.udn}" }) { speaker ->
-                    HiddenRow(
-                        speaker,
-                        shownName = names[speaker.udn] ?: speaker.name,
-                        onRestore = { model.unhide(speaker.udn) },
-                        // a hidden renderer saved by address can be deleted from here too (quick 261101-oib)
-                        onDelete = if (manual.any { it.udn == speaker.udn }) ({ model.deleteManual(speaker.udn) }) else null,
-                    )
-                }
-            }
-        }
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
     renaming?.let { udn ->
@@ -184,25 +154,6 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 onReset = { model.rename(udn, null) },
                 onDismiss = { renaming = null },
             )
-        }
-    }
-}
-
-/** One hidden speaker: its name and address, and a Restore button (GUI-03). */
-@Composable
-private fun HiddenRow(speaker: HiddenSpeaker, shownName: String, onRestore: () -> Unit, onDelete: (() -> Unit)? = null) {
-    Row(
-        Modifier.fillMaxWidth().testTag("hidden-row-${speaker.udn}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(shownName.ifEmpty { speaker.udn }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (speaker.address.isNotEmpty()) Text(speaker.address, style = MaterialTheme.typography.bodySmall)
-        }
-        TextButton(onClick = onRestore, modifier = Modifier.testTag("btn-restore-${speaker.udn}")) { Text("Restore") }
-        if (onDelete != null) {
-            TextButton(onClick = onDelete, modifier = Modifier.testTag("btn-delete-hidden-${speaker.udn}")) { Text("Delete") }
         }
     }
 }

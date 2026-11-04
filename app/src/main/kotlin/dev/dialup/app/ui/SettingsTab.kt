@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.dialup.app.AppModel
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
@@ -60,7 +61,7 @@ private val THEMES = listOf(
  * Share log and Clear log buttons comes last.
  */
 @Composable
-fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
+fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifier = Modifier) {
     val ui by presenter.state.collectAsStateWithLifecycle()
     LifecycleResumeEffect(presenter) {
         presenter.refresh()
@@ -103,6 +104,8 @@ fun SettingsTab(presenter: SettingsPresenter, modifier: Modifier = Modifier) {
             tag = "setting-format",
             optionTag = { "format-option-${FORMATS[it].first}" },
         )
+        HorizontalDivider()
+        HiddenSection(model)
         HorizontalDivider()
         YtDlpSection(ui, presenter)
         HorizontalDivider()
