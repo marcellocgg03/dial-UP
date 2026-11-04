@@ -284,6 +284,9 @@ class DirectReadAheadTest {
             val ms = serve(CachingTestResolver(), up)
             val path = register(ms)
             for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
+            // The log entry is added after the response is sent, so on a slow machine the third one can still be missing.
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (seen.size < 3 && System.nanoTime() < deadline) Thread.sleep(5)
 
             val lines = seen.map { it.upstream.orEmpty() }
             assertTrue(lines[0].startsWith("proxy 206 first byte ") && " ms total " in lines[0], "the probe is a plain upstream call: ${lines[0]}")
