@@ -64,6 +64,7 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             gateway = AndroidYtDlpGateway(app, log),
             channel = { settings.data.value.ytdlpChannel ?: loadAppConfig(app.filesDir).config.ytdlpChannel },
             onEvent = { log.event("ytdlp-update", it) },
+            record = YtDlpRecords.of(app),
         )
     }
 

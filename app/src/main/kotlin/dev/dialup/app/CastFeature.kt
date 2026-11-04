@@ -132,6 +132,13 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     /** GUI-07: one yt-dlp update now on the chosen channel; BUSY while a scheduled update or a lookup runs. Null without an updater. */
     suspend fun updateNow(): YtDlpUpdateOutcome? = updater?.updateNow()
 
+    /**
+     * The daily job's entry point while the service runs (plan 07.1-07): one update when the record says it is due and
+     * nothing is cast or looked up. Null when the record says "recent"; a CASTING or BUSY style outcome postpones it.
+     * Null without an updater.
+     */
+    suspend fun ytdlpUpdateIfDue(trigger: String): YtDlpUpdateOutcome? = updater?.updateIfDue(trigger)
+
     /** GUI-07: the installed yt-dlp version; null when it cannot be read or the service is stopped. */
     suspend fun ytdlpVersion(): String? = updater?.version()
 
@@ -209,7 +216,9 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
         // The deadline runs on the elapsed-time clock (time the CPU slept counts), is re-checked at least every 15 minutes
-        // and at every housekeeping alarm (plan 05-11). It treats a lookup or a download as busy.
+        // and at every housekeeping alarm (plan 05-11). It treats a lookup or a download as busy. Plan 07.1-07: it never
+        // updates while a renderer is being cast to (a postponed update is re-checked, never forced) and goes through the
+        // persisted record, so a restart or a Wi-Fi flap within 18 hours of an update causes no further one.
         val u = YtDlpUpdater(
             gateway = AndroidYtDlpGateway(host.context, host.evidence),
             channel = { loadAppConfig(host.context.filesDir).config.ytdlpChannel },
@@ -217,6 +226,9 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             elapsedMs = { SystemClock.elapsedRealtime() },
             maxPauseMs = UPDATE_RECHECK_MS,
             busy = { (resolver?.inFlightCount() ?: 0) > 0 || (bridge?.activeBuilds() ?: 0) > 0 },
+            casting = { count.value.casting > 0 },
+            record = YtDlpRecords.of(host.context),
+            wallMs = { System.currentTimeMillis() },
         )
         updater = u
         updaterJob = host.scope.launch { u.run() }
