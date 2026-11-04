@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // D-9 (Session GUI-D steps 3 and 6): a real Sonos serves its MediaRenderer UDN in upper case (uuid:RINCON_..._MR) while every

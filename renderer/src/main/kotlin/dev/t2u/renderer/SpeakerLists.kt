@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // GUI-03 (plan 07-11, D-08): the speakers the author hid from the cast menus. The set lives in <dataDir>/hidden.json next to

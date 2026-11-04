@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // GUI-08 (plan 07-09): the app empties the bridge's cache and changes its cap on the running bridge. The cache is the

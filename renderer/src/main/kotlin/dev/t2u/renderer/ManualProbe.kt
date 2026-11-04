@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // GUI-04 (plan 07-12, D-06): adding a speaker by the IPv4 address the author types. Two layers keep the typed text from

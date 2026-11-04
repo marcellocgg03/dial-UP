@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // CR-01 c, WR-02, D-1 (plan 07-19): a speaker that never answers SOAP (the LG TV held the stop for 10 s) must not stretch

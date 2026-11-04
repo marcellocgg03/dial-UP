@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // GUI-04 (plan 07-13, D-06, T-07-31): the manual-speakers store. Tolerant of a missing or damaged file, validated, capped, atomic.

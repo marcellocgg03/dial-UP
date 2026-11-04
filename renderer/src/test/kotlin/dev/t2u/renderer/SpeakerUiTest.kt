@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // The Speakers list's data path (plan 07-03, GUI-01): a speaker the bridge found and cast to reaches Bridge.speakers as an

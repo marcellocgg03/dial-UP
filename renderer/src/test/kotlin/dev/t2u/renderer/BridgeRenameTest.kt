@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original Kotlin code for Tube2U[PnP] for Android.
+// Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
 // GUI rename (quick 261101-dcg, PD-4, PD-5): a rename shows on the card and as the DIAL friendly name at once, survives a bridge
