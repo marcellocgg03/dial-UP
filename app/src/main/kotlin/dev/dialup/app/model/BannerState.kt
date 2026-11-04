@@ -18,6 +18,13 @@ fun bannerState(sdk: Int, notificationsGranted: Boolean, exempt: Boolean): List<
     if (!exempt) add(Banner.BATTERY)
 }
 
+/**
+ * The battery banner's sentence. Shown whenever the exemption is missing, also when it was revoked later in system
+ * settings: the Enable switch is greyed out until Grant is used.
+ */
+const val BATTERY_BANNER_TEXT =
+    "Unrestricted battery use is not allowed, so the bridge cannot run and Enable is greyed out. Tap Grant to allow it"
+
 /** What the notifications banner's Grant button does. */
 enum class GrantAction { REQUEST, OPEN_SETTINGS }
 

@@ -23,6 +23,16 @@ fun toggleAction(requestedOn: Boolean, enabled: Boolean, casting: Int): ToggleAc
     else -> ToggleAction.STOP
 }
 
+/** What the header switch draws: [checked] is its position, [usable] whether it reacts to taps. */
+data class ToggleUi(val checked: Boolean, val usable: Boolean)
+
+/**
+ * The switch shows the persisted state ([enabled]) and is greyed out without the battery exemption ([exempt]). Flipping
+ * it never opens the exemption request; that is the battery banner's Grant button. A grant only makes the switch usable
+ * and never flips it (author's decision 2026-11-04); the start itself stays behind [startDecision] and the service gate.
+ */
+fun toggleUi(enabled: Boolean, exempt: Boolean): ToggleUi = ToggleUi(checked = enabled, usable = exempt)
+
 /**
  * The confirmation shown before the bridge is switched off while [casting] speakers are loading, playing
  * or paused. It says what happens to them: cleared when the clear-on-cast-end setting is on, otherwise they

@@ -42,6 +42,18 @@ class BridgeToggleTest {
     }
 
     @Test
+    fun `the switch is unusable without the exemption and keeps showing the persisted state`() {
+        assertEquals(ToggleUi(checked = true, usable = false), toggleUi(enabled = true, exempt = false))
+        assertEquals(ToggleUi(checked = false, usable = false), toggleUi(enabled = false, exempt = false))
+    }
+
+    @Test
+    fun `the switch is usable with the exemption and shows the persisted state`() {
+        assertEquals(ToggleUi(checked = true, usable = true), toggleUi(enabled = true, exempt = true))
+        assertEquals(ToggleUi(checked = false, usable = true), toggleUi(enabled = false, exempt = true))
+    }
+
+    @Test
     fun `the confirm text names the speakers and says they keep their track`() {
         val text = confirmText(2, clearOnCastEnd = false)
         assertTrue("2 renderers" in text, text)
