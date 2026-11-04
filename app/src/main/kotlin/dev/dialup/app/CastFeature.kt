@@ -405,7 +405,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 manual = SpeakerStores.of(h.context).manual,
                 // GUI rename (261101-dcg): the author's renderer names, applied when a renderer is set up and live on a rename
                 names = SpeakerStores.of(h.context).names,
-                serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 famium/0.0.1",
+                serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 DialUP/${BuildConfigFacts.versionName(h.context) ?: "0"}",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,
                 bufferDir = mediaBufferDir(h.context),
@@ -446,17 +446,11 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      * are advertised (first speaker up, or 15 s) and its duration is logged as `warmup`.
      */
     private fun scheduleWarmUp(h: SpikeHost, b: Bridge) {
+        // Debug builds only: DebugFeatures.warmUpVideoId is null in release, so no coroutine starts and no lookup is made (T-08-03).
+        val id = DebugFeatures.warmUpVideoId(h.context) ?: return
         if (!warmed.compareAndSet(false, true)) return
         h.scope.launch {
             withTimeoutOrNull(WARMUP_WAIT_MS) { b.castCount.first { it.total > 0 } }
-            val id = try {
-                h.context.assets.open("spike/video-set.txt").bufferedReader().useLines { lines ->
-                    lines.map { it.trim() }.first { it.isNotEmpty() && !it.startsWith("#") }
-                }
-            } catch (e: Exception) {
-                h.evidence.event("warmup", mapOf("ok" to false, "error" to e.javaClass.simpleName))
-                return@launch
-            }
             b.warmUp(id)
         }
     }
