@@ -484,7 +484,7 @@ class BridgeService : Service(), SpikeHost {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(count: CastCount, networkUp: Boolean = true): Notification {
+    private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -500,7 +500,7 @@ class BridgeService : Service(), SpikeHost {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
-            .setContentText(notificationText(count, networkUp))
+            .setContentText(notificationText(count, waiting))
             .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
@@ -508,10 +508,6 @@ class BridgeService : Service(), SpikeHost {
             .build()
     }
 
-    /**
-     * The count is derived from feature state (every [CastCountSource] feature), never from events.
-     * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
-     */
     /**
      * The Wi-Fi-loss decision (WIFI-01, WIFI-02). Nothing being cast: the service stops at once when the last Wi-Fi client
      * and hotspot address are gone. A cast waits [WIFI_LOSS_WINDOW_MS]; a return inside it leaves the rebind in
@@ -537,22 +533,32 @@ class BridgeService : Service(), SpikeHost {
         }.run()
     }
 
+    /**
+     * The count is derived from feature state (every [CastCountSource] feature), never from events.
+     * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
+     */
     private suspend fun castCountLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()
-        val networkUp: Flow<Boolean> =
-            if (sources.isEmpty()) flowOf(true) else combine(sources.map { it.networkUp }) { ups -> ups.all { it } }.distinctUntilChanged()
+        val noNetwork: Flow<Boolean> =
+            if (sources.isEmpty()) {
+                flowOf(false)
+            } else {
+                combine(sources.map { it.networkUp }) { ups -> ups.all { it } }
+                    .combine(combine(sources.map { it.wifiPresent }) { present -> present.all { it } }) { up, present -> !up || !present }
+                    .distinctUntilChanged()
+            }
         var lastCount: CastCount? = null
-        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), networkUp) { count, up -> count to up }.collect { (count, up) ->
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, waiting -> count to waiting }.collect { (count, waiting) ->
             if (count != lastCount) {
                 lastCount = count
                 casting = count.casting
                 applyPlayLocks(playLocks.onCasting(count.casting), "casting")
                 evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             }
-            val text = notificationText(count, up)
+            val text = notificationText(count, waiting)
             if (text != lastNotifiedText) {
                 lastNotifiedText = text
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, up))
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, waiting))
             }
         }
     }
