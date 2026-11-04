@@ -50,9 +50,9 @@ object BridgeControl {
     }
 
     /**
-     * Wi-Fi is back after the bridge paused itself for lack of a network ([NetworkResume]): starts the service again when the
-     * switch is still on and the battery exemption is held. A start the system refuses leaves a tap-to-resume notification, so
-     * the failure is never silent.
+     * Wi-Fi is back after the bridge stopped itself for lack of a network ([NetworkResume]): starts the service again when the
+     * switch is still on and the battery exemption is held. A start the system refuses is only logged; the callback stays armed
+     * so the next network event tries again, and opening the app or flipping the switch starts the bridge by hand.
      */
     fun resumeAfterNetwork(context: Context) {
         val app = context.applicationContext
@@ -66,7 +66,6 @@ object BridgeControl {
             Log.i("t2u", "network resume: started the bridge service")
         } catch (t: Throwable) {
             Log.w("t2u", "network resume: the system refused the start: ${t.javaClass.name}: ${t.message}")
-            NetworkResume.postTapToResume(app)
         }
     }
 
