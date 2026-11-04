@@ -74,6 +74,8 @@ class YouTubeCastReceiver(
         private set
 
     private val lifecycle = Mutex()
+
+    @Volatile
     private var dial: DialServer? = null
     private var uuid: String? = null
 
@@ -230,6 +232,12 @@ class YouTubeCastReceiver(
             failure?.let { throw it }
         }
     }
+
+    /**
+     * True when the receiver runs but has no DIAL listener: a move whose bind failed (rebindDial) leaves none, and the
+     * speaker is then missing from the phone's cast menu. The bridge's housekeeping rebinds it ([rebindDial]).
+     */
+    fun dialMissing(): Boolean = status == "running" && dial == null
 
     /**
      * Moves the DIAL server to [newHost] on the port it already has (plan 05-07, SVC-04) and advertises the new LOCATION.

@@ -1255,6 +1255,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         if (rebuild && repairResponder(trigger)) repairs++
         if (clientFailed && repairClient(trigger)) repairs++
         if (repairMedia(trigger)) repairs++
+        if (repairDial(trigger)) repairs++
         return repairs
     }
 
@@ -1510,6 +1511,39 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         fields.add("trigger" to trigger)
         if (error != null) fields.add("error" to error)
         emit("media-repair", *fields.toTypedArray())
+        return true
+    }
+
+    /**
+     * Sibling of [repairMedia]: a running receiver whose DIAL server a failed move left missing is bound again on the
+     * bridge's own address (same port, uuid and lounge session; [YouTubeCastReceiver.rebindDial]). Skipped when the system
+     * address differs from the bridge's (that is the rebind's job). The caller holds [netLock]. Returns true when a rebind
+     * was attempted for at least one receiver.
+     */
+    private suspend fun repairDial(trigger: String): Boolean {
+        val missing = receiverList.map { it.receiver }.filter { it.dialMissing() }
+        if (missing.isEmpty()) return false
+        if (addressChanged()) {
+            emit("dial-repair", "skipped" to "address-changed", "trigger" to trigger)
+            return false
+        }
+        val host = net.wifiIp.hostAddress.orEmpty()
+        for (receiver in missing) {
+            var error: String? = null
+            try {
+                receiver.rebindDial(host)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                failure("repair:dial", t)
+                error = t.javaClass.simpleName
+            }
+            val fields = ArrayList<Pair<String, Any?>>()
+            fields.add("ok" to (error == null))
+            fields.add("trigger" to trigger)
+            if (error != null) fields.add("error" to error)
+            emit("dial-repair", *fields.toTypedArray())
+        }
         return true
     }
 
