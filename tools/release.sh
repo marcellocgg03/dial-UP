@@ -166,7 +166,7 @@ pkg_line="$(grep -m1 '^package:' <<<"$badging" || true)"
 [[ "$pkg_line" == *"versionName='$VERSION'"* ]] || fail "the APK versionName is not $VERSION: $pkg_line"
 version_code="$(printf '%s' "$pkg_line" | sed -nE "s/.*versionCode='([0-9]+)'.*/\1/p")"
 { [ -n "$version_code" ] && [ "$version_code" -ge 1 ]; } || fail "the APK versionCode is missing or below 1: $pkg_line"
-grep -qx "sdkVersion:'26'" <<<"$badging" || fail "the APK minSdk is not 26"
+grep -qx "minSdkVersion:'26'" <<<"$badging" || fail "the APK minSdk is not 26"
 if grep -q '^application-debuggable' <<<"$badging"; then fail "the APK is debuggable"; fi
 manifest="$(apkanalyzer manifest print "$APK")"
 if grep -q 'CommandReceiver' <<<"$manifest"; then fail "the APK manifest contains the debug CommandReceiver"; fi
