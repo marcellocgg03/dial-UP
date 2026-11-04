@@ -71,11 +71,13 @@ class Ssdp(
         for (bind in searchBinds) {
             try {
                 val sock = MulticastSocket(InetSocketAddress(bind, 0))
-                sock.timeToLive = 4
-                sock.soTimeout = 1000
-                if (!bind.isLoopbackAddress) {
-                    // send the multicast out of the interface this address belongs to
-                    runCatching { NetworkInterface.getByInetAddress(bind) }.getOrNull()?.let { sock.networkInterface = it }
+                sock.setupOrClose {
+                    timeToLive = 4
+                    soTimeout = 1000
+                    if (!bind.isLoopbackAddress) {
+                        // send the multicast out of the interface this address belongs to
+                        runCatching { NetworkInterface.getByInetAddress(bind) }.getOrNull()?.let { networkInterface = it }
+                    }
                 }
                 val entry = SearchSocket(bind, sock)
                 entry.thread = Thread({ receiveLoop(entry) }, "t2u-ssdp-search-${bind.hostAddress}").apply { isDaemon = true }

@@ -44,11 +44,18 @@ enum class ProbeResult(val wire: String) {
 }
 
 /** The production reply socket: bound to [bind] on an ephemeral port, TTL 4, the interface set when there is one. */
-private fun defaultReplySocket(bind: InetAddress, iface: NetworkInterface?): MulticastSocket =
-    MulticastSocket(InetSocketAddress(bind, 0)).apply {
+internal fun defaultReplySocket(
+    bind: InetAddress,
+    iface: NetworkInterface?,
+    create: (SocketAddress) -> MulticastSocket = { MulticastSocket(it) },
+): MulticastSocket {
+    val sock = create(InetSocketAddress(bind, 0))
+    sock.setupOrClose {
         timeToLive = 4
         if (iface != null) networkInterface = iface
     }
+    return sock
+}
 
 /** A DIAL device advertised through the responder. [location] is the full device-description URL. */
 data class SsdpDevice(val name: String, val uuid: String, val serverHeader: String, val location: String)
@@ -147,16 +154,18 @@ class SsdpResponder(
         for (spec in listen) {
             try {
                 val sock = MulticastSocket(null as SocketAddress?)
-                sock.reuseAddress = true
-                // EADDRINUSE here is a gate-relevant finding: surfaced through onBind, never swallowed.
-                sock.bind(InetSocketAddress(spec.bindAddress, spec.port))
-                sock.soTimeout = 1000
-                // The multicast loopback flag is left at its default (setLoopbackMode(true) disables it).
-                if (spec.joinInterface != null) {
-                    sock.joinGroup(InetSocketAddress(group, groupPort), spec.joinInterface)
-                } else if (spec.joinWithoutInterface) {
-                    @Suppress("DEPRECATION")
-                    sock.joinGroup(group)
+                sock.setupOrClose {
+                    reuseAddress = true
+                    // EADDRINUSE here is a gate-relevant finding: surfaced through onBind, never swallowed.
+                    bind(InetSocketAddress(spec.bindAddress, spec.port))
+                    soTimeout = 1000
+                    // The multicast loopback flag is left at its default (setLoopbackMode(true) disables it).
+                    if (spec.joinInterface != null) {
+                        joinGroup(InetSocketAddress(group, groupPort), spec.joinInterface)
+                    } else if (spec.joinWithoutInterface) {
+                        @Suppress("DEPRECATION")
+                        joinGroup(group)
+                    }
                 }
                 val listener = Listener(spec, sock)
                 listener.thread = Thread({ receiveLoop(listener) }, "t2u-ssdp-${spec.id}").apply { isDaemon = true }
