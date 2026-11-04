@@ -5,7 +5,7 @@
 #   tools/sonos-play.sh --speaker IP --url URL [--mime MIME] [--seconds N] [--volume N] [--title TEXT] [--dry-run]
 #   tools/sonos-play.sh --probe --speaker IP        # read-only: GetTransportInfo only, makes no sound
 #
-#   --speaker IP   the Sonos (default Kitchen, Sonos Amp, 192.168.50.42). Only RFC1918 addresses are accepted
+#   --speaker IP   the Sonos to play on (required, no default). Only RFC1918 addresses are accepted
 #                  (10/8, 172.16/12, 192.168/16); anything else exits 2 before any request is sent.
 #   --url URL      what the speaker should fetch, e.g. http://<phone>:8100/stream/<token>.mp3
 #   --mime MIME    protocolInfo MIME in the DIDL (default audio/mpeg); try audio/aac, audio/x-aac, audio/mp4
@@ -22,7 +22,7 @@
 # This makes sound: the human is told before it runs (Plan 01-07 checkpoint).
 set -euo pipefail
 
-SPEAKER="192.168.50.42"
+SPEAKER=""
 URL=""
 MIME="audio/mpeg"
 SECS=25
@@ -61,6 +61,10 @@ is_private_ipv4() {
   [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 0
   return 1
 }
+if [ -z "$SPEAKER" ]; then
+  echo "sonos-play.sh: --speaker IP is required" >&2
+  exit 2
+fi
 if ! is_private_ipv4 "$SPEAKER"; then
   echo "sonos-play.sh: refusing speaker address '$SPEAKER' (only 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 are allowed)" >&2
   exit 2
