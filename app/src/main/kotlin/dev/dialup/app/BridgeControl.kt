@@ -7,8 +7,9 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.dialup.app.model.SingleFlight
+import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.restartSequence
-import dev.dialup.app.model.shouldStartService
+import dev.dialup.app.model.startDecision
 import dev.dialup.app.model.startWhenStopped
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -35,8 +36,12 @@ object BridgeControl {
         if (on) {
             if (deferred) {
                 startAfterStop(app)
-            } else if (shouldStartService(true, BatteryGate.isOpen(app), false)) {
-                startService(app)
+            } else {
+                when (startDecision(true, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
+                    StartDecision.START -> startService(app)
+                    StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
+                    StartDecision.NONE -> Unit
+                }
             }
         } else {
             NetworkResume.disarm(app)
@@ -45,9 +50,9 @@ object BridgeControl {
     }
 
     /**
-     * Wi-Fi is back after the bridge paused itself for lack of a network ([NetworkResume]): starts the service again when the
-     * switch is still on and the battery exemption is held. A start the system refuses leaves a tap-to-resume notification, so
-     * the failure is never silent.
+     * Wi-Fi is back after the bridge stopped itself for lack of a network ([NetworkResume]): starts the service again when the
+     * switch is still on and the battery exemption is held. A start the system refuses is only logged; the callback stays armed
+     * so the next network event tries again, and opening the app or flipping the switch starts the bridge by hand.
      */
     fun resumeAfterNetwork(context: Context) {
         val app = context.applicationContext
@@ -61,7 +66,6 @@ object BridgeControl {
             Log.i("t2u", "network resume: started the bridge service")
         } catch (t: Throwable) {
             Log.w("t2u", "network resume: the system refused the start: ${t.javaClass.name}: ${t.message}")
-            NetworkResume.postTapToResume(app)
         }
     }
 
@@ -78,7 +82,7 @@ object BridgeControl {
                 stillWanted = {
                     AppSettings.of(app).data.value.bridgeEnabled && BatteryGate.isOpen(app) && ServiceHub.service == null
                 },
-                start = { startService(app) },
+                start = { if (hasBindableNetwork(app)) startService(app) else NetworkResume.arm(app) },
             )
         }
     }

@@ -42,6 +42,18 @@ class BridgeToggleTest {
     }
 
     @Test
+    fun `the switch is unusable without the exemption and keeps showing the persisted state`() {
+        assertEquals(ToggleUi(checked = true, usable = false), toggleUi(enabled = true, exempt = false))
+        assertEquals(ToggleUi(checked = false, usable = false), toggleUi(enabled = false, exempt = false))
+    }
+
+    @Test
+    fun `the switch is usable with the exemption and shows the persisted state`() {
+        assertEquals(ToggleUi(checked = true, usable = true), toggleUi(enabled = true, exempt = true))
+        assertEquals(ToggleUi(checked = false, usable = true), toggleUi(enabled = false, exempt = true))
+    }
+
+    @Test
     fun `the confirm text names the speakers and says they keep their track`() {
         val text = confirmText(2, clearOnCastEnd = false)
         assertTrue("2 renderers" in text, text)
@@ -72,6 +84,22 @@ class BridgeToggleTest {
         assertFalse(shouldStartService(enabled = true, exempt = false, running = false))
         assertFalse(shouldStartService(enabled = true, exempt = true, running = true))
         assertFalse(shouldStartService(enabled = false, exempt = false, running = false))
+    }
+
+    @Test
+    fun `a start decision starts only with the switch, the exemption, no service and a bindable network`() {
+        assertEquals(StartDecision.START, startDecision(enabled = true, exempt = true, running = false, bindable = true))
+        assertEquals(StartDecision.WAIT_FOR_WIFI, startDecision(enabled = true, exempt = true, running = false, bindable = false))
+    }
+
+    @Test
+    fun `a start decision is none when the switch is off, the exemption is missing or a service runs`() {
+        for (bindable in listOf(true, false)) {
+            assertEquals(StartDecision.NONE, startDecision(enabled = false, exempt = true, running = false, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = true, exempt = false, running = false, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = true, exempt = true, running = true, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = false, exempt = false, running = true, bindable = bindable))
+        }
     }
 
     @Test

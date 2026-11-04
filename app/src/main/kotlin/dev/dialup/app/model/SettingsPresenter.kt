@@ -8,6 +8,7 @@ import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.media.YTDLP_STATUS_CASTING
 import dev.t2u.media.YtDlpUpdateOutcome
 import dev.t2u.renderer.OUTPUT_FORMATS
 import kotlinx.coroutines.CancellationException
@@ -50,6 +51,9 @@ interface BridgePort {
      */
     val instance: StateFlow<Any?>
 
+    /** How many renderers are being cast to now; 0 while there is no bridge. Update now is not offered while it is above 0. */
+    val casting: StateFlow<Int> get() = NOT_CASTING
+
     /** Whether there is a running bridge now. */
     val running: Boolean get() = instance.value != null
 
@@ -67,6 +71,8 @@ interface BridgePort {
     /** Restarts the bridge; [source] ([RESTART_SOURCE] or [AUTO_RESTART_SOURCE]) lands in the `settings` evidence events. */
     suspend fun restart(source: String): Boolean
 }
+
+private val NOT_CASTING: StateFlow<Int> = MutableStateFlow(0)
 
 /** The settings the tab changes, and whether the running bridge needs a restart to pick the change up (D-09). */
 enum class SettingKey(val needsRestart: Boolean) {
@@ -110,6 +116,7 @@ private const val BUSY_STATUS = "BUSY"
 
 /** The one line the result of an Update now press becomes. The arrow is U+2192. */
 fun updateMessage(o: YtDlpUpdateOutcome): String = when {
+    o.status == YTDLP_STATUS_CASTING -> "A renderer is being cast to; update yt-dlp when the cast ends"
     o.status == BUSY_STATUS -> "An update or a lookup is running; try again in a minute"
     !o.ok -> "Update failed: ${o.error ?: o.status}"
     o.before != null && o.after != null && o.before != o.after -> "Updated ${o.before} \u2192 ${o.after}"
@@ -136,6 +143,8 @@ data class SettingsUi(
     val ytdlpVersion: String = "-",
     val ytdlpChannel: String = "stable",
     val update: UpdateUi = UpdateUi.Idle,
+    /** True while a renderer is being cast to: Update now is greyed out then (UPD-02). */
+    val updateBlockedByCast: Boolean = false,
     /** A one-line result of the last action (cleared cache and so on); null when there is none. */
     val message: String? = null,
     /** The one-line result of the last Clear log, shown under the log buttons; null when there is none. */
@@ -187,6 +196,9 @@ class SettingsPresenter(
                     )
                 }
             }
+        }
+        scope.launch {
+            bridge.casting.collect { n -> ui.update { it.copy(updateBlockedByCast = n > 0) } }
         }
         scope.launch {
             bridge.instance.collectLatest { inst ->
@@ -391,7 +403,17 @@ class SettingsPresenter(
     fun updateNow() {
         var start = false
         ui.update {
-            if (it.update != UpdateUi.Running) {
+            if (it.updateBlockedByCast) {
+                // Refused here without asking the bridge; the updater refuses a press that races the cast start as well.
+                it.copy(
+                    update = UpdateUi.Done(
+                        YtDlpUpdateOutcome(
+                            ok = false, trigger = "ui", channel = it.ytdlpChannel, before = null, after = null,
+                            status = YTDLP_STATUS_CASTING, ms = 0,
+                        ),
+                    ),
+                )
+            } else if (it.update != UpdateUi.Running) {
                 start = true
                 it.copy(update = UpdateUi.Running)
             } else {

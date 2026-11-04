@@ -186,6 +186,9 @@ class YtDlpUpdaterTest {
         g: FakeGateway,
         clock: Clock,
         events: MutableList<Map<String, Any?>> = CopyOnWriteArrayList(),
+        casting: () -> Boolean = { false },
+        store: YtDlpRecordStore? = null,
+        wall: () -> Long = { WALL },
         busy: () -> Boolean = { false },
     ) = YtDlpUpdater(
         g,
@@ -196,7 +199,19 @@ class YtDlpUpdaterTest {
         elapsedMs = { clock.now },
         maxPauseMs = 900_000L,
         busy = busy,
+        casting = casting,
+        record = store,
+        wallMs = wall,
     )
+
+    private class MemoryStore(var value: YtDlpRecord = YtDlpRecord()) : YtDlpRecordStore {
+        val saves = CopyOnWriteArrayList<YtDlpRecord>()
+        override fun load(): YtDlpRecord = value
+        override fun save(record: YtDlpRecord) {
+            saves += record
+            value = record
+        }
+    }
 
     @Test
     fun withAnElapsedClockTheLoopPausesInStepsOfAtMostFifteenMinutes() {
@@ -299,16 +314,240 @@ class YtDlpUpdaterTest {
     }
 
     @Test
-    fun aLookupThatNeverEndsDelaysTheUpdateByAtMostTenMinutes() {
+    fun aLookupThatNeverEndsPostponesTheUpdateForeverAndNeverForcesIt() {
         val g = FakeGateway()
         val events = CopyOnWriteArrayList<Map<String, Any?>>()
-        val clock = Clock(stopAfter = 13)
+        val clock = Clock(stopAfter = 14)
         runLoop(clocked(g, clock, events) { true })
         val steps = clock.waits.toList()
         assertEquals(30_000L, steps.first())
-        assertEquals(List(10) { 60_000L }, steps.subList(1, 11))
-        assertEquals(1, g.updates.size)
+        assertEquals(List(12) { 60_000L }, steps.subList(1, 13))
+        assertTrue(g.updates.isEmpty())
         assertEquals(1, events.count { it["status"] == "POSTPONED" })
+        assertEquals("busy", events.first()["reason"])
+    }
+
+    @Test
+    fun aCastPostponesTheUpdateOnceAndItRunsAtTheNextRecheckWhenTheCastEnds() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val clock = Clock(stopAfter = 7)
+        var checks = 0
+        runLoop(clocked(g, clock, events, casting = { ++checks <= 5 }))
+        assertEquals(1, events.count { it["status"] == "POSTPONED" })
+        assertEquals("casting", events.first()["reason"])
+        assertEquals(listOf(30_000L, 60_000L, 60_000L, 60_000L, 60_000L, 60_000L, 900_000L), clock.waits.toList())
+        assertEquals(1, g.updates.size)
+        assertEquals("start", events.last()["trigger"])
+        assertEquals(true, events.last()["ok"])
+    }
+
+    @Test
+    fun aCastForeverNeverUpdates() {
+        val g = FakeGateway()
+        val clock = Clock(stopAfter = 40)
+        runLoop(clocked(g, clock, casting = { true }))
+        assertTrue(g.updates.isEmpty())
+    }
+
+    // ----- plan 07.1-04: the persisted record is the due criterion ---------------------------------------
+
+    private companion object {
+        const val WALL = 1_700_000_000_000L
+        const val HOUR = 3_600_000L
+        const val MIN = 60_000L
+    }
+
+    @Test
+    fun aRecentSuccessSkipsTheStartUpdateAndTheNextDeadlineIsAboutSeventeenHoursAway() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = WALL - HOUR, lastAttemptWallMs = WALL - HOUR))
+        val clock = Clock(stopAfter = 3)
+        runLoop(clocked(g, clock, events, store = store))
+        assertTrue(g.updates.isEmpty())
+        assertEquals(1, events.size)
+        assertEquals("SKIPPED", events.single()["status"])
+        assertEquals("recent", events.single()["reason"])
+        assertEquals("start", events.single()["trigger"])
+        // after the 30 s start delay the remaining wait is 17 h, taken in 15 minute steps
+        assertEquals(listOf(30_000L, 900_000L, 900_000L), clock.waits.toList())
+        assertTrue(store.saves.isEmpty())
+    }
+
+    @Test
+    fun theSkippedDeadlineIsRecheckedSeventeenHoursLaterAndThenUpdates() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = WALL - HOUR))
+        val clock = Clock(stopAfter = 80)
+        runLoop(clocked(g, clock, events, store = store, wall = { WALL + clock.now }))
+        // 30 s start delay, then 16 h 59 min 30 s in 68 steps of at most 15 minutes, then the update
+        assertEquals(1, g.updates.size)
+        assertEquals(30_000L, clock.waits.first())
+        assertEquals(17L * HOUR, clock.waits.take(69).sum())
+        assertEquals("SKIPPED", events.first()["status"])
+        assertEquals("scheduled", events.last()["trigger"])
+        assertEquals(true, events.last()["ok"])
+    }
+
+    @Test
+    fun aFailedAttemptTenMinutesAgoWaitsTheHourOut() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = null, lastAttemptWallMs = WALL - 10 * MIN))
+        val clock = Clock(stopAfter = 4)
+        runLoop(clocked(g, clock, events, store = store, wall = { WALL + clock.now }))
+        // start delay 30 s, then the 49.5 min that remain of the hour in 15 minute steps; the attempt comes afterwards
+        assertEquals("SKIPPED", events.first()["status"])
+        assertEquals("retry-wait", events.first()["reason"])
+        assertTrue(g.updates.isEmpty())
+    }
+
+    @Test
+    fun theAttemptIsMadeOnceTheHourHasPassed() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = null, lastAttemptWallMs = WALL - 10 * MIN))
+        val clock = Clock(stopAfter = 12)
+        runLoop(clocked(g, clock, events, store = store, wall = { WALL + clock.now }))
+        assertEquals(1, g.updates.size)
+        assertEquals("SKIPPED", events.first()["status"])
+        assertEquals(true, events.last()["ok"])
+    }
+
+    @Test
+    fun everyAutomaticAttemptSavesTheAttemptAndASuccessAlsoSavesTheSuccess() {
+        val g = FakeGateway()
+        val store = MemoryStore()
+        val clock = Clock(stopAfter = 2)
+        runLoop(clocked(g, clock, store = store, wall = { WALL + clock.now }))
+        assertEquals(1, g.updates.size)
+        assertEquals(listOf(YtDlpRecord(null, WALL + 30_000L), YtDlpRecord(WALL + 30_000L, WALL + 30_000L)), store.saves.toList())
+    }
+
+    @Test
+    fun aFailedAttemptKeepsTheOldSuccess() {
+        val g = FakeGateway()
+        g.failure = { IllegalStateException("offline") }
+        val old = WALL - 30 * HOUR
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = old))
+        val clock = Clock(stopAfter = 2)
+        runLoop(clocked(g, clock, store = store, wall = { WALL }))
+        assertEquals(1, g.updates.size)
+        assertEquals(listOf(YtDlpRecord(old, WALL)), store.saves.toList())
+    }
+
+    @Test
+    fun aRecordFromTheFutureIsDue() {
+        val g = FakeGateway()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = WALL + 5 * HOUR, lastAttemptWallMs = WALL + 5 * HOUR))
+        val clock = Clock(stopAfter = 2)
+        runLoop(clocked(g, clock, store = store))
+        assertEquals(1, g.updates.size)
+    }
+
+    @Test
+    fun aThrowingStoreDoesNotStopTheUpdate() {
+        val g = FakeGateway()
+        val store = object : YtDlpRecordStore {
+            override fun load(): YtDlpRecord = throw IllegalStateException("disk")
+            override fun save(record: YtDlpRecord) = throw IllegalStateException("disk")
+        }
+        val clock = Clock(stopAfter = 2)
+        runLoop(clocked(g, clock, store = store))
+        assertEquals(1, g.updates.size)
+    }
+
+    // ----- plan 07.1-04: Update now during a cast, and updateIfDue ------------------------------------------
+
+    @Test
+    fun aManualUpdateWhileCastingIsRefusedWithNoGatewayCallAndNoRecordWrite() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore()
+        var casting = true
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, casting = { casting }, record = store, wallMs = { WALL })
+        val refused = runBlocking { u.updateNow() }
+        assertEquals(false, refused.ok)
+        assertEquals(YTDLP_STATUS_CASTING, refused.status)
+        assertEquals("CASTING", refused.status)
+        assertTrue(g.updates.isEmpty())
+        assertTrue(store.saves.isEmpty())
+        assertEquals(listOf("CASTING"), events.map { it["status"] })
+        casting = false
+        val ran = runBlocking { u.updateNow() }
+        assertEquals(true, ran.ok)
+        assertEquals(1, g.updates.size)
+        assertEquals(YtDlpRecord(WALL, WALL), store.value)
+    }
+
+    @Test
+    fun updateIfDueDoesNothingWhenTheRecordIsRecent() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = WALL - HOUR))
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, record = store, wallMs = { WALL })
+        assertNull(runBlocking { u.updateIfDue("job") })
+        assertTrue(g.updates.isEmpty())
+        assertEquals("SKIPPED", events.single()["status"])
+    }
+
+    @Test
+    fun updateIfDuePostponesWhileCastingOrBusy() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        var casting = true
+        var busy = false
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, casting = { casting }, busy = { busy })
+        val first = runBlocking { u.updateIfDue("job") }
+        assertEquals("POSTPONED", first?.status)
+        assertEquals(false, first?.ok)
+        casting = false
+        busy = true
+        assertEquals("POSTPONED", runBlocking { u.updateIfDue("job") }?.status)
+        assertTrue(g.updates.isEmpty())
+        assertEquals(listOf("casting", "busy"), events.map { it["reason"] })
+    }
+
+    @Test
+    fun updateIfDueRunsOneUpdateWithTheJobTriggerAndSavesTheRecord() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val store = MemoryStore(YtDlpRecord(lastSuccessWallMs = WALL - 30 * HOUR))
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, record = store, wallMs = { WALL })
+        val outcome = runBlocking { u.updateIfDue("job") }
+        assertEquals(true, outcome?.ok)
+        assertEquals("job", outcome?.trigger)
+        assertEquals(1, g.updates.size)
+        assertEquals(YtDlpRecord(WALL, WALL), store.value)
+        // and a second call right after is not due any more
+        assertNull(runBlocking { u.updateIfDue("job") })
+        assertEquals(1, g.updates.size)
+    }
+
+    @Test
+    fun updateIfDueNeverOverlapsARunningScheduledUpdate() {
+        val g = FakeGateway()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        g.onUpdate = {
+            entered.countDown()
+            release.await(10, TimeUnit.SECONDS)
+        }
+        val pauses = Pauses(stopAfter = 2)
+        val u = updater(g, pauses)
+        val loop = thread(name = "scheduled-run") { runLoop(u) }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            val outcome = runBlocking { u.updateIfDue("job") }
+            assertEquals("BUSY", outcome?.status)
+            assertEquals(1, g.updates.size)
+        } finally {
+            release.countDown()
+            loop.join(10_000)
+        }
+        assertEquals(1, g.updates.size)
     }
 
     // ----- plan 07-09: Update now from the app (GUI-07) -------------------------------------------------

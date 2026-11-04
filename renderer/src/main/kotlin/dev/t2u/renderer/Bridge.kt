@@ -446,6 +446,37 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
+     * GUI-14: one MediaRenderer search on demand, from the Refresh button or the app coming to the foreground. [trigger] names
+     * who asked (`ui`, `foreground`). It goes through the running bridge's SSDP client and never opens or reopens sockets; the
+     * periodic schedule and the prune are separate and unchanged. Sends nothing, and answers false, when the bridge is not
+     * running or its network is marked down (emits `search` with `skipped`). True when the search was sent.
+     */
+    suspend fun searchNow(trigger: String): Boolean {
+        if (!started.get() || stopped.get()) return false
+        if (networkDown) {
+            emit("search", "trigger" to trigger, "skipped" to "network-down")
+            return false
+        }
+        // the field is read once, at the moment of use; a rebind may replace it
+        val client = ssdp
+        if (client == null) {
+            emit("search", "trigger" to trigger, "skipped" to "no-client")
+            return false
+        }
+        return try {
+            withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
+            registry?.searched()
+            emit("search", "trigger" to trigger, "sent" to true)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("search-now", t)
+            false
+        }
+    }
+
+    /**
      * GUI-04, D-06: adds the speaker at [ip] by asking it directly. One unicast M-SEARCH goes to [ip] on
      * [BridgeDeps.manualSsdpPort]; the reply reaches the registry like any search reply (so its guards apply: the LOCATION host
      * must equal the sender and be private LAN, excluded servers and hidden speakers are refused), and the card exists only

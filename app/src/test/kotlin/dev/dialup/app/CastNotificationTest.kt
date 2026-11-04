@@ -28,9 +28,15 @@ class CastNotificationTest {
     }
 
     @Test
-    fun `with no network the text says it is waiting, whatever the count`() {
-        assertEquals(NOTIFICATION_NO_NETWORK_TEXT, notificationText(CastCount(1, 3), networkUp = false))
-        assertEquals("1 renderer being cast to", notificationText(CastCount(1, 3), networkUp = true))
+    fun `while casting without a network the text says it is waiting`() {
+        assertEquals(NOTIFICATION_WAITING_TEXT, notificationText(CastCount(1, 3), waiting = true))
+        assertEquals("Waiting for Wi-Fi", NOTIFICATION_WAITING_TEXT)
+        assertEquals("1 renderer being cast to", notificationText(CastCount(1, 3), waiting = false))
+    }
+
+    @Test
+    fun `an idle bridge without a network keeps the count text`() {
+        assertEquals("0 renderers being cast to", notificationText(CastCount(0, 3), waiting = true))
     }
 
     @Test

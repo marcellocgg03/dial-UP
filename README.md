@@ -21,26 +21,29 @@ contains, and what is still unverified, is listed in its release notes.
 
 ## Install
 
-1. Open the Releases page of this repository and download `DialUP-<version>.apk` and `SHA256SUMS` from the latest release.
-2. Check the download. In the folder that holds both files run `sha256sum -c SHA256SUMS`; it must print `OK` for the APK.
-3. Check the signature. `apksigner verify --print-certs DialUP-<version>.apk` (`apksigner` is part of the Android SDK
-   build-tools) prints the certificate digest; it must equal the certificate fingerprint printed in the release notes.
-   Every later release is signed with the same key and shows the same digest.
-   The release APKs are signed with a certificate whose SHA-256 fingerprint is `76:F2:03:3A:67:FD:4A:40:04:01:73:6D:3A:E8:11:93:2C:46:E4:94:CB:9B:05:05:3F:73:11:0A:2F:59:EE:AA`
-   (`76f2033a67fd4a400401736d3ae811932c46e494cb9b05053f73110a2f59eeaa` without colons); the digest `apksigner` prints must match it.
-4. Install the APK. Android asks you to allow installing apps from the source you opened it with (browser or file manager);
-   the app is not on Google Play, it is sideloaded.
-5. Open DialUP. Two banners can appear, each with a Grant button:
+1. Download `DialUP-<version>.apk` from the [Releases page](https://github.com/marcellocgg03/dial-UP/releases), on the
+   phone or on a computer.
+2. Install it. Android asks you to allow installing apps from the source you opened it with (browser or file manager);
+   the app is not on Google Play, it is sideloaded. No building is needed.
+3. Optional check: `sha256sum -c SHA256SUMS` next to the downloaded files must print `OK`, and `apksigner verify --print-certs`
+   must show this certificate SHA-256 fingerprint, the same for every release:
+   `76:F2:03:3A:67:FD:4A:40:04:01:73:6D:3A:E8:11:93:2C:46:E4:94:CB:9B:05:05:3F:73:11:0A:2F:59:EE:AA`
+4. Open DialUP. Two banners can appear, each with a Grant button:
    - notifications (Android 13 and newer), so the status notification and its Stop button are visible;
    - unrestricted battery use. The bridge does not start without it.
 
 ## Using it
 
-1. Switch **Bridge enable** on (it is on after a fresh install). The line under it tells you whether the bridge runs. It
-   keeps running in the background with a status notification, and it starts again after a phone restart unless you
+1. Switch **Enable** on (it is on after a fresh install). It is greyed out until unrestricted battery use is allowed: use
+   the battery banner's **Grant** button. While the phone has no Wi-Fi, "Waiting for Wi-Fi" is shown under the switch. The
+   bridge keeps running in the background with a status notification, and it starts again after a phone restart unless you
    switched it off.
-2. Open the **Renderers** tab. Each speaker found on the Wi-Fi gets a card; "Looking for renderers on the Wi-Fi" is shown
-   until the first one answers.
+
+   Without Wi-Fi and with nothing cast, the bridge stops and its notification goes away; it starts again by itself when
+   Wi-Fi returns. During a cast the notification says "Waiting for Wi-Fi" for about two minutes, and the cast goes on if
+   Wi-Fi comes back within that time.
+2. Open the **Renderers** tab. Each speaker found on the Wi-Fi gets a card. A spinner is shown until the first one answers,
+   and after a few seconds a **Refresh** button searches again at once. Opening the app also searches once.
 3. Open the YouTube or the YouTube Music app, tap the cast icon and pick the renderer. In the cast menu it is listed
    with a speaker emoji in front of its name and the text `(app)` after it. Playlists, pause, next and previous work from
    the YouTube app; the card also has play/pause, previous, next, stop and clear buttons.
@@ -48,7 +51,8 @@ contains, and what is still unverified, is listed in its release notes.
    example `192.168.1.40`). The speaker must answer before it gets a card, and it is saved under that address, so add it
    again if the speaker gets a new address.
 5. The card menu has **Rename** and **Hide from cast menus**; renderers added by address also have **Delete**. A hidden
-   renderer is listed under **Hidden** with a Restore button.
+   renderer is listed in Settings under **Hidden renderers** with a Restore button (and Delete for renderers added by
+   address).
 
 Settings tab, every change is saved as soon as you make it:
 
@@ -60,32 +64,25 @@ Settings tab, every change is saved as soon as you make it:
 - **Forced audio format**: Automatic by default; Direct, MP4, AAC stream (adts), FLAC and MP3 can be forced. A renderer
   that cannot play a forced format shows an error on its card.
 - **yt-dlp**: shows the installed version and **Update now**; the channel is Stable by default, Nightly is selectable.
-  The app also updates yt-dlp by itself in the background.
+  Update now is not available while something is being cast. The app also updates yt-dlp by itself once a day, never
+  while something is being cast.
+- **Hidden renderers**: the renderers you hid, each with a Restore button.
+- **App updates**: when the app is opened it checks GitHub for a newer DialUP release, at most twice a day, and shows a
+  card with a link to the release page on the Renderers tab. The switch turns the automatic check off; **Check now**
+  works either way.
 - **Theme**: System, Light or Dark.
 - **Write the event log**: on by default, with **Share log** and **Clear log**.
 
-## Limits
+## Privacy
 
-- The phone and the speakers must be on the same Wi-Fi. The phone has to stay connected to it for casting to work.
-- Turn off a VPN while casting. Casting with a VPN on has not been tested.
-- The bridge runs as a foreground service with a status notification (its Stop button switches the bridge off). Keep the
-  battery exemption granted, or the bridge does not start.
-- yt-dlp can break when YouTube changes something, until it is updated (Settings, Update now).
-- Not on Google Play: apps built on yt-dlp are unlikely to pass its review. It is sideloaded only.
-- Tested by the author on one phone and a few UPnP/DLNA speakers only. Several features have not been checked on real
-  speakers yet and are untested: hiding a renderer and renaming it as seen in the YouTube cast menus, the ask-first
-  dialogs when you switch the bridge off during a cast, the card buttons on every speaker model, and how a speaker
-  that is unplugged is shown. The release notes list what is still unverified.
-
-## How it works
-
-- The YouTube cast targets are emulated entirely on the phone (DIAL and the YouTube lounge protocol). There is no server
-  of its own, no account and no analytics.
-- No YouTube sign-in is needed: yt-dlp resolves the audio without logging in.
-- The phone talks to YouTube and Google (to receive casts and fetch the audio), to GitHub (yt-dlp updates) and to the
-  speakers on your network.
-- The event log stays on the phone until you press **Share log**, and you choose where it goes. It can contain LAN
-  addresses, speaker names and track titles, so look at it before you send it to anyone.
+- No account, no server of its own and no analytics. Everything runs on the phone.
+- A Google account is not required and is never connected. DialUP does not sign in to anything: yt-dlp looks up the
+  audio anonymously, and the phone sends the speaker only a link to its own address on your network.
+- The phone talks to YouTube and Google (to receive casts and fetch the audio), to GitHub (yt-dlp updates and the app's
+  own update check, which sends only the phone's address and a DialUP version string and can be switched off in Settings)
+  and to the speakers on your network.
+- The event log stays on the phone until you press **Share log**. It can contain LAN addresses, speaker names and track
+  titles, so look at it before you send it to anyone.
 
 ## Screenshots
 

@@ -286,19 +286,148 @@ internal class NetworkChangeTest {
     }
 
     @Test
-    @DisplayName("a move onto the same address still re-sets the loaded track once")
-    fun aMoveOntoTheSameAddressStillResets() {
+    @DisplayName("a move onto the same address keeps a speaker that still plays our stream: nothing is sent and polling resumes")
+    fun aSameAddressMoveKeepsAPlayingSpeaker() {
         withFake { fake ->
             RendererHarness(fake, config = pinned("adts")).use { h ->
                 h.renderer.init()
                 assertTrue(h.renderer.play(Video(A), 0.0))
-                move(h, "127.0.0.1")
-                waitUntil { h.resetDone() }
-                delay(300)
+                val acting = setOf("SetAVTransportURI", "Play", "Stop", "Seek")
+                val before = fake.calls.count { it.action in acting }
+                h.renderer.onNetworkLost()
+                delay(150) // a poll that was already reading finishes
+                val transports = fake.count("GetTransportInfo")
+                h.renderer.onNetworkChanged("127.0.0.1")
+                waitUntil { h.notes("Kept").isNotEmpty() }
+                waitUntil { fake.count("GetTransportInfo") > transports + 2 } // polling resumed
+                delay(150)
 
+                assertEquals(before, fake.calls.count { it.action in acting }, "nothing was sent to the speaker")
+                assertEquals(1, fake.uris().size)
+                assertEquals(1, h.notes("Kept").size)
+                assertTrue(h.notes("Re-set").isEmpty())
+                assertEquals(PlayerStatus.PLAYING, h.renderer.status)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that ran dry during the outage (STOPPED, 0:00) is re-set at the last polled position after an address change")
+    fun aDrySpeakerIsResetAtTheLastPolledPosition() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { fake.count("GetPositionInfo") >= 2 }
+                delay(150) // the poll that read 65 s has stored it
+                h.renderer.onNetworkLost()
+                fake.state.transport = "STOPPED"
+                fake.state.relTime = "0:00:00"
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil { h.resetDone() }
+
+                assertEquals(listOf("adts" to 0, "adts" to 65), h.registered.map { it.format to it.startAt })
+                assertEquals("last-polled", h.notes("Re-set").single()["why"])
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that ran dry during the outage is re-set at the last polled position also when the address stayed")
+    fun aDrySpeakerIsResetAtTheLastPolledPositionOnTheSameAddress() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { fake.count("GetPositionInfo") >= 2 }
+                delay(150)
+                h.renderer.onNetworkLost()
+                fake.state.transport = "STOPPED"
+                fake.state.relTime = "0:00:00"
+                h.renderer.onNetworkChanged("127.0.0.1")
+                waitUntil { h.resetDone() }
+
+                assertEquals(listOf("adts" to 0, "adts" to 65), h.registered.map { it.format to it.startAt })
                 assertEquals(2, fake.uris().size)
-                assertEquals(1, h.notes("Re-set").size)
-                assertEquals("127.0.0.1", hostOf(fake.uris()[1]))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that another source took during the outage is released: nothing is sent to it and the player stops")
+    fun aTakenOverSpeakerIsReleasedAfterTheNetworkReturns() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                val acting = setOf("SetAVTransportURI", "Play", "Stop", "Seek")
+                waitUntil { fake.count("GetPositionInfo") >= 1 }
+                h.renderer.onNetworkLost()
+                delay(150)
+                val before = fake.calls.count { it.action in acting }
+                fake.state.reportedUri = fake.uris().first().replace("127.0.0.1", "127.0.0.9")
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil { h.notes("the speaker was taken over").isNotEmpty() }
+                delay(200)
+
+                assertEquals(1, h.notes("the speaker was taken over").size)
+                assertEquals(before, fake.calls.count { it.action in acting }, "nothing was sent to the speaker")
+                assertEquals(PlayerStatus.STOPPED, h.renderer.status)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a transitioning speaker is read three times, one poll interval apart, then re-set at the last polled position")
+    fun aTransitioningSpeakerIsReadAtMostThreeTimes() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { fake.count("GetPositionInfo") >= 2 }
+                delay(150)
+                h.renderer.onNetworkLost()
+                delay(150)
+                fake.state.transport = "TRANSITIONING"
+                val firstCall = fake.calls.size
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil { h.resetDone() }
+
+                val after = fake.calls.drop(firstCall)
+                val upToSet = after.takeWhile { it.action != "SetAVTransportURI" }
+                assertEquals(3, upToSet.count { it.action == "GetTransportInfo" })
+                assertEquals(listOf("adts" to 0, "adts" to 65), h.registered.map { it.format to it.startAt })
+                assertEquals("last-polled", h.notes("Re-set").single()["why"])
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a kept track whose speaker stops mid-track is re-set once at the last polled position, a second stop is mirrored")
+    fun aKeptTrackThatStopsIsResetOnceThenMirrored() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { fake.count("GetPositionInfo") >= 2 }
+                h.renderer.onNetworkLost()
+                h.renderer.onNetworkChanged("127.0.0.1")
+                waitUntil { h.notes("Kept").isNotEmpty() }
+                delay(200) // polls run on the kept track and store 65 s
+
+                fake.state.transport = "STOPPED"
+                waitUntil { h.resetDone() }
+                assertEquals(listOf("adts" to 0, "adts" to 65), h.registered.map { it.format to it.startAt })
+                assertEquals("stopped-after-keep", h.notes("Re-set").single()["why"])
+                assertTrue(h.notes("mirroring the stop").isEmpty(), "not mirrored")
+                waitUntil { fake.state.transport == "PLAYING" }
+                delay(300) // the re-set track plays: sawPlaying again
+                assertEquals(PlayerStatus.PLAYING, h.renderer.status)
+
+                fake.state.transport = "STOPPED"
+                waitUntil { h.notes("mirroring the stop").isNotEmpty() }
+                assertEquals(1, h.notes("Re-set").size, "the watch is used once")
+                assertEquals(PlayerStatus.STOPPED, h.renderer.status)
             }
         }
     }

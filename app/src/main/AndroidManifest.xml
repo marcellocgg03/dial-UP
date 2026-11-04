@@ -77,6 +77,13 @@
             android:name=".HousekeepingReceiver"
             android:exported="false" />
 
+        <!-- Daily yt-dlp update (plan 07.1-07). Not exported and no intent-filter: only the system binds it, which
+             BIND_JOB_SERVICE enforces (T-07.1-15). -->
+        <service
+            android:name=".YtDlpUpdateJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
     </application>
 
 </manifest>

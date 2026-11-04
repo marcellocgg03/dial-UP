@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.dialup.app.model.BATTERY_BANNER_TEXT
 import dev.dialup.app.model.Banner
 
 /**
@@ -35,7 +36,7 @@ fun Banners(banners: List<Banner>, onGrantNotifications: () -> Unit, onGrantBatt
                 Banner.BATTERY -> BannerCard(
                     tag = "banner-battery",
                     buttonTag = "grant-battery",
-                    text = "Allow unrestricted battery use; the bridge does not start without it",
+                    text = BATTERY_BANNER_TEXT,
                     onGrant = onGrantBattery,
                 )
                 Banner.NOTIFICATIONS -> BannerCard(

@@ -57,6 +57,8 @@ data class AppSettingsData(
     val dialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS,
     val clearOnCastEnd: Boolean = false,
     val theme: ThemeMode = DEFAULT_THEME,
+    /** App-only: whether opening the app checks GitHub for a newer DialUP release (UPD-01). Not a config.json override. */
+    val updateCheckEnabled: Boolean = true,
     val logEnabled: Boolean? = null,
     val gapless: Boolean? = null,
     val cacheMb: Int? = null,
@@ -81,6 +83,7 @@ private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
 private const val KEY_THEME = "theme"
+private const val KEY_UPDATE_CHECK = "updateCheckEnabled"
 private const val KEY_LOG_ENABLED = "logEnabled"
 private const val KEY_GAPLESS = "gapless"
 private const val KEY_CACHE_MB = "cacheMb"
@@ -88,12 +91,12 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_THEME, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
     KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
 /**
- * The nullable override keys of [data] that are set, in a stable order. Names only. The theme is UI-only and never listed.
+ * The nullable override keys of [data] that are set, in a stable order. Names only. The theme and the update check are app-only and never listed.
  */
 fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
     if (data.logEnabled != null) add(KEY_LOG_ENABLED)
@@ -140,6 +143,7 @@ fun parseSettings(text: String): ParsedSettings {
         val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { ThemeMode.fromWire(it) }
         if (mode != null) data = data.copy(theme = mode) else problems += KEY_THEME
     }
+    bool(KEY_UPDATE_CHECK)?.let { data = data.copy(updateCheckEnabled = it) }
     data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), gapless = bool(KEY_GAPLESS))
     o[KEY_CACHE_MB]?.let { e ->
         val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in CACHE_MB_RANGE }
@@ -170,6 +174,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
     if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
+    if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     data.gapless?.let { known[KEY_GAPLESS] = JsonPrimitive(it) }
     data.cacheMb?.let { known[KEY_CACHE_MB] = JsonPrimitive(it) }

@@ -2,7 +2,6 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -12,25 +11,23 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import java.net.Inet4Address
 
 /**
- * The bridge pauses itself when the phone has had no Wi-Fi or hotspot address for [NO_NETWORK_GRACE_MS]: the service stops,
- * so the foreground notification and its status bar icon go away, while the switch in the app stays on (nothing is persisted
- * off). This object is what brings it back. [arm] registers a Wi-Fi network callback with a PendingIntent, which the system
- * keeps delivering even after the app process was killed; [NetworkResumeReceiver] then starts the service again once a Wi-Fi
- * client address exists. Opening the app also starts the bridge (MainActivity), whatever the network.
+ * The service stops itself when Wi-Fi is lost with nothing cast, or after the cast wait window (plan 07.1-01); the switch in
+ * the app stays on. This object is what brings it back. [arm] registers a Wi-Fi network callback with a PendingIntent, which
+ * the system keeps delivering even after the app process was killed; [NetworkResumeReceiver] then starts the service once a
+ * Wi-Fi client address exists, the switch is on and the battery exemption is held. The start paths that find no network
+ * (app open, boot, the switch) arm it too instead of starting a bridge that would stop at once. A start the system refuses is
+ * only logged: the bridge stays off with the switch on until the author opens the app or flips the switch.
  *
- * The hotspot case is not covered: the phone's own hotspot is not a Wi-Fi network for the callback, but the bridge counts it
- * as a network, so it never pauses while the hotspot is on.
+ * The hotspot case is not covered by the callback: the phone's own hotspot is not a Wi-Fi network for it, but the bridge
+ * counts it as a network, so it does not stop while the hotspot is on.
  */
 object NetworkResume {
     private const val PREFS = "t2u_net_resume"
     private const val KEY_ARMED = "armed"
     private const val REQUEST_CODE = 5
-    private const val RESUME_CHANNEL = "dialup-resume"
-    private const val RESUME_NOTIFICATION_ID = 2
     private const val TAG = "T2U"
 
     private fun pendingIntent(context: Context): PendingIntent =
@@ -64,7 +61,7 @@ object NetworkResume {
         }
     }
 
-    /** Stops listening and removes the tap-to-resume notification. Safe when not armed. */
+    /** Stops listening. Safe when not armed. */
     fun disarm(context: Context) {
         val app = context.applicationContext
         if (isArmed(app)) {
@@ -75,7 +72,6 @@ object NetworkResume {
             }
             setArmed(app, false)
         }
-        app.getSystemService(NotificationManager::class.java)?.cancel(RESUME_NOTIFICATION_ID)
     }
 
     /** True when a Wi-Fi client network with an IPv4 address exists now. */
@@ -91,25 +87,14 @@ object NetworkResume {
         return false
     }
 
-    /** Shown when the system refuses to start the service from the background: one tap opens the app, which starts the bridge. */
-    fun postTapToResume(context: Context) {
-        val app = context.applicationContext
-        val nm = app.getSystemService(NotificationManager::class.java) ?: return
-        nm.createNotificationChannel(NotificationChannel(RESUME_CHANNEL, "DialUP, resume", NotificationManager.IMPORTANCE_DEFAULT))
-        val open = PendingIntent.getActivity(
-            app,
-            REQUEST_CODE,
-            Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val notification = NotificationCompat.Builder(app, RESUME_CHANNEL)
-            .setSmallIcon(R.drawable.ic_stat_dialup)
-            .setContentTitle("DialUP")
-            .setContentText("Wi-Fi is back. Tap to turn the bridge on again.")
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        nm.notify(RESUME_NOTIFICATION_ID, notification)
+    /**
+     * Builds before 0.9.0-beta.1 created a second notification channel for the tap-to-resume notification. Deleting it is
+     * idempotent and harmless when it is absent.
+     */
+    fun removeLegacyChannel(context: Context) {
+        runCatching {
+            context.getSystemService(NotificationManager::class.java)?.deleteNotificationChannel("dialup-resume")
+        }
     }
 }
 

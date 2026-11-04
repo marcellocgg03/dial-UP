@@ -64,6 +64,7 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             gateway = AndroidYtDlpGateway(app, log),
             channel = { settings.data.value.ytdlpChannel ?: loadAppConfig(app.filesDir).config.ytdlpChannel },
             onEvent = { log.event("ytdlp-update", it) },
+            record = YtDlpRecords.of(app),
         )
     }
 
@@ -71,6 +72,8 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         // The identity of the cast feature: a restart always shows as a new value, also when the bridge is up before and after.
         // Up means the service runs and has built its cast feature; the cast calls below answer null before that.
         override val instance: StateFlow<Any?> = model.cast
+
+        override val casting: StateFlow<Int> = model.casting
 
         override suspend fun clearCache(): Int? = withContext(Dispatchers.IO) {
             model.cast.value?.clearCache() ?: offlineCache().clear().also { evidence()?.event("cache-clear", mapOf("cleared" to it, "source" to "ui-offline")) }

@@ -55,6 +55,8 @@ class FakeBridgePort(
     var started: RestartFields? = RestartFields(gapless = true, outputFormat = "auto"),
 ) : BridgePort {
     private val flow = MutableStateFlow<Any?>(if (running) Any() else null)
+    val castingFlow = MutableStateFlow(0)
+    override val casting: StateFlow<Int> get() = castingFlow
     override val instance: StateFlow<Any?> get() = flow
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
@@ -377,6 +379,42 @@ class SettingsPresenterTest {
         runCurrent()
         assertEquals(1, bridge.updateCalls)
         assertTrue(p.state.value.update is UpdateUi.Done)
+    }
+
+    @Test
+    fun `update now is blocked while a renderer is being cast to`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome() }
+        val p = presenter(bridge = bridge)
+        assertFalse(p.state.value.updateBlockedByCast)
+
+        bridge.castingFlow.value = 1
+        runCurrent()
+        assertTrue(p.state.value.updateBlockedByCast)
+
+        p.updateNow()
+        runCurrent()
+        assertEquals(0, bridge.updateCalls)
+        val done = p.state.value.update as UpdateUi.Done
+        assertEquals("CASTING", done.outcome.status)
+        assertFalse(done.outcome.ok)
+        assertEquals("A renderer is being cast to; update yt-dlp when the cast ends", updateMessage(done.outcome))
+
+        bridge.castingFlow.value = 0
+        runCurrent()
+        assertFalse(p.state.value.updateBlockedByCast)
+        p.updateNow()
+        runCurrent()
+        assertEquals(1, bridge.updateCalls)
+    }
+
+    @Test
+    fun `a bridge port that does not report casting never blocks update now`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome() }
+        val p = presenter(bridge = bridge)
+        assertFalse(p.state.value.updateBlockedByCast)
+        p.updateNow()
+        runCurrent()
+        assertEquals(1, bridge.updateCalls)
     }
 
     @Test

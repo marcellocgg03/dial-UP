@@ -23,6 +23,16 @@ fun toggleAction(requestedOn: Boolean, enabled: Boolean, casting: Int): ToggleAc
     else -> ToggleAction.STOP
 }
 
+/** What the header switch draws: [checked] is its position, [usable] whether it reacts to taps. */
+data class ToggleUi(val checked: Boolean, val usable: Boolean)
+
+/**
+ * The switch shows the persisted state ([enabled]) and is greyed out without the battery exemption ([exempt]). Flipping
+ * it never opens the exemption request; that is the battery banner's Grant button. A grant only makes the switch usable
+ * and never flips it (author's decision 2026-11-04); the start itself stays behind [startDecision] and the service gate.
+ */
+fun toggleUi(enabled: Boolean, exempt: Boolean): ToggleUi = ToggleUi(checked = enabled, usable = exempt)
+
 /**
  * The confirmation shown before the bridge is switched off while [casting] speakers are loading, playing
  * or paused. It says what happens to them: cleared when the clear-on-cast-end setting is on, otherwise they
@@ -45,6 +55,20 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
  * service is not already running (D-04, T-07-09, T-07-11).
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
+
+/** What a start path does: start the service, wait for Wi-Fi, or nothing. */
+enum class StartDecision { START, WAIT_FOR_WIFI, NONE }
+
+/**
+ * What a start path (app open, boot, the switch, the deferred start) does. A start without a network would be stopped at
+ * once by the idle rule (plan 07.1-01), so the caller arms NetworkResume instead and the bridge starts when Wi-Fi comes
+ * (RESEARCH Pitfall 3). [bindable] is whether the bridge can bind: a Wi-Fi client address or the phone's own hotspot.
+ */
+fun startDecision(enabled: Boolean, exempt: Boolean, running: Boolean, bindable: Boolean): StartDecision = when {
+    !shouldStartService(enabled, exempt, running) -> StartDecision.NONE
+    !bindable -> StartDecision.WAIT_FOR_WIFI
+    else -> StartDecision.START
+}
 
 /** What an in-app restart of the bridge does first. */
 enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }

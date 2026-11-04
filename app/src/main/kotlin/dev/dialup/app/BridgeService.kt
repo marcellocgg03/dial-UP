@@ -9,8 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -18,16 +16,18 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import dev.dialup.app.model.NetworkLossWatcher
+import dev.dialup.app.model.WIFI_LOSS_WINDOW_MS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,7 +39,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
 import java.net.Inet4Address
-import java.net.InetAddress
 
 /** Process-level handle so the command receiver can reach the running service. */
 object ServiceHub {
@@ -228,7 +227,7 @@ class BridgeService : Service(), SpikeHost {
         logExitInfo()
         startFeatures()
         scope.launch { castCountLoop() }
-        scope.launch { pauseWhenNoNetworkLoop() }
+        scope.launch { networkLossLoop() }
         scope.launch { heartbeatLoop() }
         return true
     }
@@ -354,20 +353,7 @@ class BridgeService : Service(), SpikeHost {
 
     // ----- wifi helpers --------------------------------------------------------------------------
 
-    @Suppress("DEPRECATION")
-    private fun wifiLinkProperties(): Pair<Inet4Address?, String?> {
-        val cm = getSystemService(ConnectivityManager::class.java) ?: return null to null
-        for (network in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val props = cm.getLinkProperties(network) ?: continue
-            val v4 = props.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>().firstOrNull()
-            return v4 to props.interfaceName
-        }
-        // no Wi-Fi client address (the phone may be the hotspot provider): bind to the tether interface instead
-        val tether = selectTether(tetherCandidates()) ?: return null to null
-        return (InetAddress.getByName(tether.ipv4) as? Inet4Address) to tether.name
-    }
+    private fun wifiLinkProperties(): Pair<Inet4Address?, String?> = bindableLink(this)
 
     override fun wifiIpv4(): Inet4Address? = wifiLinkProperties().first
 
@@ -482,7 +468,7 @@ class BridgeService : Service(), SpikeHost {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(count: CastCount, networkUp: Boolean = true): Notification {
+    private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -498,7 +484,7 @@ class BridgeService : Service(), SpikeHost {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
-            .setContentText(notificationText(count, networkUp))
+            .setContentText(notificationText(count, waiting))
             .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
@@ -507,42 +493,56 @@ class BridgeService : Service(), SpikeHost {
     }
 
     /**
+     * The Wi-Fi-loss decision (WIFI-01, WIFI-02). Nothing being cast: the service stops at once when the last Wi-Fi client
+     * and hotspot address are gone. A cast waits [WIFI_LOSS_WINDOW_MS]; a return inside it leaves the rebind in
+     * [CastFeature] to run, the window's end stops the service. The switch stays on and [NetworkResume] starts the
+     * service again with Wi-Fi.
+     */
+    private suspend fun networkLossLoop() {
+        val sources = features.filterIsInstance<NetworkStateSource>()
+        if (sources.isEmpty()) return
+        val present: Flow<Boolean> = combine(sources.map { it.wifiPresent }) { all -> all.all { it } }
+        val castingNow: Flow<Int> = sumCastCounts(features.filterIsInstance<CastCountSource>()).map { it.casting }
+        NetworkLossWatcher(present, castingNow, SystemClock::elapsedRealtime) { action, downMs ->
+            if (!AppSettings.of(this).data.value.bridgeEnabled) {
+                evidence.event("net-pause", mapOf("skipped" to "switch-off"))
+                return@NetworkLossWatcher
+            }
+            evidence.event(
+                "net-pause",
+                mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_LOSS_WINDOW_MS, "casting" to casting),
+            )
+            NetworkResume.arm(this)
+            stopSelf()
+        }.run()
+    }
+
+    /**
      * The count is derived from feature state (every [CastCountSource] feature), never from events.
      * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
      */
-    /**
-     * No Wi-Fi and no hotspot address for [NO_NETWORK_GRACE_MS]: the bridge has nothing to serve, so the service stops and
-     * takes its notification with it. The switch is left on, and [NetworkResume] starts the service again with Wi-Fi.
-     */
-    private suspend fun pauseWhenNoNetworkLoop() {
-        val sources = features.filterIsInstance<NetworkStateSource>()
-        if (sources.isEmpty()) return
-        combine(sources.map { it.networkUp }) { ups -> ups.all { it } }.distinctUntilChanged().collectLatest { up ->
-            if (up) return@collectLatest
-            delay(NO_NETWORK_GRACE_MS)
-            if (!AppSettings.of(this).data.value.bridgeEnabled) return@collectLatest
-            evidence.event("net-pause", mapOf("graceMs" to NO_NETWORK_GRACE_MS))
-            NetworkResume.arm(this)
-            stopSelf()
-        }
-    }
-
     private suspend fun castCountLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()
-        val networkUp: Flow<Boolean> =
-            if (sources.isEmpty()) flowOf(true) else combine(sources.map { it.networkUp }) { ups -> ups.all { it } }.distinctUntilChanged()
+        val noNetwork: Flow<Boolean> =
+            if (sources.isEmpty()) {
+                flowOf(false)
+            } else {
+                combine(sources.map { it.networkUp }) { ups -> ups.all { it } }
+                    .combine(combine(sources.map { it.wifiPresent }) { present -> present.all { it } }) { up, present -> !up || !present }
+                    .distinctUntilChanged()
+            }
         var lastCount: CastCount? = null
-        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), networkUp) { count, up -> count to up }.collect { (count, up) ->
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, waiting -> count to waiting }.collect { (count, waiting) ->
             if (count != lastCount) {
                 lastCount = count
                 casting = count.casting
                 applyPlayLocks(playLocks.onCasting(count.casting), "casting")
                 evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             }
-            val text = notificationText(count, up)
+            val text = notificationText(count, waiting)
             if (text != lastNotifiedText) {
                 lastNotifiedText = text
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, up))
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, waiting))
             }
         }
     }
@@ -553,7 +553,6 @@ class BridgeService : Service(), SpikeHost {
         const val CHANNEL_ID = "dialup"
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
-        const val NO_NETWORK_GRACE_MS = 60_000L
     }
 }
 

@@ -17,6 +17,9 @@ import androidx.core.content.ContextCompat
  * by a reboot starts the bridge again (Phase 5 Open Question 4, UI-06). A force-stopped app gets
  * no BOOT_COMPLETED until it is opened (D-01 accepts this). The receiver is not exported and ignores every
  * action but BOOT_COMPLETED.
+ *
+ * BOOT_COMPLETED often comes before Wi-Fi associates. Without a bindable network (no Wi-Fi client address, no hotspot) the
+ * service would be stopped at once, so the receiver arms [NetworkResume] instead and the bridge starts when Wi-Fi comes.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -29,6 +32,11 @@ class BootReceiver : BroadcastReceiver() {
         val exempt = BatteryGate.isOpen(context)
         if (!bootStartDecision(enabled, exempt)) {
             Log.i(TAG, "boot: the bridge was not started because the battery exemption is missing; opening the app asks for it")
+            return
+        }
+        if (!hasBindableNetwork(context)) {
+            NetworkResume.arm(context)
+            Log.i(TAG, "boot: no Wi-Fi yet; the bridge starts when it connects")
             return
         }
         try {

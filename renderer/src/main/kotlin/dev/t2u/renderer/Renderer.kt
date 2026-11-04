@@ -1618,6 +1618,7 @@ class Renderer(
     }
 
     private fun forgetTrack() {
+        resyncWatch = null
         releaseStream(current)
         dropQueued()
         dropAdvanced()
@@ -1943,27 +1944,35 @@ class Renderer(
     override suspend fun onNetworkLost() {
         if (destroyed) return
         networkDown = true
-        resetJob?.cancel() // a re-set under way belongs to an address that is gone again
+        resetJob?.cancel() // a re-sync under way belongs to an address that is gone again
+        resyncWatch = null
         stopPolling()
     }
 
     @Volatile private var resetJob: Job? = null
 
     /**
-     * Plan 05-08 (D-07): the phone is on [host] now. Streams are built with it from here on, the old address is remembered as
-     * ours, polling resumes, and the loaded track is re-set on the speaker from the new address at the speaker's position
-     * (a short gap is accepted). The re-set runs in this renderer's own scope: one slow speaker holds up no other.
+     * After a KEEP (plan 07.1-02): the loaded track and the deadline of the watch on it. A mid-track stop that the poll reads
+     * for this same track before the deadline is the speaker's buffer running dry, not a real stop, and is re-set once.
+     */
+    @Volatile private var resyncWatch: Pair<Current, Long>? = null
+
+    /**
+     * Plan 05-08 (D-07), reworked in plan 07.1-02 (WIFI-02): the phone is on [host] now. Streams are built with it from here
+     * on and the old address is remembered as ours. Polling does NOT resume here: the speaker is read first by
+     * [resyncAfterNetworkReturn], so a STOPPED the outage caused is not mirrored to the phone before the decision. The re-sync
+     * runs in this renderer's own scope: one slow speaker holds up no other.
      */
     override suspend fun onNetworkChanged(host: String) {
         if (destroyed) return
         val old = ip
         val fresh = config.advertiseIp ?: host
+        val ipChanged = old != fresh
         ip = fresh
         ownHosts = (ownHosts.filter { it != fresh && it != old } + listOfNotNull(old?.takeIf { it != fresh })).takeLast(OWN_HOSTS_KEPT)
         networkDown = false
-        if (current != null) startPolling()
-        resetJob?.cancel() // a newer change replaces an older re-set that is still waiting or loading
-        resetJob = scope.launch { resetAfterAddressChange() }
+        resetJob?.cancel() // a newer change replaces an older re-sync that is still waiting or reading
+        resetJob = scope.launch { resyncAfterNetworkReturn(ipChanged) }
     }
 
     /** A load that has started and not finished: it may still land with a URL on the old address. */
@@ -1971,27 +1980,99 @@ class Renderer(
         (status == PlayerStatus.LOADING && queue.current?.id != current?.video?.id)
 
     /**
-     * Sends the loaded track to the speaker again from the new address (D-07). Waits for a load in flight first (bounded by
-     * [NETWORK_RESET_WAIT_MS]) and re-sets what it delivered. Only a playing, paused or loading player is re-set; a stopped or
-     * idle one, and one without a track, get nothing. The position is read once from the speaker; when it cannot be read the
-     * last polled one is used, never an extrapolation over the outage. A playing track is re-set playing, a paused one paused
-     * (a paused `direct` stream owes its Seek until the phone resumes). Nothing here touches the volume.
+     * Follows what the speaker really does after the network came back (WIFI-02, RESEARCH Pitfall 1). Waits for a load in
+     * flight first (bounded by [NETWORK_RESET_WAIT_MS]), then reads the transport state and the TrackURI, at most
+     * [RESYNC_READ_ATTEMPTS] times [Config.pollIntervalMs] apart, and acts on [resyncAction]:
+     *  * KEEP: the speaker still plays our stream on the same address. Nothing is sent, polling resumes, and a watch of
+     *    [RESYNC_WATCH_MS] re-sets a mid-track stop once (a speaker that only drains its buffer stops soon after).
+     *  * RESET_AT_SPEAKER: the address changed and the speaker plays or is paused on our stream: re-set at its own position.
+     *  * RESET_AT_LAST_POLLED: the speaker ran dry or cannot be read: re-set at the last polled position, never at its own
+     *    0:00 and never an extrapolation over the outage.
+     *  * RELEASE_FOREIGN: another source took the speaker: nothing is sent, the sender is told the player stopped.
+     * A playing track is re-set playing, a paused one paused (a paused `direct` stream owes its Seek until the phone resumes).
+     * Nothing here touches the volume.
      */
-    private suspend fun resetAfterAddressChange() {
+    private suspend fun resyncAfterNetworkReturn(ipChanged: Boolean) {
         val deadline = deps.clock() + NETWORK_RESET_WAIT_MS
         while (!destroyed && loadInFlight() && deps.clock() < deadline) delay(NETWORK_RESET_STEP_MS)
         if (destroyed) return
         if (loadInFlight()) {
             note("warn", "A load was still under way ${NETWORK_RESET_WAIT_MS / 1000}s after the address change - the track is not re-set")
+            if (current != null) startPolling()
             return
         }
-        val c = current ?: return
-        if (status !in RESET_STATUSES) return
+        var attempt = 0
+        while (true) {
+            if (destroyed || networkDown) return
+            val c = current
+            val holds = c != null && status in RESET_STATUSES
+            var state: String? = null
+            var reading: Map<String, String>? = null
+            var kind = UriKind.UNREAD
+            if (holds) {
+                state = transportState()
+                if (state != null) {
+                    reading = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+                    val trackUri = reading?.get("TrackURI")
+                    kind = when {
+                        reading == null -> UriKind.UNREAD
+                        trackUri.isNullOrEmpty() -> UriKind.EMPTY
+                        isOurStream(trackUri) -> UriKind.OURS
+                        else -> UriKind.FOREIGN
+                    }
+                }
+                // the player may have been stopped, or another track loaded, while the speaker was read
+                if (destroyed || networkDown || current !== c) return
+            }
+            attempt++
+            when (resyncAction(holds, ipChanged, state, kind, attempt)) {
+                ResyncAction.NOTHING -> {
+                    if (current != null) startPolling()
+                    return
+                }
+                ResyncAction.RETRY -> delay(config.pollIntervalMs)
+                ResyncAction.KEEP -> {
+                    val keep = c ?: return
+                    note(
+                        "info",
+                        "Kept \"${nowPlaying?.title ?: keep.video.id}\" after the network returned: the speaker still plays it",
+                        "videoId" to keep.video.id,
+                        "state" to state,
+                    )
+                    resyncWatch = keep to (deps.clock() + RESYNC_WATCH_MS)
+                    startPolling()
+                    return
+                }
+                ResyncAction.RELEASE_FOREIGN -> {
+                    releaseTakenOverSpeaker(reading?.get("TrackURI"))
+                    return
+                }
+                ResyncAction.RESET_AT_SPEAKER -> {
+                    val keep = c ?: return
+                    val at = reading?.get("RelTime")?.let { parseHms(it) + keep.startAt } ?: position?.rel ?: keep.startAt.toDouble()
+                    resetLoaded(keep, at, "speaker")
+                    return
+                }
+                ResyncAction.RESET_AT_LAST_POLLED -> {
+                    val keep = c ?: return
+                    resetLoaded(keep, position?.rel ?: keep.startAt.toDouble(), "last-polled")
+                    return
+                }
+            }
+        }
+    }
+
+    /**
+     * Sends the loaded track [c] to the speaker again from the current address at [from] seconds (D-07). [why] says where the
+     * position came from. The position is clamped inside the track; a playing track is re-set playing, a paused one paused.
+     */
+    private suspend fun resetLoaded(c: Current, from: Double, why: String) {
+        resyncWatch = null
         val duration = nowPlaying?.duration ?: 0.0
-        var pos = speakerPosition() ?: position?.rel ?: c.startAt.toDouble()
+        var pos = from
         if (duration > 1) pos = minOf(pos, duration - 1)
         pos = maxOf(0.0, pos)
-        // the player may have been stopped, or another track loaded, while the position was read
+        // the player may have been stopped, or another track loaded, since the position was decided
         val now = status
         if (destroyed || current !== c || now !in RESET_STATUSES) return
         val paused = now == PlayerStatus.PAUSED
@@ -2013,6 +2094,7 @@ class Renderer(
             "videoId" to c.video.id,
             "format" to c.format,
             "paused" to paused,
+            "why" to why,
         )
     }
 
@@ -2131,6 +2213,12 @@ class Renderer(
                 if (ended) {
                     note("info", "Track finished on renderer - advancing queue")
                     advanceAfterTrackEnd()
+                } else if (c != null && resyncWatch.let { it != null && it.first === c && deps.clock() < it.second }) {
+                    // The speaker was kept after the network returned and now stops mid-track: its buffer ran dry (plan 07.1-02).
+                    resyncWatch = null
+                    note("info", "The speaker stopped after the network returned - re-setting at the last polled position")
+                    val at = p?.rel ?: c.startAt.toDouble()
+                    resetJob = scope.launch { resetLoaded(c, at, "stopped-after-keep") }
                 } else {
                     // Stop pressed on the speaker, or a stream that died early: mirror it, do not skip the song.
                     // The track stays loaded (clearing is only for a disconnect and the service Stop).

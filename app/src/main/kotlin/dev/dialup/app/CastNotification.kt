@@ -15,18 +15,27 @@ data class CastCount(val casting: Int, val total: Int)
 /** The persistent notification text (D-06, SVC-01). */
 fun notificationText(c: CastCount): String = "${c.casting} ${if (c.casting == 1) "renderer" else "renderers"} being cast to"
 
-/** The notification text while the phone has no Wi-Fi or hotspot address: the bridge waits and nothing can be cast. */
-const val NOTIFICATION_NO_NETWORK_TEXT = "No Wi-Fi: waiting for a network"
-
-/** What the notification says: the cast count, or the waiting line while there is no network. */
-fun notificationText(c: CastCount, networkUp: Boolean): String = if (networkUp) notificationText(c) else NOTIFICATION_NO_NETWORK_TEXT
+/** The notification text while a renderer is being cast to and the phone has no Wi-Fi: the bridge waits for it to return. */
+const val NOTIFICATION_WAITING_TEXT = "Waiting for Wi-Fi"
 
 /**
- * Implemented by a feature that binds to a network. False while it has none: the notification then says it is waiting, and
- * after a grace period the service pauses itself (see NetworkResume). A service with no such feature counts as up.
+ * What the one notification on the one channel says: the waiting line while something is being cast to and the phone has
+ * no network, the cast count otherwise. An idle bridge without a network is stopping, so it keeps the count text.
+ */
+fun notificationText(c: CastCount, waiting: Boolean): String = if (waiting && c.casting > 0) NOTIFICATION_WAITING_TEXT else notificationText(c)
+
+/**
+ * Implemented by a feature that binds to a network. [networkUp] is false while it has none (after its own debounce and
+ * rebind decision). A service with no such feature counts as up.
  */
 interface NetworkStateSource {
     val networkUp: StateFlow<Boolean>
+
+    /**
+     * True while the phone has a Wi-Fi client or hotspot address according to the network callbacks, whatever the bridge's
+     * rebind state; the Wi-Fi-loss watcher keys its window on it.
+     */
+    val wifiPresent: StateFlow<Boolean>
 }
 
 /**

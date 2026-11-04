@@ -2,76 +2,42 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
-import dev.t2u.dial.DialAccessMode
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class BridgeStatusTest {
+    private val bools = listOf(true, false)
+
     @Test
-    fun `off reads Bridge off`() {
-        assertEquals("Bridge off", statusLine(BridgeStatus.OFF))
+    fun `the only subtitle is Waiting for Wi-Fi, for switch on, exempt and no Wi-Fi`() {
+        assertEquals("Waiting for Wi-Fi", statusLine(enabled = true, exempt = true, wifiPresent = false))
     }
 
     @Test
-    fun `running with the phone only mode`() {
-        assertEquals("Running · This phone only", statusLine(BridgeStatus(true, DialAccessMode.PHONE)))
-    }
-
-    @Test
-    fun `running with the whole network mode`() {
-        assertEquals("Running · Whole network", statusLine(BridgeStatus(true, DialAccessMode.LAN)))
-    }
-
-    @Test
-    fun `the running text never names an address`() {
-        for (mode in DialAccessMode.values()) {
-            val text = statusLine(BridgeStatus(true, mode))
-            assertFalse(text.contains("Wi-Fi"), text)
-            assertFalse(Regex("\\d\\.\\d").containsMatchIn(text), text)
+    fun `every other combination has no subtitle`() {
+        for (e in bools) for (x in bools) for (w in bools) {
+            if (e && x && !w) continue
+            assertEquals("", statusLine(e, x, w), "enabled=$e exempt=$x wifiPresent=$w")
         }
     }
 
     @Test
-    fun `off ignores the mode`() {
-        assertEquals("Bridge off", statusLine(BridgeStatus(false, DialAccessMode.LAN)))
-    }
-
-    private val up = BridgeStatus(true, DialAccessMode.PHONE)
-    private val down = BridgeStatus.OFF
-
-    @Test
-    fun `a switched-off bridge reads Bridge off whatever else holds`() {
-        for (exempt in listOf(true, false)) for (serviceUp in listOf(true, false)) for (s in listOf(up, down)) {
-            assertEquals("Bridge off", statusLine(s, enabled = false, exempt = exempt, serviceUp = serviceUp))
+    fun `no combination returns a removed status text`() {
+        for (e in bools) for (x in bools) for (w in bools) {
+            val text = statusLine(e, x, w)
+            for (word in listOf("Running", "phone", "network", "Bridge off", "Starting", "battery")) {
+                assertFalse(text.contains(word), "$text contains $word")
+            }
         }
     }
 
     @Test
-    fun `enabled without the exemption waits for it`() {
-        assertEquals("Waiting for the battery exemption", statusLine(down, enabled = true, exempt = false, serviceUp = false))
-        assertEquals("Waiting for the battery exemption", statusLine(up, enabled = true, exempt = false, serviceUp = true))
-    }
-
-    @Test
-    fun `enabled and exempt but no service yet reads Starting`() {
-        assertEquals("Starting", statusLine(down, enabled = true, exempt = true, serviceUp = false))
-    }
-
-    @Test
-    fun `the service up without a running bridge waits for Wi-Fi`() {
-        assertEquals("Waiting for Wi-Fi", statusLine(down, enabled = true, exempt = true, serviceUp = true))
-    }
-
-    @Test
-    fun `a running bridge keeps the running texts`() {
-        assertEquals(
-            "Running · This phone only",
-            statusLine(up, enabled = true, exempt = true, serviceUp = true),
-        )
-        assertEquals(
-            "Running · Whole network",
-            statusLine(BridgeStatus(true, DialAccessMode.LAN), enabled = true, exempt = true, serviceUp = true),
-        )
+    fun `waitingForWifi is true only for on, exempt and no Wi-Fi`() {
+        for (e in bools) for (x in bools) for (w in bools) {
+            assertEquals(e && x && !w, waitingForWifi(e, x, w))
+        }
+        assertTrue(waitingForWifi(true, true, false))
     }
 }
