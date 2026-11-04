@@ -1,4 +1,22 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
+// Release signing material lives outside the repository (D-06): keystore.properties in the repo root (ignored by git)
+// or the four DIALUP_* environment variables. With neither, the release build is left unsigned. Values are never logged.
+val signingProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.isFile) f.inputStream().use { load(it) }
+}
+
+fun signingValue(propKey: String, envKey: String): String? =
+    (signingProps.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingValue("storeFile", "DIALUP_KEYSTORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "DIALUP_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "DIALUP_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "DIALUP_KEY_PASSWORD")
+val releaseSigningComplete =
+    listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
 
 // AGP 9 built-in Kotlin: do NOT apply the legacy Kotlin-for-Android plugin, no kapt.
 plugins {
@@ -14,16 +32,30 @@ android {
         applicationId = "dev.dialup"
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37 (CLAUDE.md)
+        // versionCode is a plain integer raised by one for every build that is published (D-01); versionName
+        // follows the git tag v<versionName>.
         versionCode = 1
-        versionName = "0.1-spike"
+        versionName = "0.9.0-beta.1"
 
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
 
+    signingConfigs {
+        if (releaseSigningComplete) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningComplete) signingConfig = signingConfigs.getByName("release")
             // D-06: the app depends on youtubedl-android payloads and Ktor engines that load classes by name, and
             // nothing has proven them under R8, so the beta ships unminified. Revisit after 1.0.
             isMinifyEnabled = false
