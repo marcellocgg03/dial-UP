@@ -1,6 +1,7 @@
 package dev.dialup.app
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -8,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -97,5 +99,53 @@ class GuardedRunTest {
         }
         assertTrue(done.await(5, TimeUnit.SECONDS))
         scope.cancel()
+    }
+
+    @Test
+    fun launchFinishingRunsTheBodyThenFinishOnce() {
+        val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val scope = CoroutineScope(SupervisorJob())
+        runBlocking { scope.launchFinishing({ order.add("finish") }) { order.add("body") }.join() }
+        assertEquals(listOf("body", "finish"), order.toList())
+        scope.cancel()
+    }
+
+    @Test
+    fun launchFinishingFinishesOnAScopeCancelledBeforeTheCall() {
+        val finished = AtomicInteger()
+        val ran = AtomicInteger()
+        val scope = CoroutineScope(SupervisorJob())
+        scope.cancel()
+        runBlocking { scope.launchFinishing({ finished.incrementAndGet() }) { ran.incrementAndGet() }.join() }
+        assertEquals(0, ran.get())
+        assertEquals(1, finished.get())
+    }
+
+    @Test
+    fun launchFinishingFinishesOnceWhenTheBodyThrowsAndDoesNotSwallowIt() {
+        val finished = AtomicInteger()
+        val seen = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val boom = IllegalStateException("boom")
+        val scope = CoroutineScope(SupervisorJob() + loggingExceptionHandler { _, t -> seen.add(t) })
+        runBlocking { scope.launchFinishing({ finished.incrementAndGet() }) { throw boom }.join() }
+        assertEquals(1, finished.get())
+        assertEquals(1, seen.size)
+        assertTrue(seen[0] === boom)
+        scope.cancel()
+    }
+
+    @Test
+    fun launchFinishingFinishesOnceWhenTheScopeIsCancelledMidBody() {
+        val finished = AtomicInteger()
+        val started = CountDownLatch(1)
+        val scope = CoroutineScope(SupervisorJob())
+        val job = scope.launchFinishing({ finished.incrementAndGet() }) {
+            started.countDown()
+            awaitCancellation()
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        scope.cancel()
+        runBlocking { job.join() }
+        assertEquals(1, finished.get())
     }
 }

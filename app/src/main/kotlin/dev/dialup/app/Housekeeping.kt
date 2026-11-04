@@ -12,7 +12,6 @@ import android.content.Intent
 import android.os.PowerManager
 import android.os.SystemClock
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -69,7 +68,8 @@ object HousekeepingAlarm {
 /**
  * Receives the housekeeping alarm. Not exported: the alarm's PendingIntent is explicit and immutable (T-05-29). Holds a
  * partial wake lock with a 60 s timeout, runs the cast feature's housekeeping bounded to 45 s, sets the next alarm and
- * releases the lock. Without a running service nothing runs and nothing is rescheduled.
+ * releases the lock and finishes the broadcast when the work ends or the scope is cancelled. Without a running service
+ * nothing runs and nothing is rescheduled.
  */
 class HousekeepingReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -83,7 +83,13 @@ class HousekeepingReceiver : BroadcastReceiver() {
         val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "t2u:tick")
         lock.setReferenceCounted(false)
         lock.acquire(WAKE_LOCK_TIMEOUT_MS)
-        service.scope.launch {
+        // runs once, whatever the scope does: a cancelled scope never starts the body below (WR-04)
+        val finish = {
+            runCatching { if (lock.isHeld) lock.release() }
+            runCatching { pending.finish() }
+            Unit
+        }
+        service.scope.launchFinishing(finish) {
             try {
                 val late = if (due > 0L) SystemClock.elapsedRealtime() - due else -1L
                 service.evidence.event("housekeeping-alarm", mapOf("lateMs" to late))
@@ -97,8 +103,6 @@ class HousekeepingReceiver : BroadcastReceiver() {
                 }
             } finally {
                 runCatching { if (ServiceHub.service === service && service.scope.isActive) HousekeepingAlarm.schedule(app) }
-                runCatching { if (lock.isHeld) lock.release() }
-                runCatching { pending.finish() }
             }
         }
     }

@@ -4,6 +4,10 @@ package dev.dialup.app
 // Pure Kotlin (no android imports) so it is tested on the JVM. GPL-3.0-only.
 
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 
 /** How long CastFeature waits before it tries to start a bridge again after a start that threw or found no Wi-Fi. */
@@ -51,3 +55,25 @@ fun loggingExceptionHandler(report: (String, Throwable) -> Unit): CoroutineExcep
             }
         }
     }
+
+/**
+ * Like `launch { block() }`, but [finish] runs exactly once when the job completes for any reason: normal end, failure,
+ * cancellation, or a scope that was already cancelled so [block] never started. It exists for `goAsync()` receivers,
+ * whose `PendingResult.finish()` and wake-lock release must happen once. An exception in [block] is not swallowed: it
+ * reaches the scope's handler as with a plain `launch`. A failing [finish] is dropped.
+ */
+fun CoroutineScope.launchFinishing(finish: () -> Unit, block: suspend () -> Unit): Job {
+    val done = AtomicBoolean(false)
+    val once = {
+        if (done.compareAndSet(false, true)) {
+            try {
+                finish()
+            } catch (_: Throwable) {
+                // dropped on purpose
+            }
+        }
+    }
+    val job = launch { block() }
+    job.invokeOnCompletion { once() }
+    return job
+}
