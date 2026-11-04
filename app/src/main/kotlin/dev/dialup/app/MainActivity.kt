@@ -59,6 +59,10 @@ class MainActivity : ComponentActivity() {
      */
     private val opens = MutableStateFlow(0)
 
+    // Read-only views made once: a Flow operator called inside setContent makes a new Flow on every recomposition (lint FlowOperatorInvokedInComposition).
+    private val permissionsView = permissionState.asStateFlow()
+    private val opensView = opens.asStateFlow()
+
     /** True from [onCreate] of a recreated Activity until its first [onStart]. */
     private var recreated = false
 
@@ -79,8 +83,8 @@ class MainActivity : ComponentActivity() {
             }
             MainScreen(
                 model = AppModel.of(applicationContext),
-                permissions = permissionState.asStateFlow(),
-                opens = opens.asStateFlow(),
+                permissions = permissionsView,
+                opens = opensView,
                 theme = theme,
                 onGrantNotifications = ::grantNotifications,
                 onGrantBattery = ::grantBattery,
