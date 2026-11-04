@@ -96,6 +96,7 @@ class SettingsTest {
             dialAccess = DialAccessMode.LAN,
             clearOnCastEnd = true,
             theme = ThemeMode.DARK,
+            updateCheckEnabled = false,
             logEnabled = false,
             gapless = false,
             cacheMb = 512,
@@ -217,5 +218,49 @@ class SettingsTest {
     @Test
     fun theThemeIsNotAConfigOverride() {
         assertTrue(settingsOverrideKeys(AppSettingsData(theme = ThemeMode.DARK)).isEmpty())
+    }
+
+    @Test
+    fun theUpdateCheckIsOnByDefaultAndTrueIsNotWritten() {
+        assertTrue(AppSettingsData().updateCheckEnabled)
+        val f = File(dir, SETTINGS_FILE)
+        settings(f).update { it.copy(clearOnCastEnd = true) }
+        assertFalse("updateCheckEnabled" in f.readText(), f.readText())
+    }
+
+    @Test
+    fun theUpdateCheckOffRoundTripsAndKeepsUnknownKeys() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"future":42}""") }
+        val s = settings(f)
+        s.update { it.copy(updateCheckEnabled = false) }
+        assertTrue(f.readText().contains(""""updateCheckEnabled":false"""), f.readText())
+        assertTrue(f.readText().contains(""""future":42"""), f.readText())
+        assertFalse(settings(f).data.value.updateCheckEnabled)
+        s.update { it.copy(updateCheckEnabled = true) }
+        assertFalse("updateCheckEnabled" in f.readText(), f.readText())
+        assertTrue(settings(f).data.value.updateCheckEnabled)
+        assertTrue(errors.isEmpty(), errors.toString())
+    }
+
+    @Test
+    fun aBadUpdateCheckValueFallsBackToOnAndReportsOnlyTheKey() {
+        for (v in listOf(""""yes"""", "1", "null", """{"x":1}""")) {
+            errors.clear()
+            val content = """{"updateCheckEnabled":$v,"gapless":false}"""
+            val f = File(dir, SETTINGS_FILE).apply { writeText(content) }
+            val d = settings(f).data.value
+            assertTrue(d.updateCheckEnabled, content)
+            assertEquals(false, d.gapless, content)
+            assertEquals(listOf("settings:read"), errors, content)
+            val p = parseSettings(content)
+            assertEquals(listOf("updateCheckEnabled"), p.problems, content)
+            assertFalse("updateCheckEnabled" in p.extras, content)
+            assertFalse("yes" in p.problems.toString(), content)
+        }
+    }
+
+    @Test
+    fun theUpdateCheckIsNotAConfigOverride() {
+        assertTrue(settingsOverrideKeys(AppSettingsData(updateCheckEnabled = false)).isEmpty())
     }
 }

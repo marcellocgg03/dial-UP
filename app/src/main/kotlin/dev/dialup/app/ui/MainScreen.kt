@@ -30,11 +30,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
+import dev.dialup.app.AppSettings
+import dev.dialup.app.AppUpdates
+import dev.dialup.app.BuildConfigFacts
 import dev.dialup.app.SettingsModel
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.PermissionState
 import dev.dialup.app.model.bannerState
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * The Compose root. testTagsAsResourceId lets uiautomator see the test tags (plan 07-16). The permission
@@ -58,8 +62,14 @@ fun MainScreen(
     val settings = remember(scope) { SettingsModel(context, scope).presenter() }
     val settingsUi by settings.state.collectAsStateWithLifecycle()
     val openCount by opens.collectAsStateWithLifecycle()
+    val appData by AppSettings.of(context).data.collectAsStateWithLifecycle()
+    val updateCheckEnabled = appData.updateCheckEnabled
+    val appUpdates = remember { AppUpdates.of(context) }
+    val version = remember { BuildConfigFacts.versionName(context) ?: "0" }
     LaunchedEffect(openCount) {
         if (openCount > 0) {
+            // UPD-01: the automatic release check runs beside the other calls and never delays them (throttled, off when switched off)
+            launch { appUpdates.autoCheck(updateCheckEnabled) }
             settings.onAppOpened { model.casting.value }
             // GUI-14: one extra search when the app comes to the foreground (throttled; nothing without a bridge)
             model.searchOnForeground()
@@ -98,7 +108,12 @@ fun MainScreen(
                     onGrantNotifications = onGrantNotifications,
                     onGrantBattery = onGrantBattery,
                 )
-                if (tab == TAB_SETTINGS) SettingsTab(settings, model, Modifier.weight(1f)) else SpeakersTab(model, Modifier.weight(1f))
+                if (tab == TAB_SETTINGS) {
+                    SettingsTab(settings, model, Modifier.weight(1f))
+                } else {
+                    UpdateCard(appUpdates, updateCheckEnabled, version)
+                    SpeakersTab(model, Modifier.weight(1f))
+                }
             }
         }
     }
