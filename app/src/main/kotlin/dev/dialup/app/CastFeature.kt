@@ -213,6 +213,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         mon.start()
         host.scope.launch { withBridgeLock(host) { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
         HousekeepingAlarm.schedule(host.context)
+        // Daily yt-dlp update job (plan 07.1-07); a no-op while one with its id is pending.
+        YtDlpJob.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
         // The deadline runs on the elapsed-time clock (time the CPU slept counts), is re-checked at least every 15 minutes
