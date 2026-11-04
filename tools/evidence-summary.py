@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise the spike's JSONL evidence log (files/evidence/spike-events.jsonl and rotated copies).
+"""Summarise the spike's JSONL evidence log (files/evidence/dialup-events.jsonl and rotated copies).
 
 Run as:  python3 -I tools/evidence-summary.py FILE... [--since ISO] [--until ISO] [--src IP] [--json]
          python3 -I tools/evidence-summary.py --self-test
@@ -348,7 +348,7 @@ def self_test():
     ]
 
     tmp_dir = tempfile.mkdtemp(prefix="t2u-evidence-selftest-")
-    path = os.path.join(tmp_dir, "spike-events.jsonl")
+    path = os.path.join(tmp_dir, "dialup-events.jsonl")
     try:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -426,7 +426,7 @@ def self_test():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Summarise spike-events.jsonl evidence (pairing codes redacted).")
+    parser = argparse.ArgumentParser(description="Summarise dialup-events.jsonl evidence (pairing codes redacted).")
     parser.add_argument("files", nargs="*", help="JSONL evidence files (rotated copies .1 .2 can be passed too)")
     parser.add_argument("--since", type=_cli_ts, help="only events at or after this ISO-8601 time")
     parser.add_argument("--until", type=_cli_ts, help="only events at or before this ISO-8601 time")

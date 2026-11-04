@@ -6,7 +6,7 @@ Run as:  python3 -I tools/soak-report.py FILE... [--since T] [--until T] [--min-
                                           [--max-track-gap-s S] [--max-idle-housekeeping-gap-s S]
          python3 -I tools/soak-report.py --self-test
 
-Files are given oldest first (spike-events.jsonl.2 .1 and the current file); events are sorted by ts anyway.
+Files are given oldest first (dialup-events.jsonl.2 .1 and the current file); events are sorted by ts anyway.
 Prints one line per topic, in this order: WINDOW (only with --since/--until), SPAN, SERVICE, RUN, HEARTBEAT, SLEEP,
 IDLE, CASTING, TRACKS, NET (plus one IP line per newly seen Wi-Fi address), LOUNGE, RETRY, PROBE, REPAIR,
 HOUSEKEEPING, LOCK, UPDATE, EXIT, and a final line:
@@ -31,7 +31,7 @@ exist but no track start matched, a NOTE line says the detector may not match th
 reads the message of a renderer event) and the tracks check fails.
 
 Suggested invocation for the overnight acceptance run (D-17):
-  python3 -I tools/soak-report.py spike-events.jsonl* --since 2026-10-29T22:00:00 --until 2026-10-30T08:00:00 \\
+  python3 -I tools/soak-report.py dialup-events.jsonl* --since 2026-10-29T22:00:00 --until 2026-10-30T08:00:00 \\
       --min-hours 3 --min-casting-hours 3 --min-tracks 2 --max-idle-housekeeping-gap-s 540
 
 HOUSEKEEPING compares the largest gap between SSDP housekeeping runs while the phone was idle (Doze) with
