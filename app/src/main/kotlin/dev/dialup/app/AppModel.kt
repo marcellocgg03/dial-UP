@@ -82,6 +82,20 @@ class AppModel private constructor(context: Context) {
         }
     }
 
+    /**
+     * GUI-14: one SSDP search through the running bridge, at once ([trigger] says who asked: `ui` or `foreground`). With no
+     * bridge nothing happens. Fire-and-forget: a failure is dropped, a tap must never crash the app.
+     */
+    fun refreshRenderers(trigger: String): Job = scope.launch {
+        try {
+            cast.value?.currentBridge()?.searchNow(trigger)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the list simply waits for the next periodic search
+        }
+    }
+
     /** GUI-03: the hidden speakers; the store lives with the process, so the list is right while the bridge is off too. */
     val hidden: StateFlow<List<HiddenSpeaker>> = SpeakerStores.of(context).hidden.entries
 

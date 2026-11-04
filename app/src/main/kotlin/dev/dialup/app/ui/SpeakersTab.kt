@@ -12,17 +12,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import android.os.SystemClock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -30,12 +34,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
+import dev.dialup.app.model.EmptyPhase
+import dev.dialup.app.model.REFRESH_AFTER_MS
 import dev.dialup.app.model.SpeakersPresenter
+import dev.dialup.app.model.emptyPhase
 import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.ListNote
 import dev.dialup.app.model.rendererListing
 import dev.t2u.renderer.HiddenSpeaker
+import kotlinx.coroutines.delay
 
 /**
  * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
@@ -70,6 +78,19 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         hidden = hidden.mapTo(HashSet()) { it.udn },
         names = names,
     )
+    // GUI-14: the spinner shows at once; after REFRESH_AFTER_MS with nothing found the Refresh button appears, and a press
+    // hides it and starts the wait again
+    val looking = listing.note == ListNote.LOOKING
+    var refreshTick by remember { mutableIntStateOf(0) }
+    var showRefresh by remember { mutableStateOf(false) }
+    LaunchedEffect(looking, refreshTick) {
+        showRefresh = false
+        if (looking) {
+            val startedAt = SystemClock.elapsedRealtime()
+            delay(REFRESH_AFTER_MS)
+            showRefresh = emptyPhase(SystemClock.elapsedRealtime() - startedAt) == EmptyPhase.SPINNER_WITH_REFRESH
+        }
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -87,11 +108,27 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         }
         listing.note?.let { note ->
             item(key = "empty-note") {
-                val (text, tag) = when (note) {
-                    ListNote.BRIDGE_OFF -> "The bridge is off" to "bridge-off"
-                    ListNote.LOOKING -> "Looking for renderers on the Wi-Fi" to "speakers-empty"
+                when (note) {
+                    ListNote.BRIDGE_OFF ->
+                        Text("The bridge is off", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag("bridge-off"))
+                    ListNote.LOOKING ->
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            CircularProgressIndicator(Modifier.testTag("speakers-spinner"))
+                            if (showRefresh) {
+                                OutlinedButton(
+                                    onClick = {
+                                        refreshTick++
+                                        model.refreshRenderers("ui")
+                                    },
+                                    modifier = Modifier.testTag("btn-refresh"),
+                                ) { Text("Refresh") }
+                            }
+                        }
                 }
-                Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag(tag))
             }
         }
         items(listing.live, key = { it.udn }) { speaker ->
