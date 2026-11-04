@@ -29,6 +29,8 @@ contains, and what is still unverified, is listed in [CHANGELOG.md](CHANGELOG.md
 3. Check the signature. `apksigner verify --print-certs DialUP-<version>.apk` (`apksigner` is part of the Android SDK
    build-tools) prints the certificate digest; it must equal the certificate fingerprint printed in the release notes.
    Every later release is signed with the same key and shows the same digest.
+   The release APKs are signed with a certificate whose SHA-256 fingerprint is `76:F2:03:3A:67:FD:4A:40:04:01:73:6D:3A:E8:11:93:2C:46:E4:94:CB:9B:05:05:3F:73:11:0A:2F:59:EE:AA`
+   (`76f2033a67fd4a400401736d3ae811932c46e494cb9b05053f73110a2f59eeaa` without colons); the digest `apksigner` prints must match it.
 4. Install the APK. Android asks you to allow installing apps from the source you opened it with (browser or file manager);
    the app is not on Google Play, it is sideloaded.
 5. Open DialUP. Two banners can appear, each with a Grant button:
