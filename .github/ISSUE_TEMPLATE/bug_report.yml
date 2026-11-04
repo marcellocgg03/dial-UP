@@ -1,0 +1,87 @@
+name: Bug report
+description: Something does not work as it should
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A vulnerability is not a bug report: please use the private
+        security advisory link on the issue chooser page instead.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: Shown on the Settings tab, or the name of the release you installed.
+      placeholder: "0.9.0-beta.1"
+    validations:
+      required: true
+  - type: input
+    id: android_version
+    attributes:
+      label: Android version and phone
+      description: The Android version and the phone class (brand and model).
+      placeholder: "Android 16, Pixel-class"
+    validations:
+      required: true
+  - type: input
+    id: speaker
+    attributes:
+      label: Speaker model and firmware
+      description: For example Sonos Amp, Arc or SYMFONISK, and the firmware version if you know it.
+    validations:
+      required: true
+  - type: dropdown
+    id: youtube_app
+    attributes:
+      label: YouTube app used to cast
+      options:
+        - YouTube
+        - YouTube Music
+        - Both
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the app
+        2. Cast to the speaker from the YouTube app
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (Settings, Share log)
+      description: |
+        Warning: the event log contains LAN addresses, speaker names, track titles and video ids.
+        Read it before pasting and remove what you do not want to publish.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and did not find this one.
+          required: true
+        - label: This is not a security report.
+          required: true
+        - label: I read the log above and removed what I do not want to publish.
+          required: true
