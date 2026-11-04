@@ -356,6 +356,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** GUI-08: files, bytes and cap of the cache now; null when this bridge has no file builder. */
     fun cacheInfo(): CacheInfo? = mediaServer?.cacheInfo()
 
+    /** How many file builds and source downloads run now (0 without a file builder); the yt-dlp updater waits while it is above 0. */
+    fun activeBuilds(): Int = mediaServer?.activeBuilds() ?: 0
+
     /** Whether a cast that ends empties the speaker now: the app's supplier when it answers, else the fixed config flag. */
     private fun clearOnCastEndNow(): Boolean = try {
         deps.clearOnCastEnd?.invoke() ?: (effective ?: deps.config).clearOnCastEnd

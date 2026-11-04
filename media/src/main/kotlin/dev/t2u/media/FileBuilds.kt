@@ -127,6 +127,12 @@ class FileBuilder(
         return job.await()
     }
 
+    /**
+     * How many builds and source downloads run now. The yt-dlp updater waits while this is above 0, so it cannot swap yt-dlp
+     * under a running download (WR-03).
+     */
+    fun activeCount(): Int = synchronized(lock) { buildJobs.size + sourceJobs.size }
+
     /** Scans the directory for the cache of an earlier run (D-12): finished files stay, half-written ones go. */
     fun start(): CacheInfo = cache.scan()
 

@@ -313,6 +313,9 @@ class MediaServer(
     /** Node `cacheInfo`: the number and size of cached files and the cap; null without a file builder. */
     fun cacheInfo(): CacheInfo? = files?.info()
 
+    /** How many file builds and source downloads run now; 0 without a file builder. The yt-dlp updater counts them as busy. */
+    fun activeBuilds(): Int = files?.activeCount() ?: 0
+
     fun resolvedPort(): Int = boundPort
 
     fun tokenCount(): Int = synchronized(tokens) { tokens.size }

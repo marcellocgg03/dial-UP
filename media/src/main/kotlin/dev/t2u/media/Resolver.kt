@@ -6,7 +6,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -335,6 +337,9 @@ private const val MAX_CACHE_MS = 60L * 60 * 1000
 private const val EXPIRY_MARGIN_MS = 5L * 60 * 1000
 private const val MAX_CACHE_ENTRIES = 100
 
+/** How long one yt-dlp lookup may run before every caller waiting on it gets a ResolveException (WR-03). A normal one takes a few seconds. */
+private const val LOOKUP_TIMEOUT_MS = 90_000L
+
 /**
  * resolver.js urlExpiry: a googlevideo URL is good until its `expire` query value minus 5 minutes, but never
  * longer than 1 hour from [now]; a URL without a positive `expire` is kept for 1 hour.
@@ -364,6 +369,9 @@ interface VideoResolver {
  *
  * [onEvent] gets `{id, result: hit|miss|coalesced|fail, ms, urlHost, expire}` and never the URL itself (T-02-15).
  * [verbose] adds yt-dlp's `-v` to every lookup; it is the `ytdlpVerbose` config switch (the app passes it in plan 03-11).
+ *
+ * A lookup has its own deadline, [lookupTimeoutMs]: when it fires the yt-dlp thread is interrupted and every caller that
+ * shares the lookup gets a [ResolveException]; the in-flight entry is dropped on any completion (WR-03).
  */
 class CachingResolver(
     private val gateway: YtDlpGateway,
@@ -371,6 +379,7 @@ class CachingResolver(
     private val clock: () -> Long = System::currentTimeMillis,
     private val onEvent: (Map<String, Any?>) -> Unit = {},
     private val verbose: Boolean = false,
+    private val lookupTimeoutMs: Long = LOOKUP_TIMEOUT_MS,
 ) : VideoResolver {
     private class Cached(val info: ResolvedInfo, val expires: Long)
 
@@ -423,8 +432,14 @@ class CachingResolver(
 
     private suspend fun lookup(id: String): ResolvedInfo = withContext(Dispatchers.IO) {
         val result = try {
-            gateway.run(dumpJsonCall(id, cacheDir, verbose))
+            // withTimeoutOrNull, never a catch of TimeoutCancellationException: only this lookup's own deadline becomes an
+            // error, a cancellation from outside still propagates as one.
+            withTimeoutOrNull(lookupTimeoutMs) {
+                runInterruptible(Dispatchers.IO) { gateway.run(dumpJsonCall(id, cacheDir, verbose)) }
+            } ?: throw ResolveException("yt-dlp timed out after ${lookupTimeoutMs / 1000} s for $id")
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: ResolveException) {
             throw e
         } catch (e: Exception) {
             throw ResolveException("yt-dlp failed for $id: ${Resolver.redactUrls(e.message ?: e.javaClass.simpleName).take(300)}")
