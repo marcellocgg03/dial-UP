@@ -21,8 +21,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.model.GrantAction
 import dev.dialup.app.model.PermissionState
+import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.notificationGrantAction
-import dev.dialup.app.model.shouldStartService
+import dev.dialup.app.model.startDecision
 import dev.dialup.app.ui.MainScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -147,13 +148,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Opening the app never turns a switched-off bridge on (D-04): the start goes through [shouldStartService]. */
+    /**
+     * Opening the app never turns a switched-off bridge on (D-04): the start goes through [startDecision]. Without a
+     * bindable network (no Wi-Fi client address and no hotspot) nothing starts, because the service would stop at once; the
+     * resume callback is armed instead and the bridge starts when the phone connects (RESEARCH Pitfall 3).
+     */
     private fun startServiceIfNeeded() {
         val enabled = AppSettings.of(this).data.value.bridgeEnabled
-        if (shouldStartService(enabled, BatteryGate.isOpen(this), ServiceHub.service != null)) {
-            ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
-        } else if (!enabled) {
-            Log.i(TAG, "open: the bridge is switched off in the app; not started")
+        when (startDecision(enabled, BatteryGate.isOpen(this), ServiceHub.service != null, hasBindableNetwork(this))) {
+            StartDecision.START -> ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+            StartDecision.WAIT_FOR_WIFI -> {
+                NetworkResume.arm(this)
+                Log.i(TAG, "open: no Wi-Fi; the bridge starts when the phone connects")
+            }
+            StartDecision.NONE -> if (!enabled) Log.i(TAG, "open: the bridge is switched off in the app; not started")
         }
     }
 

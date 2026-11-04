@@ -7,8 +7,9 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.dialup.app.model.SingleFlight
+import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.restartSequence
-import dev.dialup.app.model.shouldStartService
+import dev.dialup.app.model.startDecision
 import dev.dialup.app.model.startWhenStopped
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -35,8 +36,12 @@ object BridgeControl {
         if (on) {
             if (deferred) {
                 startAfterStop(app)
-            } else if (shouldStartService(true, BatteryGate.isOpen(app), false)) {
-                startService(app)
+            } else {
+                when (startDecision(true, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
+                    StartDecision.START -> startService(app)
+                    StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
+                    StartDecision.NONE -> Unit
+                }
             }
         } else {
             NetworkResume.disarm(app)
@@ -78,7 +83,7 @@ object BridgeControl {
                 stillWanted = {
                     AppSettings.of(app).data.value.bridgeEnabled && BatteryGate.isOpen(app) && ServiceHub.service == null
                 },
-                start = { startService(app) },
+                start = { if (hasBindableNetwork(app)) startService(app) else NetworkResume.arm(app) },
             )
         }
     }
