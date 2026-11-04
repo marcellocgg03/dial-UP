@@ -221,9 +221,10 @@ class BridgeService : Service(), SpikeHost {
             stopSelf()
             return false
         }
-        ServiceHub.service = this
         NetworkResume.disarm(this)
         acquireLocks()
+        // published only now: currentState() and heartbeatFields() read the lateinit locks that acquireLocks() sets (WR-09)
+        ServiceHub.service = this
         logExitInfo()
         startFeatures()
         scope.launch { castCountLoop() }
@@ -378,8 +379,9 @@ class BridgeService : Service(), SpikeHost {
         while (scope.isActive) {
             try {
                 applyPlayLocks(playLocks.shouldHold(), "tick")
-                val state = currentState()
-                evidence.event("heartbeat", heartbeatFields())
+                val link = wifiLinkProperties() // one lookup per tick (WR-09)
+                val state = currentState(link)
+                evidence.event("heartbeat", heartbeatFields(link))
                 writeStateFile(state)
             } catch (t: Throwable) {
                 evidence.event("feature-error", mapOf("where" to "heartbeat", "error" to t.javaClass.name, "message" to t.message))
@@ -388,14 +390,14 @@ class BridgeService : Service(), SpikeHost {
         }
     }
 
-    private fun heartbeatFields(): Map<String, Any?> {
+    private fun heartbeatFields(link: Pair<Inet4Address?, String?>): Map<String, Any?> {
         val power = getSystemService(PowerManager::class.java)
         return mapOf(
             "mcast" to mcastLock.isHeld,
             "wifi" to wifiLock.isHeld,
             "wake" to wakeLock.isHeld,
-            "wifiIp" to wifiIpv4()?.hostAddress,
-            "iface" to wifiInterfaceName(),
+            "wifiIp" to link.first?.hostAddress,
+            "iface" to link.second,
             "idle" to power.isDeviceIdleMode,
             "interactive" to power.isInteractive,
             "ignoringBatteryOpt" to power.isIgnoringBatteryOptimizations(packageName),
@@ -420,10 +422,10 @@ class BridgeService : Service(), SpikeHost {
     }
 
     /** Live state snapshot; also the content of evidence/state.json and the dump-state reply. */
-    fun currentState(): JsonObject {
+    fun currentState(link: Pair<Inet4Address?, String?> = wifiLinkProperties()): JsonObject {
         val power = getSystemService(PowerManager::class.java)
-        val ip = wifiIpv4()?.hostAddress
-        val iface = wifiInterfaceName()
+        val ip = link.first?.hostAddress
+        val iface = link.second
         return buildJsonObject {
             put("mcast", mcastLock.isHeld)
             put("wifi", wifiLock.isHeld)
@@ -448,10 +450,9 @@ class BridgeService : Service(), SpikeHost {
     }
 
     private fun writeStateFile(state: JsonObject) {
-        // temp file then rename, so a reader never sees a half-written state.json
-        val tmp = File(evidenceDir, "state.json.tmp")
-        tmp.writeText(state.toString())
-        tmp.renameTo(File(evidenceDir, "state.json"))
+        // temp file then atomic replace, so a reader never sees a half-written state.json; a failure is thrown to the
+        // heartbeat loop, which logs it as a feature-error (WR-09)
+        writeTextAtomic(evidenceDir, "state.json", state.toString())
     }
 
     // ----- exit info and notification ------------------------------------------------------------
