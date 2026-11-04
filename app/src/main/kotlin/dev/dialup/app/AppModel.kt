@@ -13,6 +13,7 @@ import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
 import dev.dialup.app.model.SearchThrottle
 import dev.dialup.app.model.addRefusal
+import dev.dialup.app.model.waitingForWifi
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
@@ -227,7 +228,11 @@ class AppModel private constructor(context: Context) {
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null
-        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(addRefusal(serviceRunning.value, false) ?: BRIDGE_OFF_ADD)
+        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(addRefusal(
+            serviceRunning.value,
+            false,
+            waitingForWifi(settings.data.value.bridgeEnabled, BatteryGate.isOpen(appContext), wifiPresent.value),
+        ) ?: BRIDGE_OFF_ADD)
         return try {
             withContext(Dispatchers.Default) { bridge.addManual(ip) }
         } catch (e: CancellationException) {
