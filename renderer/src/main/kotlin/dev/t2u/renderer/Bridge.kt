@@ -261,7 +261,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     private val housekeepingLock = Mutex()
 
     /**
-     * Wall-clock time the last run started; null before the first. Guards against a timer tick and an alarm tick doubling up.
+     * Wall-clock time the last run that completed started; null before the first. A run that failed or was cancelled stamps
+     * nothing, so the next trigger runs instead of being skipped as recent (WR-06). Guards against a timer tick and an alarm
+     * tick doubling up.
      * It is the wall clock (not nanoTime) because sleep time must count; a clock that moved backwards counts as "not recent".
      */
     @Volatile private var lastHousekeepingAt: Long? = null
@@ -758,145 +760,162 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         return true
     }
 
-    /** Starts the media server, the SSDP responder and client and the discovery schedules. Throws after undoing a failed start. */
+    /**
+     * Blocking form of [startSuspending], for tests and callers that are not in a coroutine. The app calls [startSuspending]
+     * (WR-06): a blocking start inside a coroutine would hold its dispatcher thread through the bind and the engine start.
+     */
     fun start() {
+        runBlocking { startSuspending() }
+    }
+
+    /**
+     * Starts the media server, the SSDP responder and client and the discovery schedules. The body runs on [Dispatchers.IO]
+     * because the bind and the engine start block. Throws after undoing a failed start, and a start that threw (a rejected
+     * config included) leaves the bridge not running (WR-06).
+     */
+    suspend fun startSuspending() {
         check(started.compareAndSet(false, true)) { "already started" }
+        try {
+            withContext(Dispatchers.IO) { startBody() }
+        } catch (t: Throwable) {
+            // a cancelled start is not a failure to report; it still has to be undone
+            if (t !is CancellationException) failure("start", t)
+            stop()
+            throw t
+        }
+    }
+
+    private fun startBody() {
         val base = deps.config
         // mediaPort 0 means "any free port" (tests); the Node range check applies to the real port below
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
-        try {
-            val wifi = net.wifiIp.hostAddress.orEmpty()
-            // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder keeps its
-            // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
-            // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
-            // directory itself (RESEARCH Pitfall 7). The media server owns the builder's lifetime.
-            val launcher = deps.launcher
-            val bufferDir = deps.bufferDir
-            val downloader = deps.sourceDownloader
-            val files = if (launcher != null && bufferDir != null && downloader != null) {
-                FileBuilder(
-                    File(bufferDir, "files"),
-                    launcher,
-                    deps.resolver,
-                    downloader,
-                    flacBits = base.flacBits,
-                    ffmpegLogLevel = base.ffmpegLogLevel,
-                    // read by the cache at every prune, so the deferred cache slider needs no restart
-                    cacheLimitBytes = { cacheCapMb(base).toLong() * 1_048_576L },
-                    onEvent = { fields -> emit("filebuild", *fields.map { it.key to it.value }.toTypedArray()) },
-                )
-            } else {
-                null
-            }
-            val media = MediaServer(
-                wifi,
-                base.mediaPort,
+        val wifi = net.wifiIp.hostAddress.orEmpty()
+        // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder keeps its
+        // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
+        // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
+        // directory itself (RESEARCH Pitfall 7). The media server owns the builder's lifetime.
+        val launcher = deps.launcher
+        val bufferDir = deps.bufferDir
+        val downloader = deps.sourceDownloader
+        val files = if (launcher != null && bufferDir != null && downloader != null) {
+            FileBuilder(
+                File(bufferDir, "files"),
                 launcher,
-                deps.onMediaRequest,
-                bufferDir,
                 deps.resolver,
-                upstream = OkHttpUpstreamFetcher(deps.http, deps.upstreamPolicy),
-                files = files,
-                mp3Bitrate = base.mp3Bitrate,
+                downloader,
+                flacBits = base.flacBits,
                 ffmpegLogLevel = base.ffmpegLogLevel,
+                // read by the cache at every prune, so the deferred cache slider needs no restart
+                cacheLimitBytes = { cacheCapMb(base).toLong() * 1_048_576L },
+                onEvent = { fields -> emit("filebuild", *fields.map { it.key to it.value }.toTypedArray()) },
             )
-            media.start()
-            mediaServer = media
-            val config = base.copy(mediaPort = media.resolvedPort())
-            effective = config
-
-            val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
-            accessPolicy = policy
-
-            responder = buildResponder(net, policy)
-
-            // reads the field, so a receiver that outlives a move advertises on the responder of the new address
-            val advertiser = object : DialAdvertiser {
-                override fun advertise(device: SsdpDevice) {
-                    advertisedDevices[device.uuid] = device
-                    responder?.register(device)
-                    responder?.announce()
-                }
-
-                override fun withdraw(uuid: String) {
-                    advertisedDevices.remove(uuid)
-                    responder?.withdraw(uuid)
-                }
-            }
-
-            val ports = PortRegistry(config.dataDir, config.receiverBasePort) { line -> emit("ports", "warn" to line) }.load()
-            val receivers = ReceiverFactory { player, options ->
-                // a receiver built after a move binds the current address
-                val receiver = YouTubeCastReceiver(
-                    player,
-                    options,
-                    ReceiverDeps(
-                        bindHost = net.wifiIp.hostAddress.orEmpty(),
-                        accessPolicy = policy::allowsHttp,
-                        advertiser = advertiser,
-                        serverHeader = deps.serverHeader,
-                        http = deps.http.newBuilder().build(),
-                        endpoints = deps.loungeEndpoints,
-                        sink = deps.events,
-                        scope = deps.scope,
-                        onDialRequest = { request ->
-                            dialRx.incrementAndGet()
-                            lastDialAt = deps.clock()
-                            deps.onDialRequest(request)
-                        },
-                    ),
-                )
-                track(receiver)
-                receiver
-            }
-            val factory = RendererFactory { udn, location, address, maxAge, port ->
-                Renderer(
-                    udn,
-                    location,
-                    address,
-                    maxAge,
-                    port,
-                    RendererDeps(
-                        config,
-                        deps.resolver,
-                        media,
-                        deps.http,
-                        receivers,
-                        deps.scope,
-                        deps.events,
-                        clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
-                        userName = { deps.names?.get(it) },
-                        // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
-                        playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
-                    ),
-                )
-            }
-            val reg = RendererRegistry(config, ports, factory, deps.events, hidden = { deps.hidden?.contains(it) == true })
-            registry = reg
-
-            val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)
-            client.start()
-            ssdp = client
-            val probesSentAt = System.currentTimeMillis()
-            probeSavedSpeakers(client, reg)
-            watchManualSpeakers(reg, probesSentAt)
-
-            handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
-            handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
-            // reads the field, so a later replacement of the client is followed (plan 05-07)
-            reg.launchSchedules(handlerScope) { ssdp?.search(RENDERER_ST, 3) }
-            handlerScope.launch {
-                while (true) {
-                    delay(deps.housekeepingIntervalMs)
-                    housekeeping("timer")
-                }
-            }
-            emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
-        } catch (t: Throwable) {
-            failure("start", t)
-            runBlocking { stop() }
-            throw t
+        } else {
+            null
         }
+        val media = MediaServer(
+            wifi,
+            base.mediaPort,
+            launcher,
+            deps.onMediaRequest,
+            bufferDir,
+            deps.resolver,
+            upstream = OkHttpUpstreamFetcher(deps.http, deps.upstreamPolicy),
+            files = files,
+            mp3Bitrate = base.mp3Bitrate,
+            ffmpegLogLevel = base.ffmpegLogLevel,
+        )
+        media.start()
+        mediaServer = media
+        val config = base.copy(mediaPort = media.resolvedPort())
+        effective = config
+
+        val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
+        accessPolicy = policy
+
+        responder = buildResponder(net, policy)
+
+        // reads the field, so a receiver that outlives a move advertises on the responder of the new address
+        val advertiser = object : DialAdvertiser {
+            override fun advertise(device: SsdpDevice) {
+                advertisedDevices[device.uuid] = device
+                responder?.register(device)
+                responder?.announce()
+            }
+
+            override fun withdraw(uuid: String) {
+                advertisedDevices.remove(uuid)
+                responder?.withdraw(uuid)
+            }
+        }
+
+        val ports = PortRegistry(config.dataDir, config.receiverBasePort) { line -> emit("ports", "warn" to line) }.load()
+        val receivers = ReceiverFactory { player, options ->
+            // a receiver built after a move binds the current address
+            val receiver = YouTubeCastReceiver(
+                player,
+                options,
+                ReceiverDeps(
+                    bindHost = net.wifiIp.hostAddress.orEmpty(),
+                    accessPolicy = policy::allowsHttp,
+                    advertiser = advertiser,
+                    serverHeader = deps.serverHeader,
+                    http = deps.http.newBuilder().build(),
+                    endpoints = deps.loungeEndpoints,
+                    sink = deps.events,
+                    scope = deps.scope,
+                    onDialRequest = { request ->
+                        dialRx.incrementAndGet()
+                        lastDialAt = deps.clock()
+                        deps.onDialRequest(request)
+                    },
+                ),
+            )
+            track(receiver)
+            receiver
+        }
+        val factory = RendererFactory { udn, location, address, maxAge, port ->
+            Renderer(
+                udn,
+                location,
+                address,
+                maxAge,
+                port,
+                RendererDeps(
+                    config,
+                    deps.resolver,
+                    media,
+                    deps.http,
+                    receivers,
+                    deps.scope,
+                    deps.events,
+                    clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
+                    userName = { deps.names?.get(it) },
+                    // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
+                    playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
+                ),
+            )
+        }
+        val reg = RendererRegistry(config, ports, factory, deps.events, hidden = { deps.hidden?.contains(it) == true })
+        registry = reg
+
+        val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)
+        client.start()
+        ssdp = client
+        val probesSentAt = System.currentTimeMillis()
+        probeSavedSpeakers(client, reg)
+        watchManualSpeakers(reg, probesSentAt)
+
+        handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
+        handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
+        // reads the field, so a later replacement of the client is followed (plan 05-07)
+        reg.launchSchedules(handlerScope) { ssdp?.search(RENDERER_ST, 3) }
+        handlerScope.launch {
+            while (true) {
+                delay(deps.housekeepingIntervalMs)
+                housekeeping("timer")
+            }
+        }
+        emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
     }
 
     // ------------------------------------------------------------------------------------------ SSDP wiring
@@ -1069,7 +1088,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * receiver again; in phone-only mode it sends nothing (the receivers must stay invisible to the LAN) and logs why.
      * In both modes it proves that the responder's own listener still receives, by sending itself one probe, and on
      * silence it reopens the listen sockets (a socket-level repair, never a bridge rebind) and probes once more.
-     * Returns true when the run happened; false when the bridge is not running or the run failed (also logged).
+     * Returns true when the run happened; false when the bridge is not running or the run failed (also logged). Only a run that
+     * completed counts as done: a failed one does not make the next trigger "recent" (WR-06).
      *
      * It skips (touching nothing) while the network is marked down ([networkLost]) and while the system reports no Wi-Fi
      * ([BridgeDeps.currentNetwork]; this still matters when [networkLost] has not been called yet): probing and reopening
@@ -1087,16 +1107,22 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         return try {
             // a timer tick and an alarm tick (plan 05-11) must not double up; the adb trigger is a person asking
-            val now = deps.clock()
-            val last = lastHousekeepingAt
-            // a negative elapsed time means the wall clock moved back: that is not "recent" (review WR-07)
-            val elapsed = if (last != null) now - last else null
-            if (trigger != "adb" && elapsed != null && elapsed >= 0 && elapsed < deps.housekeepingIntervalMs / 2) {
-                emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to elapsed)
-                return false
+            // the recent check sits inside the lock so two simultaneous triggers run once (WR-06)
+            housekeepingLock.withLock {
+                val now = deps.clock()
+                val last = lastHousekeepingAt
+                // a negative elapsed time means the wall clock moved back: that is not "recent" (review WR-07)
+                val elapsed = if (last != null) now - last else null
+                if (trigger != "adb" && elapsed != null && elapsed >= 0 && elapsed < deps.housekeepingIntervalMs / 2) {
+                    emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to elapsed)
+                    false
+                } else {
+                    val ran = runHousekeeping(trigger)
+                    // stamped only by a run that completed, from the time it started; a failed or cancelled run stamps nothing
+                    if (ran) lastHousekeepingAt = now
+                    ran
+                }
             }
-            lastHousekeepingAt = now
-            housekeepingLock.withLock { runHousekeeping(trigger) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {

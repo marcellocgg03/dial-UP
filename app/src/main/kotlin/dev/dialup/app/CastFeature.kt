@@ -417,7 +417,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 currentNetwork = { runCatching { bridgeNetwork(h) }.getOrNull() },
             ),
         )
-        b.start()
+        b.startSuspending()
         bridge = b
         startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat)
         countJob = h.scope.launch { b.castCount.collect { count.value = CastCount(it.casting, it.total) } }

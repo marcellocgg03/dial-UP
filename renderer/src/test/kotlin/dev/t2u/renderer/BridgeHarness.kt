@@ -93,6 +93,9 @@ internal class BridgeHarness(
 
     @Volatile var accessMode = DialAccessMode.PHONE
 
+    /** While true the access-mode supplier handed to the bridge throws, so a housekeeping run fails partway (WR-06). */
+    @Volatile var accessModeFails = false
+
     val bridges = CopyOnWriteArrayList<Bridge>()
     private val aids = AtomicInteger(100)
 
@@ -264,7 +267,7 @@ internal class BridgeHarness(
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
         val deps = BridgeDeps(
-            config, resolver, launcher, lanHttpClient(), { accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
+            config, resolver, launcher, lanHttpClient(), { check(!accessModeFails) { "access mode unavailable" }; accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
             loungeEndpoints = lounge.endpoints,
             innerTubeEndpoints = innerTube.endpoints,
             sourceDownloader = sourceDownloader,
