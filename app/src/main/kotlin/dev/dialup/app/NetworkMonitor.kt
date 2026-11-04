@@ -60,6 +60,9 @@ class NetworkMonitor(
         synchronized(lock) { tracker.seed(ip) }
     }
 
+    /** The Wi-Fi client address, or the tether address the probe found; null when the phone has neither. */
+    fun currentIp(): String? = synchronized(lock) { tracker.currentIp }
+
     fun start() {
         val manager = cm ?: return
         if (registered) return

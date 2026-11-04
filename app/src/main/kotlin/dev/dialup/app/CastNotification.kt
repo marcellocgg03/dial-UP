@@ -22,11 +22,17 @@ const val NOTIFICATION_NO_NETWORK_TEXT = "No Wi-Fi: waiting for a network"
 fun notificationText(c: CastCount, networkUp: Boolean): String = if (networkUp) notificationText(c) else NOTIFICATION_NO_NETWORK_TEXT
 
 /**
- * Implemented by a feature that binds to a network. False while it has none: the notification then says it is waiting, and
- * after a grace period the service pauses itself (see NetworkResume). A service with no such feature counts as up.
+ * Implemented by a feature that binds to a network. [networkUp] is false while it has none (after its own debounce and
+ * rebind decision). A service with no such feature counts as up.
  */
 interface NetworkStateSource {
     val networkUp: StateFlow<Boolean>
+
+    /**
+     * True while the phone has a Wi-Fi client or hotspot address according to the network callbacks, whatever the bridge's
+     * rebind state; the Wi-Fi-loss watcher keys its window on it.
+     */
+    val wifiPresent: StateFlow<Boolean>
 }
 
 /**

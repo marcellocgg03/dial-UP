@@ -146,6 +146,11 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     /** False while the phone has no Wi-Fi or hotspot address to bind to; the notification goes quiet then. */
     override val networkUp: StateFlow<Boolean> = networkUpState.asStateFlow()
 
+    private val wifiPresentState = MutableStateFlow(true)
+
+    /** True while the network callbacks report a Wi-Fi client or hotspot address, whatever the rebind is doing. */
+    override val wifiPresent: StateFlow<Boolean> = wifiPresentState.asStateFlow()
+
     /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log and the DIAL self check. */
     @Volatile private var lastIp: String? = null
 
@@ -197,6 +202,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val mon = NetworkMonitor(host.context, host.evidence, { selectTether(tetherCandidates())?.ipv4 }) { reason -> onNetworkChange(reason) }
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
+        wifiPresentState.value = mon.currentIp() != null
         mon.start()
         host.scope.launch { withBridgeLock(host) { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
         HousekeepingAlarm.schedule(host.context)
@@ -225,6 +231,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      */
     override fun stop() {
         networkUpState.value = true
+        wifiPresentState.value = true
         host?.let { HousekeepingAlarm.cancel(it.context) }
         updaterJob?.cancel()
         updaterJob = null
@@ -462,6 +469,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      * stream can be mirrored to the phone; the move itself waits for the debounce.
      */
     private fun onNetworkChange(reason: String) {
+        wifiPresentState.value = monitor?.currentIp() != null
         val h = host ?: return
         h.scope.launch { bridge?.networkLost() }
         scheduleRebind(reason)
