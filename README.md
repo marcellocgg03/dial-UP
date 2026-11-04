@@ -12,7 +12,8 @@ It is a port of [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) (a Node.js pr
 
 **Status:** beta. The current build is the pre-release listed on the Releases page of this repository, and it was
 built for one phone and one set of speakers, so expect rough edges. The YouTube lounge/DIAL protocol is undocumented
-and can change without notice; when it does, casting can stop working until the app is updated.
+and can change without notice; when it does, casting can stop working until the app is updated. What each release
+contains, and what is still unverified, is listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
