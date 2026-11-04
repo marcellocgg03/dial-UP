@@ -46,6 +46,20 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
 
+/** What a start path does: start the service, wait for Wi-Fi, or nothing. */
+enum class StartDecision { START, WAIT_FOR_WIFI, NONE }
+
+/**
+ * What a start path (app open, boot, the switch, the deferred start) does. A start without a network would be stopped at
+ * once by the idle rule (plan 07.1-01), so the caller arms NetworkResume instead and the bridge starts when Wi-Fi comes
+ * (RESEARCH Pitfall 3). [bindable] is whether the bridge can bind: a Wi-Fi client address or the phone's own hotspot.
+ */
+fun startDecision(enabled: Boolean, exempt: Boolean, running: Boolean, bindable: Boolean): StartDecision = when {
+    !shouldStartService(enabled, exempt, running) -> StartDecision.NONE
+    !bindable -> StartDecision.WAIT_FOR_WIFI
+    else -> StartDecision.START
+}
+
 /** What an in-app restart of the bridge does first. */
 enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }
 

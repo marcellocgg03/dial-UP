@@ -9,8 +9,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -41,7 +39,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
 import java.net.Inet4Address
-import java.net.InetAddress
 
 /** Process-level handle so the command receiver can reach the running service. */
 object ServiceHub {
@@ -356,20 +353,7 @@ class BridgeService : Service(), SpikeHost {
 
     // ----- wifi helpers --------------------------------------------------------------------------
 
-    @Suppress("DEPRECATION")
-    private fun wifiLinkProperties(): Pair<Inet4Address?, String?> {
-        val cm = getSystemService(ConnectivityManager::class.java) ?: return null to null
-        for (network in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val props = cm.getLinkProperties(network) ?: continue
-            val v4 = props.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>().firstOrNull()
-            return v4 to props.interfaceName
-        }
-        // no Wi-Fi client address (the phone may be the hotspot provider): bind to the tether interface instead
-        val tether = selectTether(tetherCandidates()) ?: return null to null
-        return (InetAddress.getByName(tether.ipv4) as? Inet4Address) to tether.name
-    }
+    private fun wifiLinkProperties(): Pair<Inet4Address?, String?> = bindableLink(this)
 
     override fun wifiIpv4(): Inet4Address? = wifiLinkProperties().first
 

@@ -75,6 +75,22 @@ class BridgeToggleTest {
     }
 
     @Test
+    fun `a start decision starts only with the switch, the exemption, no service and a bindable network`() {
+        assertEquals(StartDecision.START, startDecision(enabled = true, exempt = true, running = false, bindable = true))
+        assertEquals(StartDecision.WAIT_FOR_WIFI, startDecision(enabled = true, exempt = true, running = false, bindable = false))
+    }
+
+    @Test
+    fun `a start decision is none when the switch is off, the exemption is missing or a service runs`() {
+        for (bindable in listOf(true, false)) {
+            assertEquals(StartDecision.NONE, startDecision(enabled = false, exempt = true, running = false, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = true, exempt = false, running = false, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = true, exempt = true, running = true, bindable = bindable))
+            assertEquals(StartDecision.NONE, startDecision(enabled = false, exempt = false, running = true, bindable = bindable))
+        }
+    }
+
+    @Test
     fun `a restart with nothing playing runs at once`() {
         assertEquals(RestartStep.RESTART_NOW, restartStep(0))
     }
