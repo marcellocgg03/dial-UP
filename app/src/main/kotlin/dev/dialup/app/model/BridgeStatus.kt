@@ -4,29 +4,26 @@ package dev.dialup.app.model
 
 import dev.t2u.dial.DialAccessMode
 
-/** What the bridge card says about the bridge: running or not, and who may cast to it. */
+/** The bridge state the cast feature reports: running or not, and who may cast to it. */
 data class BridgeStatus(val running: Boolean, val accessMode: DialAccessMode) {
     companion object {
         val OFF = BridgeStatus(false, DialAccessMode.PHONE)
     }
 }
 
-/** The one bridge card line: "Bridge off", or "Running" and the access mode, joined by " · ". */
-fun statusLine(s: BridgeStatus): String {
-    if (!s.running) return "Bridge off"
-    val mode = if (s.accessMode == DialAccessMode.LAN) "Whole network" else "This phone only"
-    return "Running · $mode"
-}
+/** The only text the header shows under its title (GUI-15). */
+const val WAITING_FOR_WIFI = "Waiting for Wi-Fi"
 
 /**
- * The bridge card line with the reason when the bridge is not running (D-05): "Bridge off" when the switch is off,
- * "Waiting for the battery exemption" when it is on but the exemption is missing, "Starting" before the service
- * is up, "Waiting for Wi-Fi" when the service is up but the bridge is not, otherwise the running text.
+ * True when the switch is on and the exemption is held, so the bridge would run, but the phone has no Wi-Fi or hotspot address
+ * ([wifiPresent] false). The service stops itself on Wi-Fi loss (plan 07.1-01), so this does not depend on the service.
  */
-fun statusLine(s: BridgeStatus, enabled: Boolean, exempt: Boolean, serviceUp: Boolean): String = when {
-    !enabled -> "Bridge off"
-    !exempt -> "Waiting for the battery exemption"
-    !serviceUp -> "Starting"
-    !s.running -> "Waiting for Wi-Fi"
-    else -> statusLine(s)
-}
+fun waitingForWifi(enabled: Boolean, exempt: Boolean, wifiPresent: Boolean): Boolean = enabled && exempt && !wifiPresent
+
+/**
+ * The header's only subtitle (GUI-15): [WAITING_FOR_WIFI] when [waitingForWifi], else "" (no subtitle). "Running", the access
+ * mode and the other status texts are not shown any more: the switch and the battery banner
+ * say the rest.
+ */
+fun statusLine(enabled: Boolean, exempt: Boolean, wifiPresent: Boolean): String =
+    if (waitingForWifi(enabled, exempt, wifiPresent)) WAITING_FOR_WIFI else ""

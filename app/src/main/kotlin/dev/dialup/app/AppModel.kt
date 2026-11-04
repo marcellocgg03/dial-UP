@@ -3,6 +3,11 @@
 package dev.dialup.app
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
@@ -23,7 +28,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
@@ -45,6 +57,42 @@ class AppModel private constructor(context: Context) {
     /** True while the bridge service is up (set after the battery gate, cleared in onDestroy). */
     val serviceRunning: StateFlow<Boolean> =
         ServiceHub.serviceFlow.map { it != null }.stateIn(scope, SharingStarted.Eagerly, ServiceHub.service != null)
+
+    /**
+     * Whether the phone has a Wi-Fi or hotspot address the bridge could bind to ([hasBindableNetwork]). The service stops itself
+     * on Wi-Fi loss (plan 07.1-01), so the UI reads presence itself instead of asking the service. It listens only while a
+     * screen collects it (WhileSubscribed): the network callback is unregistered when the last collector goes, and the 5 s
+     * re-check (a hotspot starting or stopping raises no Wi-Fi callback) stops with it.
+     */
+    val wifiPresent: StateFlow<Boolean> =
+        wifiPresenceFlow().distinctUntilChanged().flowOn(Dispatchers.IO)
+            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), runCatching { hasBindableNetwork(context) }.getOrDefault(true))
+
+    private fun wifiPresenceFlow(): Flow<Boolean> = callbackFlow {
+        val cm = appContext.getSystemService(ConnectivityManager::class.java)
+        // never claim "no Wi-Fi" when the check itself cannot run
+        fun probe() { trySend(runCatching { hasBindableNetwork(appContext) }.getOrDefault(true)) }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = probe()
+            override fun onLost(network: Network) = probe()
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = probe()
+        }
+        val registered = cm != null && runCatching {
+            cm.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), callback)
+        }.isSuccess
+        probe()
+        if (!registered) trySend(true)
+        val recheck = launch {
+            while (isActive) {
+                delay(WIFI_RECHECK_MS)
+                probe()
+            }
+        }
+        awaitClose {
+            recheck.cancel()
+            if (registered) runCatching { cm?.unregisterNetworkCallback(callback) }
+        }
+    }
 
     /** The cast feature while the service runs, else null (plan 07-03 reads speakers from it). */
     val cast: StateFlow<CastFeature?> = ServiceHub.cast
@@ -211,6 +259,7 @@ class AppModel private constructor(context: Context) {
 
     companion object {
         private const val CONTROL_TIMEOUT_MS = 20_000L
+        private const val WIFI_RECHECK_MS = 5_000L
 
         /** What the add dialog and the Add button say while the bridge is off. */
         const val BRIDGE_OFF_ADD = "Switch the bridge on to add a renderer"

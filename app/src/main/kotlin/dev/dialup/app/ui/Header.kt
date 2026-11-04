@@ -42,8 +42,8 @@ import dev.dialup.app.model.toggleUi
 
 /**
  * The bridge card at the top of both tabs: its switch turns the whole bridge off and on (D-02, GUI-05), and turning
- * it off while anything plays asks first (D-03). The line under the title says whether the bridge runs, why not,
- * and who may cast. The switch is labelled "Enable" and is greyed out while the battery exemption is missing; it
+ * it off while anything plays asks first (D-03). The only subtitle is "Waiting for Wi-Fi" (GUI-15), shown when the
+ * switch is on, the exemption is held and the phone has no Wi-Fi or hotspot address; otherwise there is none. The switch is labelled "Enable" and is greyed out while the battery exemption is missing; it
  * opens no request itself, the exemption is granted from the battery banner (MainActivity owns the launcher). A grant
  * only makes the switch usable and never flips it: it keeps showing the persisted state.
  */
@@ -51,9 +51,8 @@ import dev.dialup.app.model.toggleUi
 @Composable
 fun Header(model: AppModel) {
     val context = LocalContext.current
-    val status by model.status.collectAsStateWithLifecycle()
     val settings by model.settings.data.collectAsStateWithLifecycle()
-    val serviceUp by model.serviceRunning.collectAsStateWithLifecycle()
+    val wifiPresent by model.wifiPresent.collectAsStateWithLifecycle()
     // the exemption dialog returns without a reliable result, so read it again whenever the app comes back
     var exempt by remember { mutableStateOf(BatteryGate.isOpen(context)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { exempt = BatteryGate.isOpen(context) }
@@ -79,11 +78,10 @@ fun Header(model: AppModel) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Enable", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = statusLine(status, settings.bridgeEnabled, exempt, serviceUp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.testTag("status-line"),
-                )
+                val line = statusLine(settings.bridgeEnabled, exempt, wifiPresent)
+                if (line.isNotEmpty()) {
+                    Text(text = line, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("status-line"))
+                }
             }
             Switch(
                 checked = ui.checked,
