@@ -38,11 +38,14 @@ import dev.dialup.app.model.ToggleAction
 import dev.dialup.app.model.confirmText
 import dev.dialup.app.model.statusLine
 import dev.dialup.app.model.toggleAction
+import dev.dialup.app.model.toggleUi
 
 /**
  * The bridge card at the top of both tabs: its switch turns the whole bridge off and on (D-02, GUI-05), and turning
  * it off while anything plays asks first (D-03). The line under the title says whether the bridge runs, why not,
- * and who may cast.
+ * and who may cast. The switch is labelled "Enable" and is greyed out while the battery exemption is missing; it
+ * opens no request itself, the exemption is granted from the battery banner (MainActivity owns the launcher). A grant
+ * only makes the switch usable and never flips it: it keeps showing the persisted state.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -54,6 +57,7 @@ fun Header(model: AppModel) {
     // the exemption dialog returns without a reliable result, so read it again whenever the app comes back
     var exempt by remember { mutableStateOf(BatteryGate.isOpen(context)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { exempt = BatteryGate.isOpen(context) }
+    val ui = toggleUi(settings.bridgeEnabled, exempt)
     var confirming by remember { mutableStateOf(0) }
 
     // the app is edge-to-edge, so the card keeps itself below the status bar
@@ -74,7 +78,7 @@ fun Header(model: AppModel) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Bridge enable", style = MaterialTheme.typography.titleMedium)
+                Text("Enable", style = MaterialTheme.typography.titleMedium)
                 Text(
                     text = statusLine(status, settings.bridgeEnabled, exempt, serviceUp),
                     style = MaterialTheme.typography.bodyMedium,
@@ -82,7 +86,8 @@ fun Header(model: AppModel) {
                 )
             }
             Switch(
-                checked = settings.bridgeEnabled,
+                checked = ui.checked,
+                enabled = ui.usable,
                 onCheckedChange = { requested ->
                     val casting = model.casting.value
                     when (toggleAction(requested, settings.bridgeEnabled, casting)) {
