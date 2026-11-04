@@ -93,13 +93,9 @@ Settings tab, every change is saved as soon as you make it:
 
 ## Screenshots
 
-<!--
-Screenshots the author still has to add under docs/screenshots/ (then replace this block with the images):
-  docs/screenshots/renderers.png   the Renderers tab with a few cards (crop or blur the Wi-Fi address if it shows)
-  docs/screenshots/settings.png    the Settings tab
-  docs/screenshots/cast-menu.png   the YouTube cast menu listing the renderers
-  docs/screenshots/notification.png   the bridge status notification
--->
+| Renderers | Settings | Cast menu |
+|-----------|----------|-----------|
+| ![The Renderers tab: one card per speaker, each with transport buttons](docs/screenshots/renderers.png) | ![The Settings tab: LAN access, queue clearing, gapless, cache, forced format, yt-dlp, theme](docs/screenshots/settings.png) | ![The YouTube Music cast menu listing the speakers as cast targets](docs/screenshots/cast-menu.png) |
 
 ## Build from source
 
