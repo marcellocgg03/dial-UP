@@ -156,13 +156,10 @@ fun SpeakerCard(
                 Icon(if (pause) PauseIcon else Icons.Filled.PlayArrow, contentDescription = if (pause) "Pause" else "Play")
             }
             IconButton(onClick = { onAction(SpeakerAction.STOP) }, enabled = buttons.stop, modifier = Modifier.testTag("btn-stop-$udn")) {
-                Icon(StopIcon, contentDescription = "Stop")
+                Icon(StopIcon, contentDescription = "Stop and clear")
             }
             IconButton(onClick = { onAction(SpeakerAction.NEXT) }, enabled = buttons.next, modifier = Modifier.testTag("btn-next-$udn")) {
                 Icon(SkipNextIcon, contentDescription = "Next")
-            }
-            IconButton(onClick = { onAction(SpeakerAction.CLEAR) }, enabled = buttons.clear, modifier = Modifier.testTag("btn-clear-$udn")) {
-                Icon(ClearAllIcon, contentDescription = "Clear renderer")
             }
         }
         val position = speaker.position
