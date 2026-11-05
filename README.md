@@ -12,8 +12,8 @@ and is released under the same licence.
 ## Requirements
 
 - Android 8.0 (API 26) or newer
-- UPnP/DLNA renderers
-- YouTube/YouTube Music apps for DIAL casting
+- UPnP/DLNA renderer(s)
+- YouTube/YouTube Music apps for casting
 
 
 ## Features
@@ -31,10 +31,11 @@ and is released under the same licence.
 - A Google account is not required and is never connected. DialUP does not sign in to anything: yt-dlp looks up the
   audio anonymously, and the phone sends the speaker only a link to its own address on your network.
 
-## Screenshots
-
-|-----------|----------|-----------|
-| ![The Renderers tab: one card per speaker, each with transport buttons](docs/screenshots/renderers.png) | ![The Settings tab: LAN access, queue clearing, gapless, cache, forced format, yt-dlp, theme](docs/screenshots/settings.png) | ![The YouTube Music cast menu listing the speakers as cast targets](docs/screenshots/cast-menu.png) |
+<div style="display: flex; gap: 16px; align-items: center;">
+  <img src="docs/screenshots/renderers.png" alt="Renderers tab" style="width: 32%;" />
+  <img src="docs/screenshots/settings.png" alt="Settings tab" style="width: 32%;" />
+  <img src="docs/screenshots/cast-menu.png" alt="Cast menu" style="width: 32%;" />
+</div>
 
 ## Build from source
 
