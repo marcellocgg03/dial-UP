@@ -6,6 +6,8 @@ package dev.t2u.renderer
 
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -25,6 +27,7 @@ class BridgeSearchNowTest {
         val bridge = h.newBridge()
         bridge.start()
         h.awaitUntil("the start-up search") { h.searchesSeen.get() >= 1 }
+        assertTrue(bridge.searching.value, "the start-up search is waiting for replies")
         val before = h.searchesSeen.get()
 
         assertTrue(bridge.searchNow("ui"))
@@ -32,6 +35,20 @@ class BridgeSearchNowTest {
         h.awaitUntil("the on-demand search") { h.searchesSeen.get() > before }
         val event = searchEvents("ui").single()
         assertEquals(true, event["sent"])
+    }
+
+    @Test
+    fun searchingStaysTrueThroughTheReplyWindowThenReturnsIdle() = h.run {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.awaitUntil("the start-up search") { h.searchesSeen.get() >= 1 }
+
+        assertTrue(bridge.searching.value)
+        assertTrue(bridge.searchNow("ui"))
+        assertTrue(bridge.searching.value, "overlapping searches share the active state")
+
+        withTimeout(5_000) { bridge.searching.first { !it } }
+        assertFalse(bridge.searching.value)
     }
 
     @Test
@@ -69,5 +86,6 @@ class BridgeSearchNowTest {
         assertFalse(bridge.searchNow("ui"))
 
         assertEquals(before, h.searchesSeen.get())
+        assertFalse(bridge.searching.value)
     }
 }

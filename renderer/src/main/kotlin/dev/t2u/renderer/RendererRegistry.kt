@@ -525,7 +525,7 @@ class RendererRegistry(
      * index.js main: [search] at start, 5 s later (catches devices that drop the first packet) and every
      * discoveryIntervalS; [prune] every pruneIntervalS. Cancel the returned job to stop all of it.
      */
-    fun launchSchedules(scope: CoroutineScope, search: () -> Unit): Job = scope.launch {
+    fun launchSchedules(scope: CoroutineScope, search: suspend () -> Boolean): Job = scope.launch {
         suspend fun safe(block: suspend () -> Unit) {
             try {
                 block()
@@ -536,8 +536,9 @@ class RendererRegistry(
         }
         // every search the schedule starts counts as a fresh chance for the speakers to answer
         suspend fun searchNow() {
-            safe { search() }
-            searched()
+            var sent = false
+            safe { sent = search() }
+            if (sent) searched()
         }
         searchNow()
         launch {

@@ -45,6 +45,7 @@ import dev.t2u.upnp.parseIpv4Literal
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -193,6 +194,9 @@ private const val DROP_LOG_WINDOW_MS = 60_000L
  */
 const val HOUSEKEEPING_INTERVAL_MS = 300_000L
 
+/** SSDP M-SEARCH advertises MX=3, so speakers may defer their replies for up to three seconds. */
+const val SSDP_SEARCH_REPLY_WINDOW_MS = 3_000L
+
 /**
  * WR-05: the waits between the media-server rebind attempts after a Wi-Fi move. The old Wi-Fi address can still be held for a
  * second or two (TIME_WAIT, a socket the system has not released), so a single failed bind is retried before it is given up;
@@ -333,6 +337,55 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     val speakers: StateFlow<List<SpeakerUi>> = _speakers.asStateFlow()
 
+    private val searchStateLock = Any()
+    private var activeSearchWindows = 0
+    private val _searching = MutableStateFlow(false)
+
+    /** True while at least one multicast renderer search is inside its SSDP reply window. */
+    val searching: StateFlow<Boolean> = _searching.asStateFlow()
+
+    private fun beginSearchWindow() = synchronized(searchStateLock) {
+        activeSearchWindows++
+        _searching.value = true
+    }
+
+    private fun finishSearchWindow() = synchronized(searchStateLock) {
+        if (activeSearchWindows > 0) activeSearchWindows--
+        _searching.value = activeSearchWindows > 0
+    }
+
+    /** Sends one multicast M-SEARCH and keeps [searching] true through its advertised reply window. */
+    private suspend fun multicastSearch(
+        trigger: String,
+        client: Ssdp? = ssdp,
+        markRegistrySearched: Boolean = true,
+    ): Boolean {
+        if (!started.get() || stopped.get() || networkDown || client == null || !client.isBound()) return false
+
+        beginSearchWindow()
+        var windowScheduled = false
+        try {
+            withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
+            if (markRegistrySearched) registry?.searched()
+            emit("search", "trigger" to trigger, "sent" to true)
+
+            val window = handlerScope.launch(start = CoroutineStart.LAZY) {
+                delay(SSDP_SEARCH_REPLY_WINDOW_MS)
+            }
+            window.invokeOnCompletion { finishSearchWindow() }
+            windowScheduled = true
+            window.start()
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            failure("search:$trigger", t)
+            return false
+        } finally {
+            if (!windowScheduled) finishSearchWindow()
+        }
+    }
+
     /** The running renderer with this UDN, for the card controls of the status UI; null when there is none (plan 07-03). */
     fun renderer(udn: String): Renderer? = registry?.renderers().orEmpty().filterIsInstance<Renderer>().firstOrNull { it.udn == udn }
 
@@ -433,14 +486,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         if (!store.remove(udn)) return false
         emit("unhidden", "udn" to udn)
         if (started.get() && !stopped.get()) {
-            try {
-                // the field is read at the moment of use; a client a rebind just stopped answers with nothing
-                withContext(Dispatchers.IO) { ssdp?.search(RENDERER_ST, 3) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                failure("unhide-search", t)
-            }
+            multicastSearch("unhide")
         }
         return true
     }
@@ -463,17 +509,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             emit("search", "trigger" to trigger, "skipped" to "no-client")
             return false
         }
-        return try {
-            withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
-            registry?.searched()
-            emit("search", "trigger" to trigger, "sent" to true)
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            failure("search-now", t)
-            false
-        }
+        return multicastSearch(trigger, client)
     }
 
     /**
@@ -951,7 +987,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
         handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
         // reads the field, so a later replacement of the client is followed (plan 05-07)
-        reg.launchSchedules(handlerScope) { ssdp?.search(RENDERER_ST, 3) }
+        reg.launchSchedules(handlerScope) { multicastSearch("schedule", markRegistrySearched = false) }
         handlerScope.launch {
             while (true) {
                 delay(deps.housekeepingIntervalMs)
@@ -1210,11 +1246,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 clientFailed = true
                 false
             } else {
-                withContext(Dispatchers.IO) { client.search(RENDERER_ST, 3) }
-                // a client without a search socket "searches" and sends nothing: that is a failed search, not a refresh
-                val bound = client.isBound()
-                if (!bound) clientFailed = true
-                bound
+                val sent = multicastSearch("housekeeping", client)
+                if (!sent) clientFailed = true
+                sent
             }
         } catch (e: CancellationException) {
             throw e
@@ -1384,9 +1418,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             withContext(Dispatchers.IO) { fresh.start() }
             if (fresh.isBound()) {
                 ssdp = fresh
-                withContext(Dispatchers.IO) { fresh.search(RENDERER_ST, 3) }
-                reg.searched()
-                ok = true
+                ok = multicastSearch("repair", fresh)
             } else {
                 withContext(Dispatchers.IO) { fresh.stop() }
             }
@@ -1480,11 +1512,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             }
             // the renderers learn the new address (they re-set the loaded track in their own scopes, one slow speaker holds up no other)
             for (r in registry?.renderers().orEmpty()) step("renderer", "rebind") { r.onNetworkChanged(newIp) }
-            step("search", "rebind") {
-                withContext(Dispatchers.IO) { ssdp?.search(RENDERER_ST, 3) }
-                registry?.searched()
-            }
             networkDown = false
+            step("search", "rebind") { multicastSearch("rebind") }
             emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
         }
     }
@@ -1670,6 +1699,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }
             _castCount.value = BridgeCount(0, 0)
             _speakers.value = emptyList()
+            synchronized(searchStateLock) {
+                activeSearchWindows = 0
+                _searching.value = false
+            }
             replySources.clear()
             emit("bridge", "event" to "stopped")
         }
