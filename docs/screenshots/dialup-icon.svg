@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="DialUP">
+  <title>DialUP</title>
+  <circle cx="256" cy="256" r="256" fill="#EEF3F7"/>
+  <g transform="translate(256 254) scale(0.8) translate(-256 -254)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M208 276 H292 A26 26 0 0 0 318 250 V106 A26 26 0 0 0 292 80 H76 A26 26 0 0 0 50 106 V250 A26 26 0 0 0 76 276 H160" stroke="#1F2A44" stroke-width="20"/>
+    <g transform="translate(184 346) scale(1.5)" stroke="#1F2A44" stroke-width="11.33">
+      <path d="M0 38 A18 18 0 0 0 36 38 V0"/>
+      <path transform="translate(52 0)" d="M0 56 V0 H18 A16 16 0 0 1 18 32 H0"/>
+      <path transform="translate(102 0)" d="M0 56 V16 M0 34 A17 17 0 0 1 34 34 V56"/>
+      <path transform="translate(152 0)" d="M0 56 V0 H18 A16 16 0 0 1 18 32 H0"/>
+    </g>
+    <path d="M184 214 V403" stroke="#FF0033" stroke-width="17" stroke-linecap="butt"/>
+    <path d="M184 136 L134 220 L234 220 Z" fill="#FF0033" stroke="#FF0033" stroke-width="22"/>
+  </g>
+</svg>
