@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="docs/screenshots/dialup-icon.svg" width="20%" />
+</div>
+
 # DialUP for Android
 
 An Android app that acts as a bridge between UPnP/DLNA media renderers and Casting. It finds UPnP/DLNA
