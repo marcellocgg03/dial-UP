@@ -10,9 +10,6 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 **This project currently casts audio-only! Video capabilities are planned as a possible future upgrade**
 
-DialUP is based on [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), a Node.js project (itself a fork of upnpTube),
-and is released under the same licence.
-
 ## Requirements
 
 - Android 8.0 (API 26) or newer
@@ -62,6 +59,26 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 | `app` | Android service, config, yt-dlp / ffmpeg wiring |
 
 `tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
+
+## Credits and thanks
+
+DialUP stands on the work of many people. Thank you to:
+
+- **[deaksa](https://github.com/deaksa) and the Tube2U[PnP] contributors**, for [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), the
+  Node.js project DialUP is a port of, and **Mark Smith**, the author of upnpTube, which Tube2U[PnP] is a fork of.
+  DialUP is a derivative work of both (GPL-3.0-only).
+- **[Patrick Kan](https://github.com/patrickkfkan)**, for [yt-cast-receiver](https://github.com/patrickkfkan/yt-cast-receiver) (MIT),
+  whose YouTube lounge receiver logic the `lounge` module is ported from, and for his fork of
+  [peer-dial](https://github.com/patrickkfkan/peer-dial), the DIAL server logic behind the `dial` module.
+- **Louay Bassbouss and Fraunhofer FOKUS**, the original authors of peer-dial (LGPL-3.0-or-later).
+- **The [yt-dlp](https://github.com/yt-dlp/yt-dlp) contributors**, whose extractor makes the audio lookup possible.
+- **[yausername](https://github.com/yausername/youtubedl-android) and the youtubedl-android contributors**, for running yt-dlp,
+  FFmpeg, Python and QuickJS on Android.
+- **The FFmpeg developers** and the Termux build maintainers, **Fabrice Bellard and Charlie Gordon** (QuickJS), and the
+  **Python Software Foundation**.
+- The authors of the libraries built into the app (Ktor, OkHttp, kotlinx, AndroidX, SLF4J, jsoup).
+
+The full copyright holders, licences and source links are in `THIRD_PARTY_NOTICES.md`.
 
 ## Licence
 
