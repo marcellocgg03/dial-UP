@@ -1,30 +1,29 @@
 # DialUP for Android
 
-A native Kotlin Android app (application ID `dev.dialup`) that makes the phone the whole cast bridge. It finds UPnP/DLNA
-speakers on the Wi-Fi network, shows each one as a cast target in the YouTube and YouTube Music apps (DIAL), resolves
-audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to the speaker. No always-on server is needed.
+An Android app that acts as a bridge between UPnP/DLNA media renderers and Casting. It finds UPnP/DLNA
+renderers on the Wi-Fi network, emulates each one as a modern cast target in the actual YouTube and YouTube Music apps (DIAL), resolves
+audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to the renderer.
+
+**This project currently casts audio-only! Video capabilities are planned as a possible future upgrade**
 
 DialUP is based on [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), a Node.js project (itself a fork of upnpTube),
 and is released under the same licence.
 
 ## Requirements
 
-- An Android 8.0 (API 26) or newer phone
-- UPnP/DLNA speakers (network renderers that accept a stream from a control app).
-- YouTube/YouTube Music apps for casting.
+- Android 8.0 (API 26) or newer
+- UPnP/DLNA renderers
+- YouTube/YouTube Music apps for DIAL casting
 
 
 ## Features
 
-- **LAN access**: off by default, which means only the phone's own apps can reach the bridge. Switch it on to let any
-  device on the LAN access the bridge and cast to the speakers.
-- **Clear the renderer when a cast ends**: off by default; when on, the renderer's queue is emptied when a cast ends.
-- **Gapless track changes**: on by default, for renderers that support it. Helps ensure a seamless transition between tracks without an noticable wait
+- **Wider LAN access**: any device on the LAN access the bridge and cast to the speakers. off by default
+- **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
 - **Caching**: audio files are cached locally for future playback without needing to be downloaded with yt-dlp again. The oldest entries are purged automatically to make space for new tracks
 - **Forced audio format**: Automatic by default; Direct, MP4, AAC stream (adts), FLAC and MP3 can be forced. Automatic will play in the highest quality audio format a given renderer supports natively
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
-- **utomatic update checking**: when the app is opened it checks GitHub for a newer DialUP release, at most twice a day, and shows a
-  card with a link to the release page on the Renderers tab
+- **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 
 ## Privacy
 
@@ -34,7 +33,6 @@ and is released under the same licence.
 
 ## Screenshots
 
-| Renderers | Settings | Cast menu |
 |-----------|----------|-----------|
 | ![The Renderers tab: one card per speaker, each with transport buttons](docs/screenshots/renderers.png) | ![The Settings tab: LAN access, queue clearing, gapless, cache, forced format, yt-dlp, theme](docs/screenshots/settings.png) | ![The YouTube Music cast menu listing the speakers as cast targets](docs/screenshots/cast-menu.png) |
 
