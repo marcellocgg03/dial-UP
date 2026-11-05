@@ -9,24 +9,25 @@ import kotlin.test.assertTrue
 
 class RefreshPhaseTest {
     @Test
-    fun `just under eight seconds is the spinner alone`() {
-        assertEquals(EmptyPhase.SPINNER, emptyPhase(7_999))
+    fun `a search in progress is the spinner`() {
+        assertEquals(EmptyPhase.SPINNER, emptyPhase(searching = true, idleSettled = false))
+        assertEquals(EmptyPhase.SPINNER, emptyPhase(searching = true, idleSettled = true))
     }
 
     @Test
-    fun `eight seconds adds the Refresh button`() {
-        assertEquals(EmptyPhase.SPINNER_WITH_REFRESH, emptyPhase(8_000))
-        assertEquals(EmptyPhase.SPINNER_WITH_REFRESH, emptyPhase(60_000))
+    fun `idle but not yet settled stays the spinner so the gap between two searches does not flicker`() {
+        assertEquals(EmptyPhase.SPINNER, emptyPhase(searching = false, idleSettled = false))
     }
 
     @Test
-    fun `a negative time is the spinner alone`() {
-        assertEquals(EmptyPhase.SPINNER, emptyPhase(-5))
+    fun `idle and settled offers Refresh`() {
+        assertEquals(EmptyPhase.IDLE_WITH_REFRESH, emptyPhase(searching = false, idleSettled = true))
     }
 
     @Test
-    fun `the threshold is eight seconds`() {
-        assertEquals(8_000L, REFRESH_AFTER_MS)
+    fun `the grace outlasts the gap between the start-up searches`() {
+        // searches at 0 s and 5 s, each holding a 3 s window: the idle gap is 2 s
+        assertTrue(SEARCH_IDLE_GRACE_MS > 5_000L - 3_000L)
     }
 
     @Test
