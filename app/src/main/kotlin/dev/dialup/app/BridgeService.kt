@@ -465,7 +465,7 @@ class BridgeService : Service(), SpikeHost {
 
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Bridge Status", NotificationManager.IMPORTANCE_LOW))
     }
 
     private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
