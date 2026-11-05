@@ -50,6 +50,30 @@ jobs:
       - name: Debug APK
         run: ./gradlew :app:assembleDebug
 
+      - name: Label the debug APK
+        id: label
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          version="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [ "$EVENT" = "pull_request" ]; then
+            label="pr${PR_NUMBER}-${PR_HEAD_SHA:0:7}"
+          else
+            label="main-${PUSH_SHA:0:7}"
+          fi
+          echo "name=DialUP-${version}-${label}-debug" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.label.outputs.name }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Release APK (unsigned without signing material)
         run: ./gradlew :app:assembleRelease
 
