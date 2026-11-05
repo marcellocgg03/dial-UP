@@ -65,7 +65,7 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 DialUP stands on the work of many people. Thank you to:
 
 - **[deaksa](https://github.com/deaksa) and the Tube2U[PnP] contributors**, for [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), the
-  Node.js project DialUP is a port of, and **Mark Smith**, the author of upnpTube, which Tube2U[PnP] is a fork of.
+  Node.js project DialUP is a port of, and **[Mark Smith](https://github.com/mas94uk)**, the author of [upnpTube](https://github.com/mas94uk/upnpTube), which Tube2U[PnP] is a fork of.
   DialUP is a derivative work of both (GPL-3.0-only).
 - **[Patrick Kan](https://github.com/patrickkfkan)**, for [yt-cast-receiver](https://github.com/patrickkfkan/yt-cast-receiver) (MIT),
   whose YouTube lounge receiver logic the `lounge` module is ported from, and for his fork of
@@ -84,6 +84,6 @@ The full copyright holders, licences and source links are in `THIRD_PARTY_NOTICE
 
 GPL-3.0-only, see `LICENSE`. Third-party components are listed in `THIRD_PARTY_NOTICES.md`.
 
-DialUP is based on Tube2U[PnP] / upnpTube (GPL-3.0-only), so it is released under the same licence.
+DialUP is based on [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) / [upnpTube](https://github.com/mas94uk/upnpTube) (GPL-3.0-only), so it is released under the same licence.
 The APK also bundles GPL-covered binaries (FFmpeg and ffprobe from the Termux build, and the youtubedl-android
 modules) together with CPython, QuickJS and yt-dlp.
