@@ -19,7 +19,6 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 ## Features
 
-- **Wider LAN access**: any device on the LAN access the bridge and cast to the speakers. off by default
 - **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
 - **Caching**: audio files are cached locally for future playback without needing to be downloaded with yt-dlp again. The oldest entries are purged automatically to make space for new tracks
 - **Forced audio format**: Automatic by default; Direct, MP4, AAC stream (adts), FLAC and MP3 can be forced. Automatic will play in the highest quality audio format a given renderer supports natively
