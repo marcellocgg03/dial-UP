@@ -16,9 +16,11 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 class CastNotificationTest {
-    private class FakeSource(initial: CastCount) : CastCountSource {
+    private class FakeSource(initial: CastCount, active: CastCount = initial) : CastCountSource {
         val state = MutableStateFlow(initial)
+        private val activeState = MutableStateFlow(active)
         override val castCount: StateFlow<CastCount> get() = state
+        override val networkLossCastCount: StateFlow<CastCount> get() = activeState
     }
 
     @Test
@@ -45,6 +47,12 @@ class CastNotificationTest {
     }
 
     @Test
+    fun `notification is shown only while a renderer is casting`() {
+        assertEquals(false, shouldShowCastNotification(CastCount(0, 1)))
+        assertEquals(true, shouldShowCastNotification(CastCount(1, 1)))
+    }
+
+    @Test
     fun `an empty source list emits 0 of 0 first`() = runBlocking {
         assertEquals(CastCount(0, 0), sumCastCounts(emptyList()).first())
     }
@@ -54,6 +62,14 @@ class CastNotificationTest {
         val a = FakeSource(CastCount(1, 2))
         val b = FakeSource(CastCount(0, 3))
         assertEquals(CastCount(1, 5), sumCastCounts(listOf(a, b)).first())
+    }
+
+    @Test
+    fun `detached playback is hidden from the notification but keeps the network loss wait active`() = runBlocking {
+        val source = FakeSource(CastCount(0, 1), active = CastCount(1, 1))
+
+        assertEquals(CastCount(0, 1), sumCastCounts(listOf(source)).first())
+        assertEquals(CastCount(1, 1), sumNetworkLossCastCounts(listOf(source)).first())
     }
 
     @Test

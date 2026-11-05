@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.flowOf
  */
 data class CastCount(val casting: Int, val total: Int)
 
+/** A user-visible cast notification is present only while at least one renderer is actively casting. */
+fun shouldShowCastNotification(c: CastCount): Boolean = c.casting > 0
+
 /** The persistent notification text (D-06, SVC-01). */
 fun notificationText(c: CastCount): String = "${c.casting} ${if (c.casting == 1) "renderer" else "renderers"} being cast to"
 
@@ -44,6 +47,9 @@ interface NetworkStateSource {
  */
 interface CastCountSource {
     val castCount: StateFlow<CastCount>
+
+    /** Active playback count used only to decide how long the service waits for Wi-Fi after a disconnect. */
+    val networkLossCastCount: StateFlow<CastCount> get() = castCount
 }
 
 /**
@@ -52,8 +58,16 @@ interface CastCountSource {
  * consecutive sums are dropped so the notification is only re-posted when its text can change.
  */
 fun sumCastCounts(sources: List<CastCountSource>): Flow<CastCount> {
-    if (sources.isEmpty()) return flowOf(CastCount(0, 0))
-    return combine(sources.map { it.castCount }) { counts ->
-        CastCount(counts.sumOf { it.casting }, counts.sumOf { it.total })
+    return sumCounts(sources.map { it.castCount })
+}
+
+/** Sums actual playback counts, including renderers whose cards have been detached from their receiver state. */
+fun sumNetworkLossCastCounts(sources: List<CastCountSource>): Flow<CastCount> =
+    sumCounts(sources.map { it.networkLossCastCount })
+
+private fun sumCounts(counts: List<StateFlow<CastCount>>): Flow<CastCount> {
+    if (counts.isEmpty()) return flowOf(CastCount(0, 0))
+    return combine(counts) { values ->
+        CastCount(values.sumOf { it.casting }, values.sumOf { it.total })
     }.distinctUntilChanged()
 }

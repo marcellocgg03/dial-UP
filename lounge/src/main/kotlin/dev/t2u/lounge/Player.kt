@@ -65,6 +65,9 @@ fun interface PlaybackFailureListener {
 abstract class Player {
     val queue: Playlist = Playlist()
 
+    /** True when a fresh sender playlist must restart the current item even if its video and index are unchanged. */
+    open val playbackDetached: Boolean get() = false
+
     /** Client playback nonce: 16 lowercase hex characters from a random UUID. */
     val cpn: String = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
 

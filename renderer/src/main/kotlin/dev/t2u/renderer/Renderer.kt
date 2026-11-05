@@ -362,6 +362,7 @@ class Renderer(
     private val deps: RendererDeps,
 ) : Player(), ManagedRenderer {
     private val config: Config get() = deps.config
+    override val playbackDetached: Boolean get() = _networkDetached.value
 
     // Child scope: cancelled by destroy(), parented to the service scope so the service can stop everything.
     private val scope = CoroutineScope(deps.scope.coroutineContext + SupervisorJob(deps.scope.coroutineContext[Job]))
@@ -388,6 +389,7 @@ class Renderer(
     // The status UI follows these through [ui]; the property syntax and the private setters stay as they were (plan 07-03).
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     private val _lastError = MutableStateFlow<String?>(null)
+    private val _networkDetached = MutableStateFlow(false)
 
     var nowPlaying: NowPlaying?
         get() = _nowPlaying.value
@@ -424,9 +426,29 @@ class Renderer(
      * last error and the sender-facing state, and ends with [destroy] (it runs on the renderer's own scope). No SOAP call
      * feeds it; the poll and the player events already hold everything it shows.
      */
-    val ui: StateFlow<SpeakerUi> = combine(statusFlow, _name, _nowPlaying, _lastError, _live) { status, name, track, error, live ->
+    private val liveUi = combine(statusFlow, _name, _nowPlaying, _lastError, _live) { status, name, track, error, live ->
         snapshot(status, name, track, error, live)
     }.distinctUntilChanged().stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        snapshot(PlayerStatus.IDLE, null, null, null, _live.value),
+    )
+
+    /** The card forgets playback after losing its connection; audio already accepted by the speaker is left alone. */
+    val ui: StateFlow<SpeakerUi> = combine(liveUi, _networkDetached) { live, detached ->
+        if (detached) {
+            live.copy(
+                status = PlayerStatus.IDLE,
+                track = null,
+                hasPrevious = false,
+                hasNext = false,
+                queueHasCurrent = false,
+                position = null,
+            )
+        } else {
+            live
+        }
+    }.stateIn(
         scope,
         SharingStarted.Eagerly,
         snapshot(PlayerStatus.IDLE, null, null, null, _live.value),
@@ -767,6 +789,7 @@ class Renderer(
 
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         if (destroyed) return false
+        _networkDetached.value = false
         val adv = advanced
         advanced = null
         if (adv != null && adv.video.id == video.id && position < 2) {
@@ -1940,10 +1963,11 @@ class Renderer(
         }
     }
 
-    /** Plan 05-08: the polls stop until the phone has a network again. */
+    /** A lost connection detaches the card from playback without sending any command to the speaker. */
     override suspend fun onNetworkLost() {
         if (destroyed) return
         networkDown = true
+        _networkDetached.value = true
         resetJob?.cancel() // a re-sync under way belongs to an address that is gone again
         resyncWatch = null
         stopPolling()
@@ -1958,10 +1982,9 @@ class Renderer(
     @Volatile private var resyncWatch: Pair<Current, Long>? = null
 
     /**
-     * Plan 05-08 (D-07), reworked in plan 07.1-02 (WIFI-02): the phone is on [host] now. Streams are built with it from here
-     * on and the old address is remembered as ours. Polling does NOT resume here: the speaker is read first by
-     * [resyncAfterNetworkReturn], so a STOPPED the outage caused is not mirrored to the phone before the decision. The re-sync
-     * runs in this renderer's own scope: one slow speaker holds up no other.
+     * The phone is on [host] now. Streams are built with it from here on and the old address is remembered as ours. A
+     * renderer detached by [onNetworkLost] is not polled or re-synced: its card stays empty and the speaker is left alone.
+     * A direct address change without a preceding loss still uses [resyncAfterNetworkReturn].
      */
     override suspend fun onNetworkChanged(host: String) {
         if (destroyed) return
@@ -1972,6 +1995,7 @@ class Renderer(
         ownHosts = (ownHosts.filter { it != fresh && it != old } + listOfNotNull(old?.takeIf { it != fresh })).takeLast(OWN_HOSTS_KEPT)
         networkDown = false
         resetJob?.cancel() // a newer change replaces an older re-sync that is still waiting or reading
+        if (_networkDetached.value) return
         resetJob = scope.launch { resyncAfterNetworkReturn(ipChanged) }
     }
 

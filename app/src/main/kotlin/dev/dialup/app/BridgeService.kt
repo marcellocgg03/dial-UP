@@ -1,6 +1,7 @@
 package dev.dialup.app
 
 import android.app.ActivityManager
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import dev.dialup.app.model.NetworkLossWatcher
 import dev.dialup.app.model.WIFI_LOSS_WINDOW_MS
+import dev.dialup.app.shouldShowCastNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -94,12 +96,13 @@ class BridgeService : Service(), SpikeHost {
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
     private var startForegroundFailed = false
+    private var foregroundActive = false
     private var logDirFact: File? = null
 
     /** The cast count last seen by [castCountLoop]; the heartbeat carries it so a sleep window shows whether casting was on. */
     @Volatile
     private var casting = 0
-    private var lastNotifiedText: String = notificationText(CastCount(0, 0))
+    private var lastNotifiedText: String? = notificationText(CastCount(0, 0))
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -125,9 +128,10 @@ class BridgeService : Service(), SpikeHost {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildNotification(CastCount(0, 0)),
+                buildNotification(CastCount(0, 0), ongoing = true),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
+            foregroundActive = true
         } catch (t: Throwable) {
             foregroundError = t
         }
@@ -462,7 +466,7 @@ class BridgeService : Service(), SpikeHost {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Bridge Status", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
+    private fun buildNotification(count: CastCount, waiting: Boolean = false, ongoing: Boolean = foregroundActive): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -474,9 +478,53 @@ class BridgeService : Service(), SpikeHost {
             .setContentTitle("DialUP")
             .setContentText(notificationText(count, waiting))
             .setSmallIcon(R.drawable.ic_stat_dialup)
-            .setOngoing(true)
+            .setOngoing(ongoing)
             .addAction(0, "Stop", stop)
             .build()
+    }
+
+    private fun updateCastNotification(count: CastCount, waiting: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (!shouldShowCastNotification(count)) {
+            if (foregroundActive) {
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                foregroundActive = false
+            } else {
+                manager.cancel(NOTIFICATION_ID)
+            }
+            lastNotifiedText = null
+            return
+        }
+
+        val text = notificationText(count, waiting)
+        if (!foregroundActive) {
+            try {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification(count, waiting, ongoing = true),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+                )
+                foregroundActive = true
+                lastNotifiedText = text
+                return
+            } catch (e: ForegroundServiceStartNotAllowedException) {
+                evidence.event(
+                    "feature-error",
+                    mapOf("where" to "promote-foreground", "error" to e.javaClass.name, "message" to e.message),
+                )
+            } catch (e: SecurityException) {
+                evidence.event(
+                    "feature-error",
+                    mapOf("where" to "promote-foreground", "error" to e.javaClass.name, "message" to e.message),
+                )
+            }
+        }
+
+        if (text != lastNotifiedText) {
+            lastNotifiedText = text
+            manager.notify(NOTIFICATION_ID, buildNotification(count, waiting))
+        }
     }
 
     /**
@@ -489,7 +537,7 @@ class BridgeService : Service(), SpikeHost {
         val sources = features.filterIsInstance<NetworkStateSource>()
         if (sources.isEmpty()) return
         val present: Flow<Boolean> = combine(sources.map { it.wifiPresent }) { all -> all.all { it } }
-        val castingNow: Flow<Int> = sumCastCounts(features.filterIsInstance<CastCountSource>()).map { it.casting }
+        val castingNow: Flow<Int> = sumNetworkLossCastCounts(features.filterIsInstance<CastCountSource>()).map { it.casting }
         NetworkLossWatcher(present, castingNow, SystemClock::elapsedRealtime) { action, downMs ->
             if (!AppSettings.of(this).data.value.bridgeEnabled) {
                 evidence.event("net-pause", mapOf("skipped" to "switch-off"))
@@ -499,6 +547,7 @@ class BridgeService : Service(), SpikeHost {
                 "net-pause",
                 mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_LOSS_WINDOW_MS, "casting" to casting),
             )
+            features.filterIsInstance<CastFeature>().firstOrNull()?.onNetworkLossExpired()
             NetworkResume.arm(this)
             stopSelf()
         }.run()
@@ -526,11 +575,7 @@ class BridgeService : Service(), SpikeHost {
                 applyPlayLocks(playLocks.onCasting(count.casting), "casting")
                 evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             }
-            val text = notificationText(count, waiting)
-            if (text != lastNotifiedText) {
-                lastNotifiedText = text
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, waiting))
-            }
+            updateCastNotification(count, waiting)
         }
     }
 

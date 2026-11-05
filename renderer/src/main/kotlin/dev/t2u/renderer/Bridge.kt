@@ -326,8 +326,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     private val _castCount = MutableStateFlow(BridgeCount(0, 0))
 
-    /** Derived from the renderers' player status on every change, never counted by events. */
+    /** Derived from the renderers' actual player status; used to keep the Wi-Fi-loss grace period active. */
     val castCount: StateFlow<BridgeCount> = _castCount.asStateFlow()
+
+    private val _visibleCastCount = MutableStateFlow(BridgeCount(0, 0))
+
+    /** Derived from card-visible state, so a renderer detached on network loss no longer appears to be casting. */
+    val visibleCastCount: StateFlow<BridgeCount> = _visibleCastCount.asStateFlow()
 
     private val _speakers = MutableStateFlow<List<SpeakerUi>>(emptyList())
 
@@ -985,6 +990,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         watchManualSpeakers(reg, probesSentAt)
 
         handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
+        handlerScope.launch { visibleCountFlow(reg).collect { _visibleCastCount.value = it } }
         handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
         // reads the field, so a later replacement of the client is followed (plan 05-07)
         reg.launchSchedules(handlerScope) { multicastSearch("schedule", markRegistrySearched = false) }
@@ -1121,6 +1127,21 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 BridgeCount(
                     statuses.count { it == PlayerStatus.LOADING || it == PlayerStatus.PLAYING || it == PlayerStatus.PAUSED },
                     list.size,
+                )
+            }
+        }
+    }.distinctUntilChanged()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun visibleCountFlow(reg: RendererRegistry): Flow<BridgeCount> = reg.renderersFlow.flatMapLatest { list ->
+        val renderers = list.filterIsInstance<Renderer>()
+        if (renderers.isEmpty()) {
+            flowOf(BridgeCount(0, 0))
+        } else {
+            combine(renderers.map { it.ui }) { speakers ->
+                BridgeCount(
+                    speakers.count { it.status == PlayerStatus.LOADING || it.status == PlayerStatus.PLAYING || it.status == PlayerStatus.PAUSED },
+                    speakers.size,
                 )
             }
         }
@@ -1698,6 +1719,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             step("ssdp-responder") { withContext(Dispatchers.IO) { responder?.stop() } }
             step("media") { withContext(Dispatchers.IO) { mediaServer?.stop() } }
             _castCount.value = BridgeCount(0, 0)
+            _visibleCastCount.value = BridgeCount(0, 0)
             _speakers.value = emptyList()
             synchronized(searchStateLock) {
                 activeSearchWindows = 0
