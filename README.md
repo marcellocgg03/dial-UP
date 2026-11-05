@@ -60,25 +60,14 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 
 `tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
 
-## Credits and thanks
+## Credits
 
-DialUP stands on the work of many people. Thank you to:
-
-- **[deaksa](https://github.com/deaksa) and the Tube2U[PnP] contributors**, for [Tube2U[PnP]](https://github.com/deaksa/tube2upnp), the
-  Node.js project DialUP is a port of, and **[Mark Smith](https://github.com/mas94uk)**, the author of [upnpTube](https://github.com/mas94uk/upnpTube), which Tube2U[PnP] is a fork of.
-  DialUP is a derivative work of both (GPL-3.0-only).
-- **[Patrick Kan](https://github.com/patrickkfkan)**, for [yt-cast-receiver](https://github.com/patrickkfkan/yt-cast-receiver) (MIT),
-  whose YouTube lounge receiver logic the `lounge` module is ported from, and for his fork of
-  [peer-dial](https://github.com/patrickkfkan/peer-dial), the DIAL server logic behind the `dial` module.
-- **Louay Bassbouss and Fraunhofer FOKUS**, the original authors of peer-dial (LGPL-3.0-or-later).
-- **The [yt-dlp](https://github.com/yt-dlp/yt-dlp) contributors**, whose extractor makes the audio lookup possible.
-- **[yausername](https://github.com/yausername/youtubedl-android) and the youtubedl-android contributors**, for running yt-dlp,
-  FFmpeg, Python and QuickJS on Android.
-- **The FFmpeg developers** and the Termux build maintainers, **Fabrice Bellard and Charlie Gordon** (QuickJS), and the
-  **Python Software Foundation**.
-- The authors of the libraries built into the app (Ktor, OkHttp, kotlinx, AndroidX, SLF4J, jsoup).
-
-The full copyright holders, licences and source links are in `THIRD_PARTY_NOTICES.md`.
+DialUP is a Kotlin port of [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) by deaksa and contributors, a fork of
+[upnpTube](https://github.com/mas94uk/upnpTube) by [Mark Smith](https://github.com/mas94uk). Its YouTube lounge and DIAL
+logic come from [yt-cast-receiver](https://github.com/patrickkfkan/yt-cast-receiver) and
+[peer-dial](https://github.com/patrickkfkan/peer-dial) by [Patrick Kan](https://github.com/patrickkfkan)
+(peer-dial originally by Louay Bassbouss, Fraunhofer FOKUS). Audio lookup uses [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Thanks to everyone involved. Full attributions and licences are in `THIRD_PARTY_NOTICES.md`.
 
 ## Licence
 
