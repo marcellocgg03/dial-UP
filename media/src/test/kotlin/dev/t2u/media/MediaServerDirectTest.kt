@@ -47,6 +47,13 @@ class MediaServerDirectTest {
         }
     }
 
+    /** The server adds a request-log entry after it has sent the response, so a slow machine can still be missing it. */
+    private fun lastSeen(): MediaRequest {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (seen.isEmpty() && System.nanoTime() < deadline) Thread.sleep(5)
+        return seen.last()
+    }
+
     @AfterEach
     fun tearDown() {
         server?.stop()
@@ -92,8 +99,8 @@ class MediaServerDirectTest {
         val features = r.header("contentFeatures.dlna.org").orEmpty()
         assertTrue("DLNA.ORG_OP=01" in features, features)
         assertTrue("DLNA.ORG_CI=0" in features, features)
-        assertEquals("proxy", seen.last().pipeMode)
-        assertEquals(1000L, seen.last().bytes)
+        assertEquals("proxy", lastSeen().pipeMode)
+        assertEquals(1000L, lastSeen().bytes)
     }
 
     @Test
@@ -128,7 +135,7 @@ class MediaServerDirectTest {
         assertEquals("100", r.header("Content-Length"))
         assertTrue(data.copyOfRange(100, 200).contentEquals(r.body))
         assertEquals("bytes=100-199", fetcher.requests.single().headers["Range"])
-        assertEquals("bytes=100-199", seen.last().range)
+        assertEquals("bytes=100-199", lastSeen().range)
     }
 
     @Test
@@ -293,7 +300,7 @@ class MediaServerDirectTest {
         val ms = serve(resolver, fetcher)
         val r = RawHttp.request(ms.resolvedPort(), "GET", register(ms))
         assertEquals(502, r.status)
-        val note = seen.last().note.orEmpty()
+        val note = lastSeen().note.orEmpty()
         assertTrue("SECRET" !in note && "sig=" !in note && "?" !in note, note)
         assertEquals(0, fetcher.requests.size)
     }
@@ -308,7 +315,7 @@ class MediaServerDirectTest {
         val ms = serve(TestResolver(), fetcher)
         val r = RawHttp.request(ms.resolvedPort(), "GET", register(ms))
         assertEquals(502, r.status)
-        val note = seen.last().note.orEmpty()
+        val note = lastSeen().note.orEmpty()
         assertTrue("SECRET" !in note && "sig=" !in note && "?" !in note, note)
     }
 
