@@ -127,7 +127,6 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                             if (phase == EmptyPhase.SPINNER) {
                                 CircularProgressIndicator(Modifier.testTag("speakers-spinner"))
                             } else {
-                                Text("No renderers found", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("speakers-none-found"))
                                 OutlinedButton(
                                     onClick = { model.refreshRenderers("ui") },
                                     modifier = Modifier.testTag("btn-refresh"),
