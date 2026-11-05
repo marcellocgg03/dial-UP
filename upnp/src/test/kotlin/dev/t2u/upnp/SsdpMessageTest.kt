@@ -145,6 +145,8 @@ class SsdpMessageTest {
                     assertEquals("uuid:$uuid::$st", reply.headers["USN"])
                 }
             }
+            // The responder records a reply after it has sent it, so the last entry can lag the datagram.
+            waitFor { rig.replies.size >= types.size }
             assertEquals(types, rig.replies.map { it.first })
         } finally {
             rig.responder.stop()
