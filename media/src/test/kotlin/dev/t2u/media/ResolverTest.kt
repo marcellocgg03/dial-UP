@@ -124,6 +124,28 @@ class ResolverTest {
     }
 
     @Test
+    fun parseInfoDistinguishesEstimatedFromExactSelectedStreamSize() {
+        val estimated = parseInfo(
+            """{"url":"https://h.example/audio","filesize_approx":1200}""",
+            "abcdefghijk",
+        )
+        assertEquals(0L, estimated.filesize)
+        assertEquals(1200L, estimated.filesizeApprox)
+        val selected = parseInfo(
+            """{"filesize":9000,"requested_formats":[{"url":"https://h.example/audio","filesize":1000,"filesize_approx":1100}]}""",
+            "abcdefghijk",
+        )
+        assertEquals(1000L, selected.filesize)
+        assertEquals(1100L, selected.filesizeApprox)
+        val invalid = parseInfo(
+            """{"url":"https://h.example/audio","filesize":-1,"filesize_approx":0}""",
+            "abcdefghijk",
+        )
+        assertEquals(0L, invalid.filesize)
+        assertNull(invalid.filesizeApprox)
+    }
+
+    @Test
     fun parseInfoWithoutUrlThrows() {
         val e = assertFailsWith<IllegalStateException> { parseInfo("""{"id":"x","requested_formats":[{"ext":"mp4"}]}""", "dQw4w9WgXcQ") }
         assertEquals("yt-dlp returned no direct URL", e.message)
@@ -179,6 +201,31 @@ class ResolverTest {
         val err = record.error!!
         assertTrue(err.contains("https://rr1---sn-x.googlevideo.com/..."), err)
         assertFalse(err.contains("SECRET"))
+    }
+
+    @Test
+    fun stepLinesKeepOnlyYoutubeStepsAndJsLinesWithoutIdsOrUrls() {
+        val id = "dQw4w9WgXcQ"
+        val stderr = """
+            [debug] Command-line args: ['--cookies', '/secret/path']
+            [debug] JS runtimes: quickjs-ng 0.10.1
+            [youtube] Extracting URL: https://www.youtube.com/watch?v=$id
+            [youtube] $id: Downloading webpage
+            [youtube] $id: Downloading player a5c2aafe-main
+            [youtube] $id: Downloading webpage
+            [debug] [youtube] [jsc] Solving JS challenges using quickjs
+        """.trimIndent()
+        val steps = Resolver.stepLines(GatewayResult(0, "", "", 1, stderrHead = stderr), id)
+        assertEquals(
+            listOf(
+                "[debug] JS runtimes: quickjs-ng 0.10.1",
+                "[youtube] Extracting URL: https://www.youtube.com/...",
+                "[youtube] Downloading webpage",
+                "[youtube] Downloading player a5c2aafe-main",
+                "[debug] [youtube] [jsc] Solving JS challenges using quickjs",
+            ),
+            steps,
+        )
     }
 
     @Test

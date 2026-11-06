@@ -110,10 +110,10 @@ class PlaybackFailureTest {
         val failures: List<String> get() = entries.filter { it.startsWith("failure:") }
     }
 
-    /** A speaker that starts only for the mp4 container profile (the direct format never starts). */
-    private fun FakeRenderer.playsOnlyMp4(): FakeRenderer {
+    /** A speaker that starts only for MP3 (the direct format never starts). */
+    private fun FakeRenderer.playsOnlyMp3(): FakeRenderer {
         onAction = { action ->
-            if (action == "Play" && state.currentMetaData.contains("audio/mp4:DLNA.ORG_PN")) state.transport = "PLAYING"
+            if (action == "Play" && state.currentMetaData.contains("audio/mpeg:")) state.transport = "PLAYING"
         }
         return this
     }
@@ -128,7 +128,7 @@ class PlaybackFailureTest {
                 h.renderer.play(Video(DQW), 0.0)
                 waitUntil(10_000) { log.failures.isNotEmpty() }
                 delay(600)
-                assertEquals(listOf("direct", "mp4", "mp3"), h.formats())
+                assertEquals(listOf("direct", "mp3"), h.formats())
                 assertEquals(listOf("failure:the speaker never started playing"), log.failures)
                 assertTrue(log.entries.indexOf("state:STOPPED") < log.entries.indexOf("failure:the speaker never started playing"), "${log.entries}")
                 assertEquals(PlayerStatus.STOPPED, h.renderer.status)
@@ -151,7 +151,7 @@ class PlaybackFailureTest {
                 h.renderer.play(Video(DQW), 0.0)
                 waitUntil(10_000) { log.failures.isNotEmpty() }
                 delay(600)
-                assertEquals(listOf("direct", "mp4", "mp3"), h.prepared.map { it.format })
+                assertEquals(listOf("direct", "mp3"), h.prepared.map { it.format })
                 assertEquals(listOf("failure:no format could be loaded on the speaker"), log.failures)
                 assertEquals("state:STOPPED", log.entries.first())
                 assertEquals(1, log.entries.count { it == "state:STOPPED" })
@@ -178,15 +178,15 @@ class PlaybackFailureTest {
     @Test
     @DisplayName("a fallback that plays is not reported")
     fun aFallbackThatPlaysIsNotReported() {
-        withFake(FakeRenderer(neverPlay = true).playsOnlyMp4()) { fake ->
+        withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
             RendererHarness(fake, config = cfg()).use { h ->
                 val log = Log(h)
                 h.renderer.init()
                 h.renderer.play(Video(DQW), 0.0)
-                waitUntil { h.renderer.status == PlayerStatus.PLAYING && h.formats() == listOf("direct", "mp4") }
+                waitUntil { h.renderer.status == PlayerStatus.PLAYING && h.formats() == listOf("direct", "mp3") }
                 delay(600)
                 assertEquals(PlayerStatus.PLAYING, h.renderer.status)
-                assertEquals(listOf("direct", "mp4"), h.formats())
+                assertEquals(listOf("direct", "mp3"), h.formats())
                 assertTrue(log.failures.isEmpty(), "${log.entries}")
             }
         }
@@ -196,7 +196,7 @@ class PlaybackFailureTest {
     @DisplayName("a Stop while the fallback is loading is not reported")
     fun aStopWhileTheFallbackIsLoadingIsNotReported() {
         withFake(FakeRenderer(neverPlay = true)) { fake ->
-            RendererHarness(fake, config = cfg(), prepareDelayFor = { if (it.format == "mp4") 1500L else 0L }).use { h ->
+            RendererHarness(fake, config = cfg(), prepareDelayFor = { if (it.format == "mp3") 1500L else 0L }).use { h ->
                 val log = Log(h)
                 h.renderer.init()
                 h.renderer.play(Video(DQW), 0.0)

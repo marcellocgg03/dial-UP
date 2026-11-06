@@ -131,6 +131,10 @@ class YouTubeCastReceiver(
 
     override fun connectedSenders(): List<Sender> = app.connectedSenders
 
+    fun onNetworkLost() = app.onNetworkLost()
+
+    fun onNetworkReturned() = app.onNetworkReturned()
+
     override fun enableAutoplayOnConnect(value: Boolean) {
         app.enableAutoplayOnConnect(value)
     }

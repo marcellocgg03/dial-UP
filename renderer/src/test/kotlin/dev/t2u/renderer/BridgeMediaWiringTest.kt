@@ -94,13 +94,13 @@ class BridgeMediaWiringTest {
 
             h.awaitUntil("a further format after the start timeout", 15_000) { h.setAvTransportUris().size >= 2 }
             val second = h.setAvTransportUris()[1]
-            assertTrue(second.endsWith(".aac") || second.endsWith(".mp4") || second.endsWith(".mp3"), "the next format of the chain: $second")
+            assertTrue(second.endsWith(".aac") || second.endsWith(".mp3"), "the next format of the chain: $second")
         }
     }
 
     @Test
-    @DisplayName("a forced flac format with the real ffmpeg serves a FLAC file with byte ranges from a sub-directory of the buffer directory")
-    fun forcedFlacServesAFileWithRanges() = h.run<Unit> {
+    @DisplayName("a forced mp4 format with the real ffmpeg serves an MP4 file with byte ranges from a sub-directory of the buffer directory")
+    fun forcedMp4ServesAFileWithRanges() = h.run<Unit> {
         assumeTrue(h.findFfmpeg() != null, "ffmpeg is not installed")
         val source = File(tmp, "source/sine.m4a")
         assumeTrue(h.makeSineSource(source), "could not make the sine source with ffmpeg")
@@ -110,7 +110,7 @@ class BridgeMediaWiringTest {
             source.copyTo(target, overwrite = true)
         }
         val bridge = h.newBridge(
-            h.testConfig(outputFormat = "flac"),
+            h.testConfig(outputFormat = "mp4"),
             launcher = JvmPipeLauncher(h.findFfmpeg()!!),
             bufferDir = buffer,
             sourceDownloader = downloader,
@@ -118,18 +118,18 @@ class BridgeMediaWiringTest {
         castOne(bridge)
 
         val uri = h.setAvTransportUris().first()
-        assertTrue(Regex("http://127\\.0\\.0\\.1:\\d+/stream/[0-9a-f]{32}\\.flac").matches(uri), "CurrentURI was $uri")
+        assertTrue(Regex("http://127\\.0\\.0\\.1:\\d+/stream/[0-9a-f]{32}\\.m4a").matches(uri), "CurrentURI was $uri")
         val ranged = get(uri, "bytes=0-3")
         assertEquals(206, ranged.statusCode())
-        assertContentEquals("fLaC".toByteArray(Charsets.US_ASCII), ranged.body())
-        val built = File(buffer, "files").listFiles().orEmpty().filter { it.name.endsWith(".flac") }
+        val built = File(buffer, "files").listFiles().orEmpty().filter { it.name.endsWith(".m4a") }
         assertTrue(built.isNotEmpty(), "the built file is in <bufferDir>/files, not in the buffer directory itself")
-        assertTrue(buffer.listFiles().orEmpty().none { it.name.endsWith(".flac") })
+        assertContentEquals(built.single().readBytes().copyOfRange(0, 4), ranged.body())
+        assertTrue(buffer.listFiles().orEmpty().none { it.name.endsWith(".m4a") })
 
         // Stop keeps the finished cache file (D-12) and leaves no half-written one; the buffer directory stays
         bridge.stop()
         val after = File(buffer, "files").listFiles().orEmpty().map { it.name }
-        assertTrue(after.any { it.endsWith(".flac") }, "the finished file survives Stop: $after")
+        assertTrue(after.any { it.endsWith(".m4a") }, "the finished file survives Stop: $after")
         assertTrue(after.none { it.endsWith(".part") || it.endsWith(".download") }, "no half-written file survives Stop: $after")
         assertTrue(buffer.isDirectory, "the buffer directory itself stays")
     }

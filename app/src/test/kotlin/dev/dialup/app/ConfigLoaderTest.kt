@@ -28,11 +28,11 @@ class ConfigLoaderTest {
 
     @Test
     fun validKeysChangeTheEffectiveConfig() {
-        write("""{"outputFormat":"flac","exclude":["lamp"],"ffmpegLogLevel":"debug"}""")
+        write("""{"outputFormat":"mp4","exclude":["lamp"],"ffmpegLogLevel":"debug"}""")
         val r = loadAppConfig(dir)
         assertTrue(r.found)
         assertTrue(r.warnings.isEmpty(), r.warnings.toString())
-        assertEquals("flac", r.config.outputFormat)
+        assertEquals("mp4", r.config.outputFormat)
         assertFalse(r.config.nameFilter.accepts("Lamp"))
         assertTrue(r.config.nameFilter.accepts("Kitchen"))
         assertEquals("debug", r.config.ffmpegLogLevel)
@@ -47,8 +47,7 @@ class ConfigLoaderTest {
         assertEquals("auto", r.config.outputFormat)
         assertTrue(r.config.nameFilter.include.isEmpty())
         assertTrue(r.config.nameFilter.exclude.isEmpty())
-        assertEquals(16, r.config.flacBits)
-        assertFalse(r.config.ytdlpVerbose)
+        assertTrue(r.config.ytdlpVerbose)
         assertEquals("error", r.config.ffmpegLogLevel)
         assertEquals(defaults, r.config)
     }
@@ -61,7 +60,6 @@ class ConfigLoaderTest {
             "{not json $secretText" to "not valid JSON",
             """["$secretText"]""" to "not a JSON object",
             """{"outputFormat":"$secretText"}""" to "outputFormat",
-            """{"flacBits":"$secretText"}""" to "flacBits",
             """{"ytdlpVerbose":"$secretText"}""" to "ytdlpVerbose",
             """{"startTimeoutMs":99999999}""" to "startTimeoutMs",
             """{"include":["$secretPattern"]}""" to "include[0]",
@@ -84,7 +82,7 @@ class ConfigLoaderTest {
 
     @Test
     fun aFileOverSixtyFourKibIsIgnoredWithOneWarning() {
-        write("""{"outputFormat":"flac","pad":"${"x".repeat(70 * 1024)}"}""")
+        write("""{"outputFormat":"mp4","pad":"${"x".repeat(70 * 1024)}"}""")
         val r = loadAppConfig(dir)
         assertTrue(r.found)
         assertEquals(1, r.warnings.size, r.warnings.toString())
@@ -94,7 +92,7 @@ class ConfigLoaderTest {
     @Test
     fun summaryHoldsTheSettingsAndCountsButNoPatternText() {
         write(
-            """{"outputFormat":"mp3","startTimeoutMs":15000,"pollIntervalMs":1500,"mp3Bitrate":"256k","flacBits":24,""" +
+            """{"outputFormat":"mp3","startTimeoutMs":15000,"pollIntervalMs":1500,"mp3Bitrate":"256k",""" +
                 """"ytdlpVerbose":true,"ffmpegLogLevel":"info","include":["LIVINGROOMSECRET","kitchen"],"exclude":"LAMPSECRET","bogus":1}""",
         )
         val r = loadAppConfig(dir)
@@ -103,7 +101,6 @@ class ConfigLoaderTest {
         assertEquals(15000L, s["startTimeoutMs"]!!.jsonPrimitive.long)
         assertEquals(1500L, s["pollIntervalMs"]!!.jsonPrimitive.long)
         assertEquals("256k", s["mp3Bitrate"]!!.jsonPrimitive.content)
-        assertEquals(24, s["flacBits"]!!.jsonPrimitive.int)
         assertTrue(s["ytdlpVerbose"]!!.jsonPrimitive.boolean)
         assertEquals("info", s["ffmpegLogLevel"]!!.jsonPrimitive.content)
         assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
@@ -172,7 +169,7 @@ class ConfigLoaderTest {
 
     @Test
     fun anUnreadableFileGivesTheDefaultsAndOneWarning() {
-        val f = write("""{"outputFormat":"flac"}""")
+        val f = write("""{"outputFormat":"mp4"}""")
         val changed = f.setReadable(false, false)
         assumeFalse(!changed || f.canRead(), "running as a user that can read anything")
         try {
@@ -186,9 +183,9 @@ class ConfigLoaderTest {
 
     @Test
     fun evidenceFieldsArePlainValues() {
-        write("""{"outputFormat":"flac","ytdlpVerbose":true,"include":"kitchenSECRET","zzz":1}""")
+        write("""{"outputFormat":"mp4","ytdlpVerbose":true,"include":"kitchenSECRET","zzz":1}""")
         val f = configEvidenceFields(loadAppConfig(dir))
-        assertEquals("flac", f["format"])
+        assertEquals("mp4", f["format"])
         assertEquals(true, f["ytdlpVerbose"])
         assertEquals(1L, f["includeCount"])
         assertEquals(true, f["found"])

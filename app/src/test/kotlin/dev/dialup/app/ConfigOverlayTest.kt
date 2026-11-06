@@ -51,10 +51,10 @@ class ConfigOverlayTest {
     fun everyOverrideReachesTheConfig() {
         val c = overlay(
             base,
-            AppSettingsData(cacheMb = 512, outputFormat = "mp3", ytdlpChannel = "nightly", clearOnCastEnd = true, gapless = false),
+            AppSettingsData(cacheMb = 512, outputFormat = "mp4", ytdlpChannel = "nightly", clearOnCastEnd = true, gapless = false),
         )
         assertEquals(512, c.cacheMb)
-        assertEquals("mp3", c.outputFormat)
+        assertEquals("mp4", c.outputFormat)
         assertEquals("nightly", c.ytdlpChannel)
         assertTrue(c.clearOnCastEnd)
         assertFalse(c.gapless)
@@ -63,9 +63,9 @@ class ConfigOverlayTest {
 
     @Test
     fun noOverridesLeaveConfigJsonAlone() {
-        writeConfig("""{"outputFormat":"flac","cacheMb":64,"ytdlpChannel":"nightly","logLevel":"debug"}""")
+        writeConfig("""{"outputFormat":"mp4","cacheMb":64,"ytdlpChannel":"nightly","logLevel":"debug"}""")
         val c = loadAppConfig(dir).config
-        assertEquals("flac", c.outputFormat)
+        assertEquals("mp4", c.outputFormat)
         assertEquals(64, c.cacheMb)
         assertEquals("nightly", c.ytdlpChannel)
         assertEquals("debug", c.logLevel)
@@ -93,7 +93,7 @@ class ConfigOverlayTest {
 
     @Test
     fun theSummaryListsTheOverriddenKeyNamesAndClearOnCastEnd() {
-        writeSettings("""{"gapless":false,"cacheMb":512,"outputFormat":"mp3","clearOnCastEnd":true}""")
+        writeSettings("""{"gapless":false,"cacheMb":512,"outputFormat":"mp4","clearOnCastEnd":true}""")
         val r = loadAppConfig(dir)
         val s = configSummary(r)
         assertEquals(

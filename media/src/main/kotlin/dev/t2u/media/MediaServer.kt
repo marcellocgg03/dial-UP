@@ -91,11 +91,17 @@ data class VideoEntry(
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
 interface MediaRegistrar {
     /**
-     * Builds whatever [entry]'s format needs before the URL is handed to a speaker: the file formats (mp4, flac)
+     * Builds whatever [entry]'s format needs before the URL is handed to a speaker: the file formats (mp4)
      * are downloaded and converted here. The renderer calls it before [registerVideo], so the speaker's start clock
      * does not include the build. The default does nothing, so stubs that implement only [registerVideo] keep compiling.
      */
     suspend fun prepare(entry: VideoEntry) {}
+
+    /** Registers before preparing so file ownership survives cancellation and concurrent requests. */
+    suspend fun prepareAndRegister(entry: VideoEntry): String {
+        prepare(entry)
+        return registerVideo(entry)
+    }
 
     /**
      * The file formats already built and cached for [videoId], best first. Auto mode plays one of these (when the speaker takes
@@ -394,6 +400,20 @@ class MediaServer(
         }
     }
 
+    override suspend fun prepareAndRegister(entry: VideoEntry): String {
+        if (entry.format in FILE_FORMATS && files == null) {
+            prepare(entry)
+        }
+        val path = registerVideo(entry)
+        try {
+            prepare(entry)
+            return path
+        } catch (e: Throwable) {
+            release(path)
+            throw e
+        }
+    }
+
     override fun registerVideo(entry: VideoEntry): String {
         requireVideoId(entry.videoId)
         if (entry.format == "direct") return registerDirect(entry)
@@ -426,7 +446,11 @@ class MediaServer(
             throw e
         }
         val token = TOKEN_PATH.matchEntire(path)?.groupValues?.get(1)
-        if (token != null) tokenPins[token] = unpin else unpin()
+        if (token != null) {
+            tokenPins[token] = { builder.discardWhenUnused(file); unpin() }
+        } else {
+            unpin()
+        }
         return path
     }
 
@@ -476,7 +500,13 @@ class MediaServer(
                 is StreamSource.PipeSource -> servePipe(call, entry, src, head, out, token)
                 is StreamSource.VideoPipe -> {
                     if (!head) runCatching { src.entry.onRequest?.invoke() }
-                    servePipe(call, entry, src, head, out, token)
+                    val release = files?.sourcePin(src.entry.videoId)
+                    try {
+                        servePipe(call, entry, src, head, out, token)
+                    } finally {
+                        if (files?.hasSource(src.entry.videoId) == true) files.discardSourceWhenUnused(src.entry.videoId)
+                        release?.invoke()
+                    }
                 }
                 is StreamSource.DirectProxy -> {
                     if (!head) runCatching { src.entry.onRequest?.invoke() }

@@ -194,7 +194,6 @@ internal class BridgeHarness(
     fun testConfig(
         outputFormat: String = "adts",
         mp3Bitrate: String = "192k",
-        flacBits: Int = 16,
         ffmpegLogLevel: String = "error",
         ytdlpVerbose: Boolean = false,
         startTimeoutMs: Long = 5000,
@@ -208,7 +207,6 @@ internal class BridgeHarness(
         pollIntervalMs = 100,
         startTimeoutMs = startTimeoutMs,
         mp3Bitrate = mp3Bitrate,
-        flacBits = flacBits,
         ffmpegLogLevel = ffmpegLogLevel,
         ytdlpVerbose = ytdlpVerbose,
         // Node's test setup() omits PREFETCH; the Config default (true) would prepare the next track behind these

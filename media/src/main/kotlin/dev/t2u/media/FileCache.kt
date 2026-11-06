@@ -6,6 +6,9 @@ package dev.t2u.media
 // it is ever touched (T-04-01).
 
 import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** Default cache cap in MB (D-02). Node's default is 512; a phone has less room. */
 const val DEFAULT_CACHE_MB = 256
@@ -17,17 +20,22 @@ const val DEFAULT_CACHE_LIMIT_BYTES = DEFAULT_CACHE_MB * 1_048_576L
 fun isCacheFileName(name: String): Boolean = name.endsWith(".m4a") || name.endsWith(".flac") || name.endsWith(".source")
 
 /** What the cache holds now: the number and total size of finished files, and the cap in force at the time. */
-data class CacheInfo(val files: Int, val bytes: Long, val limitBytes: Long)
+data class CacheInfo(
+    val files: Int,
+    val bytes: Long,
+    val limitBytes: Long,
+    val temporaryFiles: Int = 0,
+    val temporaryBytes: Long = 0,
+)
 
 /**
  * The cache over the builder's directory [dir]. [limitBytes] is read inside every prune and never remembered, so a
  * cap changed while the app runs (the deferred cache slider) applies to the next prune. Events go to [onEvent] as maps.
  *
- * Only finished files (names passing [isCacheFileName], non-empty) count; `.part`, `.download` and `.info.json`
- * files are in-progress or leftover and are never counted, evicted or served.
+ * Only finished retained files count toward the cache limit. Completed temporary files are tracked separately;
+ * `.part`, `.download` and `.info.json` files are in-progress or leftover.
  *
- * Pins are counted per file name in memory. A pinned file is skipped by [prune] and [clear], so the disk can pass
- * the cap by the files in use: the cap, plus the files being read or built (T-04-02).
+ * Pins are counted per file name in memory. A pinned file is skipped by eviction and [clear].
  */
 class FileCache(
     dir: File,
@@ -37,6 +45,90 @@ class FileCache(
     private val dir: File = dir.absoluteFile
     private val lock = Any()
     private val pins = HashMap<String, Int>()
+    private val transientManifest = File(this.dir, ".transient")
+    private val transient = if (transientManifest.isFile) {
+        transientManifest.readLines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
+    } else {
+        mutableSetOf()
+    }
+    private val disposalRequested = HashSet<String>()
+
+    private fun saveTransient() {
+        if (transient.isEmpty()) {
+            Files.deleteIfExists(transientManifest.toPath())
+            return
+        }
+        if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) throw IOException("Cannot create cache directory: $dir")
+        val temp = Files.createTempFile(dir.toPath(), "manifest-", ".part")
+        try {
+            Files.write(temp, transient.sorted())
+            Files.move(temp, transientManifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
+
+    private fun disposeIfUnused(name: String) {
+        if (name !in disposalRequested || pins.containsKey(name)) return
+        if (name !in transient && !File(dir, name).exists()) return
+        if (name in transient) {
+            Files.deleteIfExists(File(dir, name).toPath())
+            transient.remove(name)
+            saveTransient()
+        }
+        disposalRequested.remove(name)
+    }
+
+    /** A completed temporary file is admitted only if its actual size fits after evicting unused entries. */
+    fun publish(part: File, file: File, eligible: Boolean = true): Boolean = synchronized(lock) {
+        require(file.absoluteFile.parentFile == dir && isCacheFileName(file.name))
+        val size = part.length()
+        require(size > 0) { "Cannot publish empty media" }
+        val name = file.name
+        val limit = limitBytes()
+        val entries = listCacheFiles().filter { it.name !in transient && it.name != name }
+            .sortedWith(compareBy<Entry> { it.modified }.thenBy { it.name })
+        var total = entries.sumOf { it.size }
+        val evictable = entries.filterNot { pins.containsKey(it.name) }.sumOf { it.size }
+        if (eligible && limit > 0 && size <= limit && total - evictable <= limit - size) {
+            for (entry in entries) {
+                if (total <= limit - size) break
+                if (pins.containsKey(entry.name)) continue
+                val old = File(dir, entry.name)
+                if (old.delete() || !old.exists()) {
+                    total -= entry.size
+                } else {
+                    emit(mapOf("event" to "cache-eviction-failed", "file" to entry.name))
+                }
+            }
+        }
+        val retained = eligible && limit > 0 && size <= limit && total <= limit - size
+        // Mark before publishing so a crash cannot turn temporary media into reusable cache.
+        transient.add(name)
+        saveTransient()
+        Files.move(part.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        if (retained) {
+            transient.remove(name)
+            saveTransient()
+        }
+        emit(mapOf("event" to "cache-admission", "file" to name, "bytes" to size, "retained" to retained))
+        disposeIfUnused(name)
+        retained
+    }
+
+    fun isTransient(file: File): Boolean = synchronized(lock) { file.name in transient }
+
+    fun canEverFit(size: Long): Boolean = size <= 0L || size <= limitBytes()
+
+    fun discardWhenUnused(file: File) = synchronized(lock) {
+        require(file.absoluteFile.parentFile == dir)
+        disposalRequested.add(file.name)
+        disposeIfUnused(file.name)
+    }
+
+    fun forgetDiscardIfMissing(file: File) = synchronized(lock) {
+        if (!file.exists() && file.name !in transient) disposalRequested.remove(file.name)
+    }
 
     /** Names seen by a scan or by a prune under a positive limit: files that were kept, and so are never dropped by a zero limit. */
     private val known = HashSet<String>()
@@ -80,6 +172,7 @@ class FileCache(
                     released = true
                     val left = (pins[name] ?: 1) - 1
                     if (left <= 0) pins.remove(name) else pins[name] = left
+                    disposeIfUnused(name)
                 }
             }
         }
@@ -88,14 +181,21 @@ class FileCache(
     fun isPinned(name: String): Boolean = synchronized(lock) { pins.containsKey(name) }
 
     /** Counts only non-empty regular files whose name passes [isCacheFileName]; the limit is read now. */
-    fun info(): CacheInfo {
+    fun info(): CacheInfo = synchronized(lock) {
         var files = 0
         var bytes = 0L
+        var temporaryFiles = 0
+        var temporaryBytes = 0L
         for (f in listCacheFiles()) {
+            if (f.name in transient) {
+                temporaryFiles++
+                temporaryBytes += f.size
+                continue
+            }
             files++
             bytes += f.size
         }
-        return CacheInfo(files, bytes, limitBytes())
+        CacheInfo(files, bytes, limitBytes(), temporaryFiles, temporaryBytes)
     }
 
     /**
@@ -110,7 +210,7 @@ class FileCache(
      */
     fun prune(keep: Set<String> = emptySet(), busy: (String) -> Boolean = { false }): Int = synchronized(lock) {
         val limit = limitBytes()
-        val entries = listCacheFiles().sortedWith(compareBy<Entry> { it.modified }.thenBy { it.name })
+        val entries = listCacheFiles().filter { it.name !in transient }.sortedWith(compareBy<Entry> { it.modified }.thenBy { it.name })
         val present = entries.map { it.name }.toHashSet()
         if (limit <= 0L) return@synchronized pruneUncached(entries, keep, busy)
         known.addAll(present)
@@ -212,6 +312,13 @@ class FileCache(
             }
         }
         saveManifest()
+        for (name in transient.toList()) {
+            if (pins.containsKey(name)) continue
+            Files.deleteIfExists(File(dir, name).toPath())
+            transient.remove(name)
+            removed++
+        }
+        saveTransient()
         removed
     }
 
@@ -227,11 +334,16 @@ class FileCache(
         var kept = 0
         var keptBytes = 0L
         synchronized(lock) {
+            for (name in transient.toList()) {
+                Files.deleteIfExists(File(dir, name).toPath())
+                transient.remove(name)
+            }
+            saveTransient()
             // Files made under a zero limit by an earlier run of the server stay uncached, not adopted as kept.
             runCatching { if (manifest.isFile) uncached.addAll(manifest.readLines().filter { it.isNotBlank() }) }
             for (name in dir.list().orEmpty()) {
                 val f = File(dir, name)
-                if (!f.isFile || name == MANIFEST) continue
+                if (!f.isFile || name == MANIFEST || name == transientManifest.name) continue
                 if (isCacheFileName(name) && f.length() > 0) {
                     if (name !in uncached) known.add(name)
                     kept++
@@ -257,7 +369,10 @@ class FileCache(
                 continue
             }
             val f = File(dir, name)
-            if (f.isFile && f.delete()) removed++
+            if (f.isFile && f.delete()) {
+                if (transient.remove(name)) saveTransient()
+                removed++
+            }
         }
         emit(mapOf("event" to "cache-clear", "removed" to removed, "keptInUse" to inUse))
         removed
@@ -267,7 +382,7 @@ class FileCache(
     fun deleteTempFiles() {
         synchronized(lock) {
             for (name in dir.list().orEmpty()) {
-                if (isCacheFileName(name) || name == MANIFEST) continue
+                if (isCacheFileName(name) || name == MANIFEST || name == transientManifest.name) continue
                 val f = File(dir, name)
                 if (f.isFile) runCatching { f.delete() }
             }
@@ -311,21 +426,56 @@ class FileCache(
     }
 }
 
-/**
- * Moves the finished cache files of [from] into [to] once (the cache used to live in the app's cache directory, which Android may
- * empty): a name that already exists in [to] is left alone, anything else in [from] (part files, leftovers) is ignored.
- * @return how many files moved
- */
+/** Moves finished files and removes obsolete range-cache data from a legacy media buffer. */
+fun migrateMediaBufferDir(from: File, to: File) {
+    migrateCacheDir(File(from, "files"), File(to, "files"))
+    val oldRanges = File(from, "range-cache")
+    if (!oldRanges.exists()) return
+    val files = oldRanges.listFiles() ?: throw IOException("Cannot list legacy range cache directory: $oldRanges")
+    for (file in files) {
+        if (file.isFile && (file.name.endsWith(".part") || file.name.endsWith(".bin"))) Files.delete(file.toPath())
+    }
+}
+
+/** Moves a legacy cache into [to], preserving existing destination files and the zero-limit manifest. */
 fun migrateCacheDir(from: File, to: File): Int {
-    val names = from.list() ?: return 0
-    to.mkdirs()
+    if (!from.exists()) return 0
+    val names = from.list() ?: throw IOException("Cannot list legacy cache directory: $from")
+    if (!to.isDirectory && !to.mkdirs() && !to.isDirectory) throw IOException("Cannot create cache directory: $to")
+
+    val oldManifest = File(from, ".uncached")
+    if (oldManifest.isFile) {
+        val newManifest = File(to, ".uncached")
+        val entries = (if (newManifest.isFile) newManifest.readLines() else emptyList()) + oldManifest.readLines()
+        newManifest.writeText(entries.filter { it.isNotBlank() }.distinct().sorted().joinToString("\n"))
+        Files.delete(oldManifest.toPath())
+    }
+
     var moved = 0
     for (name in names) {
-        if (!isCacheFileName(name)) continue
         val src = File(from, name)
+        if (!src.isFile || name == ".uncached") continue
+        if (!isCacheFileName(name)) {
+            Files.delete(src.toPath())
+            continue
+        }
         val dst = File(to, name)
-        if (!src.isFile || dst.exists()) continue
-        if (src.renameTo(dst) || runCatching { src.copyTo(dst); src.delete(); true }.getOrDefault(false)) moved++
+        if (dst.exists()) {
+            if (!dst.isFile) throw IOException("Cache destination is not a file: $dst")
+            Files.delete(src.toPath())
+            continue
+        }
+        if (!src.renameTo(dst)) {
+            val temp = Files.createTempFile(to.toPath(), "migration-", ".part")
+            try {
+                Files.copy(src.toPath(), temp, StandardCopyOption.REPLACE_EXISTING)
+                Files.move(temp, dst.toPath())
+                Files.delete(src.toPath())
+            } finally {
+                Files.deleteIfExists(temp)
+            }
+        }
+        moved++
     }
     return moved
 }

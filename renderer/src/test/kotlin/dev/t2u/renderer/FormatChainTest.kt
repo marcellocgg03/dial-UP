@@ -15,6 +15,7 @@ import dev.t2u.lounge.PreviousNextVideos
 import dev.t2u.lounge.Playlist
 import dev.t2u.lounge.Video
 import dev.t2u.upnp.FakeRenderer
+import dev.t2u.upnp.parseSink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonNull
@@ -50,18 +51,6 @@ class FormatChainTest {
             h.renderer.init()
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
             assertEquals("adts", h.registered.first().format)
-        }
-    }
-
-    @Test
-    @DisplayName("prefers lossless FLAC over MP3 when the renderer lists FLAC but no AAC")
-    fun prefersFlacOverMp3() = withFake(FakeRenderer(sink = "http-get:*:audio/mpeg:*,http-get:*:audio/x-flac:*")) { fake ->
-        RendererHarness(fake, config = ::auto).use { h ->
-            h.renderer.init()
-            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
-            assertEquals("flac", h.registered.first().format)
-            val set = fake.calls.first { it.action == "SetAVTransportURI" }
-            assertTrue(set.body.contains("audio/flac:DLNA.ORG_OP=01"), set.body)
         }
     }
 
@@ -125,31 +114,31 @@ class FormatChainTest {
         RendererDataStore(dir, "fake-renderer").set(LEARNED_FORMAT_KEY, JsonPrimitive(value))
     }
 
-    /** A speaker that starts only for the mp4 container profile (the direct format never starts). */
-    private fun FakeRenderer.playsOnlyMp4(): FakeRenderer {
+    /** A speaker that starts only for MP3 (the direct format never starts). */
+    private fun FakeRenderer.playsOnlyMp3(): FakeRenderer {
         onAction = { action ->
-            if (action == "Play" && state.currentMetaData.contains("audio/mp4:DLNA.ORG_PN")) state.transport = "PLAYING"
+            if (action == "Play" && state.currentMetaData.contains("audio/mpeg:")) state.transport = "PLAYING"
         }
         return this
     }
 
     @Test
     @DisplayName("walks the format chain when the renderer never starts, and remembers the winner")
-    fun walksTheChainAndRemembersTheWinner() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp4()) { fake ->
+    fun walksTheChainAndRemembersTheWinner() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
         val dir: File
         RendererHarness(fake, config = ::auto).use { h ->
             dir = h.dataDir
             h.renderer.init()
             assertTrue(h.renderer.play(Video(DQW), 0.0))
-            waitUntil { storedFormat(dir) == "mp4" }
-            assertEquals(listOf("direct", "mp4"), h.formats())
-            assertEquals("mp4", storedFormat(dir))
+            waitUntil { storedFormat(dir) == "mp3" }
+            assertEquals(listOf("direct", "mp3"), h.formats())
+            assertEquals("mp3", storedFormat(dir))
             assertEquals(PlayerStatus.PLAYING, h.renderer.status)
         }
         RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
             h.renderer.init()
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
-            assertEquals("mp4", h.formats().first())
+            assertEquals("mp3", h.formats().first())
         }
     }
 
@@ -192,21 +181,21 @@ class FormatChainTest {
     @DisplayName("a start failure of a remembered format clears the remembered value")
     fun startFailureClearsTheRememberedFormat() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
-        seedFormat(dir, "mp4")
+        seedFormat(dir, "direct")
         RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
             h.renderer.init()
             h.renderer.play(Video(DQW), 0.0)
             waitUntil { h.formats().size >= 2 && storedFormat(dir) == null }
-            assertEquals(listOf("mp4", "mp3"), h.formats())
+            assertEquals(listOf("direct", "mp3"), h.formats())
             assertNull(storedFormat(dir))
         }
     }
 
     @Test
-    @DisplayName("a stored format outside the chain is ignored")
-    fun unknownStoredFormatIsIgnored() = withFake { fake ->
+    @DisplayName("a previously learned mp4 is ignored in auto mode")
+    fun learnedMp4IsIgnored() = withFake { fake ->
         val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
-        seedFormat(dir, "wav")
+        seedFormat(dir, "mp4")
         RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
             h.renderer.init()
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
@@ -215,13 +204,48 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("a learned FLAC format is ignored because it is no longer in the chain")
+    fun learnedFlacIsIgnored() = withFake { fake ->
+        val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
+        seedFormat(dir, "flac")
+        val chain = mutableListOf(chooseFormat("auto", "flac", null, "audio/mp4"))
+        while (true) {
+            val next = nextFormat(chain.last(), null, "audio/mp4") ?: break
+            chain.add(next)
+        }
+        assertEquals(listOf("direct", "adts", "mp3"), chain)
+        RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+            assertEquals("direct", h.registered.first().format)
+            assertFalse(h.formats().contains("flac"))
+        }
+    }
+
+    @Test
+    fun webmSourceSkipsAdtsDuringSelectionAndFallback() {
+        val adtsOnly = parseSink("http-get:*:audio/vnd.dlna.adts:*")
+        assertFalse(formatAccepted(null, "adts", "audio/webm"))
+        assertTrue(formatAccepted(null, "adts", "audio/mp4"))
+        listOf("audio/WEBM", "audio/opus", "audio/ogg", "audio/vorbis").forEach {
+            assertFalse(formatAccepted(null, "adts", it), it)
+        }
+        assertEquals("direct", chooseFormat("auto", null, null, "audio/webm"))
+        assertEquals("mp3", chooseFormat("auto", null, adtsOnly, "audio/webm"))
+        assertEquals("mp3", nextFormat("direct", null, "audio/webm"))
+        assertNull(nextFormat("mp3", null, "audio/webm"))
+        assertEquals("direct", chooseFormat("auto", "mp4", null, "audio/webm"))
+        assertEquals("mp4", chooseFormat("mp4", null, null, "audio/webm"))
+    }
+
+    @Test
     @DisplayName("a prepare failure in auto mode moves on to the next format within the same load")
     fun prepareFailureInAutoMovesOn() = withFake { fake ->
         RendererHarness(fake, config = ::auto, prepareFailure = { if (it.format == "direct") IllegalStateException("download failed") else null }).use { h ->
             h.renderer.init()
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
-            assertEquals(listOf("mp4"), h.formats())
-            assertEquals(listOf("direct", "mp4"), h.prepared.map { it.format })
+            assertEquals(listOf("mp3"), h.formats())
+            assertEquals(listOf("direct", "mp3"), h.prepared.map { it.format })
             assertEquals(1, fake.calls.count { it.action == "SetAVTransportURI" })
         }
     }
@@ -265,7 +289,7 @@ class FormatChainTest {
             delay(600)
             assertEquals(1, stopped.get())
             assertEquals(listOf("direct"), h.formats())
-            assertEquals(listOf("direct", "mp4", "mp3"), h.prepared.map { it.format })
+            assertEquals(listOf("direct", "mp3"), h.prepared.map { it.format })
         }
     }
 
@@ -290,10 +314,9 @@ class FormatChainTest {
         ms.start()
         try {
             val port = ms.resolvedPort()
-            // The speaker fetches the URL it was given; only a 200 makes it play. The stub registrar's mp4 token is
-            // not known to the real server, so for mp4 the speaker is simply willing to play.
+            // The speaker fetches the direct URL; the stub MP3 stream is simply accepted.
             fake.onAction = { action ->
-                if (action == "Play" && fake.state.currentMetaData.contains("audio/mp4:DLNA.ORG_PN")) {
+                if (action == "Play" && fake.state.currentMetaData.contains("audio/mpeg:")) {
                     fake.state.transport = "PLAYING"
                 } else if (action == "Play") {
                     val c = java.net.URI(fake.state.currentUri).toURL().openConnection() as java.net.HttpURLConnection
@@ -311,7 +334,7 @@ class FormatChainTest {
                 h.renderer.play(Video(DQW), 0.0)
                 waitUntil { h.formats().size >= 2 }
                 assertEquals("direct", h.formats().first())
-                assertEquals("mp4", h.formats()[1], "the refused direct stream falls through to the next accepted format")
+                assertEquals("mp3", h.formats()[1], "the refused direct stream falls through to the next accepted format")
                 assertTrue(refusals.get() >= 1, "the proxy refused the first stream")
                 assertNull(storedFormat(h.dataDir), "a refused format is never learned")
             }

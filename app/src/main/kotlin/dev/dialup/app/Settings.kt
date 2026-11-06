@@ -3,7 +3,6 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.YTDLP_CHANNELS
-import dev.t2u.renderer.OUTPUT_FORMATS
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerializationException
@@ -79,6 +78,9 @@ data class ParsedSettings(
 /** The cache size range Config.validate accepts, in MiB. */
 private val CACHE_MB_RANGE = 0..32768
 
+/** The formats the app lets a user pick; a stored "direct", "adts" or "mp3" is ignored and Automatic is used. */
+val SETTINGS_OUTPUT_FORMATS = setOf("auto", "mp4")
+
 private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
@@ -150,7 +152,7 @@ fun parseSettings(text: String): ParsedSettings {
         if (n != null) data = data.copy(cacheMb = n) else problems += KEY_CACHE_MB
     }
     data = data.copy(
-        outputFormat = text(KEY_OUTPUT_FORMAT, OUTPUT_FORMATS),
+        outputFormat = text(KEY_OUTPUT_FORMAT, SETTINGS_OUTPUT_FORMATS),
         ytdlpChannel = text(KEY_YTDLP_CHANNEL, YTDLP_CHANNELS),
     )
     return ParsedSettings(data, o.filterKeys { it !in KNOWN_KEYS }, problems)

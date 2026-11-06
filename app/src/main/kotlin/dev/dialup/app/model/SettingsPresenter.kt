@@ -10,7 +10,7 @@ import dev.t2u.media.CacheInfo
 import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YTDLP_STATUS_CASTING
 import dev.t2u.media.YtDlpUpdateOutcome
-import dev.t2u.renderer.OUTPUT_FORMATS
+import dev.dialup.app.SETTINGS_OUTPUT_FORMATS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -91,7 +91,7 @@ val CACHE_STEPS: List<Int> = listOf(0, 64, 128, 256, 512, 1024, 2048, 4096)
 
 /** Shown under the cache size when it is 0 (the pre-work todo, resolved as keep 0 with a warning). */
 const val CACHE_ZERO_WARNING =
-    "With 0 MB only the file just built is kept: a prepared next track in MP4 or FLAC may be rebuilt and gapless changes can suffer"
+    "With 0 MB new tracks are temporary and removed after playback; existing cached tracks remain until cleared"
 
 /** Where the yt-dlp Update now button stands. */
 sealed interface UpdateUi {
@@ -354,9 +354,9 @@ class SettingsPresenter(
         return changed(SettingKey.CACHE)
     }
 
-    /** One of [OUTPUT_FORMATS]; anything else is ignored. The bridge reads it at start, so the restart card shows. */
+    /** One of [SETTINGS_OUTPUT_FORMATS]; anything else is ignored. The bridge reads it at start, so the restart card shows. */
     fun setOutputFormat(format: String): Boolean {
-        if (format !in OUTPUT_FORMATS) return false
+        if (format !in SETTINGS_OUTPUT_FORMATS) return false
         settings.update { it.copy(outputFormat = format) }
         return changed(SettingKey.FORMAT)
     }

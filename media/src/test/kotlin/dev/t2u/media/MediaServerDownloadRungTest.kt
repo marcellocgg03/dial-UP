@@ -111,12 +111,13 @@ class MediaServerDownloadRungTest {
         if (::upstream.isInitialized) upstream.stop(0)
     }
 
-    private fun builder(resolver: VideoResolver, downloader: SourceDownloader): FileBuilder =
+    private fun builder(resolver: VideoResolver, downloader: SourceDownloader, limit: Long = DEFAULT_CACHE_LIMIT_BYTES): FileBuilder =
         FileBuilder(
             dir = File(dir, "build"),
             launcher = launcher,
             resolver = resolver,
             downloader = downloader,
+            cacheLimitBytes = { limit },
             retryDelaysMs = listOf(10L, 10L),
         ).also { builders.add(it) }
 
@@ -260,5 +261,21 @@ class MediaServerDownloadRungTest {
         ms.prepare(entry) // returns at once now
         assertEquals(1, downloader.calls.get(), "the shared build ran once; the later prepare joined it")
         assertNotNull(files.fileFor("ppppppppppp", "mp4", 0))
+    }
+
+    @Test
+    fun timedOutRegistrationDisposesTemporaryFilesAfterBackgroundBuildFinishes() = runBlocking<Unit> {
+        val resolver = RefusedResolver(base)
+        val files = builder(resolver, FakeSourceDownloader(source, delayMs = 400), limit = 1)
+        val ms = serve(resolver, files, prepareTimeoutMs = 50)
+        assertFailsWith<IllegalStateException> {
+            ms.prepareAndRegister(VideoEntry("qqqqqqqqqqq", "mp4"))
+        }
+        val deadline = System.currentTimeMillis() + 10_000
+        while (files.activeCount() > 0 && System.currentTimeMillis() < deadline) delay(20)
+        assertEquals(0, files.activeCount(), "background build finished")
+        assertEquals(0L, files.info().temporaryBytes)
+        assertFalse(File(dir, "build/qqqqqqqqqqq.source").exists())
+        assertFalse(File(dir, "build/qqqqqqqqqqq-mp4-0.m4a").exists())
     }
 }

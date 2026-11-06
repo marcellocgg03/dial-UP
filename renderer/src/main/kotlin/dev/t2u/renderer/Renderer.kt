@@ -1189,7 +1189,14 @@ class Renderer(
     private suspend fun prepareItem(video: Video, position: Double, format: String?, forceOffset: Boolean = false): PreparedItem {
         val info = deps.resolver.resolve(video.id)
         val address = checkNotNull(ip) { "renderer was not initialised" }
-        var fmt = format ?: cachedAutoFormat(video.id, info.mime) ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        if (fmt == "direct" && startsMidTrack(position)) {
+            // The relayed YouTube file cannot start at an offset, and a speaker that seeks inside a large fragmented MP4 scans
+            // it from the start (minutes on a long track), so the next format starts ffmpeg at the position instead.
+            val offsetFormat = nextFormat("direct", protocols, info.mime) ?: "mp3"
+            note("info", "Starting at ${Math.floor(position).toInt()}s: direct cannot start mid-track, using $offsetFormat")
+            fmt = offsetFormat
+        }
         while (true) {
             try {
                 return buildItem(video, position, info, fmt, address, forceOffset)
@@ -1204,21 +1211,8 @@ class Renderer(
         }
     }
 
-    /**
-     * Auto mode only: a format already built and cached for [videoId] that the speaker accepts, best first, so the track starts
-     * from the cache and nothing is built again. A forced format never takes this path.
-     */
-    private fun cachedAutoFormat(videoId: String, sourceMime: String): String? {
-        if (config.outputFormat != "auto") return null
-        val cached = try {
-            deps.media.cachedFormats(videoId)
-        } catch (_: Exception) {
-            return null
-        }
-        return cached.firstOrNull { formatAccepted(protocols, it, sourceMime) }?.also {
-            note("info", "Using the cached $it of this track")
-        }
-    }
+    /** True when [position] needs an offset start, which only automatic mode handles (a forced format is used as asked). */
+    private fun startsMidTrack(position: Double): Boolean = config.outputFormat == "auto" && position > 1
 
     /** Prepare, register and describe one track in [fmt]. */
     private suspend fun buildItem(
@@ -1240,8 +1234,7 @@ class Renderer(
             if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
             cur.fetched = true
         }
-        deps.media.prepare(entry)
-        val streamPath = deps.media.registerVideo(entry)
+        val streamPath = deps.media.prepareAndRegister(entry)
         cur.streamPath = streamPath
         val url = "http://$address:${config.mediaPort}$streamPath"
         val protocolInfo = "http-get:*:$mime:${dlnaFeatures(fmt)}"
@@ -1633,13 +1626,16 @@ class Renderer(
     }
 
     /**
-     * Seeks the speaker. Three paths, as in renderer.js `doSeek`:
+     * Seeks the speaker. Four paths (the first is ours, the others as in renderer.js `doSeek`):
+     *  * direct in automatic mode never gets a native Seek past the first second: the stream is reloaded in the next
+     *    accepted format (adts, else mp3) starting at the position, because a speaker seeks a large fragmented MP4 by
+     *    scanning it;
      *  * a format that is not seekable (adts, mp3) restarts the stream at the offset (the Play is deferred while
      *    paused, so a paused seek stays paused);
-     *  * a seekable format (direct, mp4, flac) gets a native AVTransport Seek. The target is relative to the file
+     *  * a seekable format (direct, mp4) gets a native AVTransport Seek. The target is relative to the file
      *    the speaker plays: a file that was built to start at an offset ([Current.startAt]) is sought at
      *    `position - startAt`;
-     *  * when the speaker rejects the Seek, or the target lies before the start of an offset file, mp4 and flac load
+     *  * when the speaker rejects the Seek, or the target lies before the start of an offset file, mp4 loads
      *    a new file that starts at the position (clamped to one second before the end, see [restartOffset]). `direct`
      *    has no such fallback: the seek is reported as failed.
      * Only Seek, Stop, SetAVTransportURI and Play reach the speaker; nothing touches the volume.
@@ -1649,6 +1645,10 @@ class Renderer(
     override suspend fun doSeek(position: Double): Boolean {
         val c = current ?: return false
         val paused = status == PlayerStatus.PAUSED
+        if (c.format == "direct" && startsMidTrack(position)) {
+            // prepareItem swaps direct for a format that can start at the position
+            return load(c.video, position, "direct", startPlaying = !paused)
+        }
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
             // has to reconnect), but works on every speaker.

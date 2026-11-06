@@ -65,8 +65,14 @@ fun readGaplessMemory(stored: JsonElement?, model: String, now: Long): Boolean? 
  * speaker takes, whatever it lists); the others need the speaker's list to accept their MIME type, and a
  * speaker that lists nothing is tried anyway ("unknown means try").
  */
-fun formatAccepted(protocols: List<SinkProtocol>?, format: String, sourceMime: String): Boolean =
-    format == "mp3" || sinkAccepts(protocols, mimeOf(format, sourceMime)) != false
+fun formatAccepted(protocols: List<SinkProtocol>?, format: String, sourceMime: String): Boolean {
+    if (format == "mp3") return true
+    // adts copies AAC frames, so a source in another codec (Opus in WebM) cannot take it
+    if (format == "adts" && NON_AAC_SOURCE.containsMatchIn(sourceMime)) return false
+    return sinkAccepts(protocols, mimeOf(format, sourceMime)) != false
+}
+
+private val NON_AAC_SOURCE = Regex("webm|opus|ogg|vorbis", RegexOption.IGNORE_CASE)
 
 /**
  * The format for the next start: a forced [mode] (anything but "auto") wins; in auto mode the [learned]

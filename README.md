@@ -20,13 +20,15 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 ## Features
 
 - **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
-- **Caching**: audio files are cached locally for future playback without needing to be downloaded with yt-dlp again. The oldest entries are purged automatically to make space for new tracks
-- **Forced audio format**: Automatic by default; Direct, MP4, AAC stream (adts), FLAC and MP3 can be forced. Automatic will play in the highest quality audio format a given renderer supports natively
+- **Caching** (MP4 format only): with the MP4 format forced, audio files are cached locally for future playback without needing to be downloaded with yt-dlp again. The cache settings appear only when MP4 is selected. Older unused entries are evicted to make room; files that do not fit remain temporary and are removed after playback. Android's system Clear cache action also removes these files. The cache limit covers retained source and converted files, not temporary playback files, downloads in progress, or the separately bounded streaming range cache.
+- **Forced audio format**: Automatic by default; Automatic or MP4 can be selected. Automatic tries Direct, then AAC stream (adts, skipped for non-AAC sources), then MP3, and uses the first one the renderer supports natively. Seeks and mid-track starts on Direct are restarted as an AAC stream (adts, else MP3) at the target position, because speakers scan a large fragmented MP4 slowly when seeking natively. MP4 is never chosen automatically because it downloads and caches the whole track first
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Wi-Fi recovery**: Brief outages are given five seconds to rebind and resync; after that, the phone-side bridge stops
-  without stopping renderer playback and restarts when Wi-Fi returns. The cast notification appears only while Wi-Fi is
-  available and casting is active.
+  without stopping renderer playback and restarts when Wi-Fi returns. During a brief recovery, an implicit sender
+  disconnect does not stop playback; explicit disconnects still end the cast. Playback may still interrupt if the
+  renderer exhausts its buffer while the phone is unreachable. The cast notification appears only while Wi-Fi is available
+  and casting is active.
 
 ## Privacy
 

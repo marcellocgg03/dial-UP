@@ -12,8 +12,6 @@ import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
 import dev.dialup.app.model.SearchThrottle
-import dev.dialup.app.model.addRefusal
-import dev.dialup.app.model.waitingForWifi
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
@@ -226,17 +224,13 @@ class AppModel private constructor(context: Context) {
 
     /**
      * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
-     * sent (T-07-29); with no bridge the answer is [ManualAddResult.NotUsable] saying to switch it on, or that the bridge is waiting for Wi-Fi when the service is up, because the probe runs
+     * sent (T-07-29); with no bridge the answer is [ManualAddResult.NotUsable], because the probe runs
      * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
      * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added (plan 07-13).
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null
-        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable(addRefusal(
-            serviceRunning.value,
-            false,
-            waitingForWifi(settings.data.value.bridgeEnabled, BatteryGate.isOpen(appContext), wifiPresent.value),
-        ) ?: BRIDGE_OFF_ADD)
+        val bridge = cast.value?.currentBridge() ?: return ManualAddResult.NotUsable("The bridge is not running")
         return try {
             withContext(Dispatchers.Default) { bridge.addManual(ip) }
         } catch (e: CancellationException) {
@@ -269,12 +263,6 @@ class AppModel private constructor(context: Context) {
     companion object {
         private const val CONTROL_TIMEOUT_MS = 20_000L
         private const val WIFI_RECHECK_MS = 5_000L
-
-        /** What the add dialog and the Add button say while the bridge is off. */
-        const val BRIDGE_OFF_ADD = "Switch the bridge on to add a renderer"
-
-        /** What they say while the service runs but has no bridge yet (no Wi-Fi, a failed start, a restart). */
-        const val BRIDGE_WAITING_ADD = "The bridge is waiting for Wi-Fi; add the renderer once it is running"
 
         @Volatile private var instance: AppModel? = null
 

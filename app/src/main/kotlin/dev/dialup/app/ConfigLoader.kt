@@ -85,7 +85,6 @@ fun configSummary(result: ConfigFileResult): JsonObject {
             "startTimeoutMs" to JsonPrimitive(c.startTimeoutMs),
             "pollIntervalMs" to JsonPrimitive(c.pollIntervalMs),
             "mp3Bitrate" to JsonPrimitive(c.mp3Bitrate),
-            "flacBits" to JsonPrimitive(c.flacBits),
             "ytdlpVerbose" to JsonPrimitive(c.ytdlpVerbose),
             "ffmpegLogLevel" to JsonPrimitive(c.ffmpegLogLevel),
             "logLevel" to JsonPrimitive(c.logLevel),

@@ -64,8 +64,11 @@ class YouTubeAppTest {
         }
     }
 
-    private suspend fun startedApp(options: AppOptions = AppOptions("T2U test", "T2U", "Test", store)): YouTubeApp {
-        val a = YouTubeApp(player, options, lanHttpClient(), fake.endpoints, sink, scope)
+    private suspend fun startedApp(
+        options: AppOptions = AppOptions("T2U test", "T2U", "Test", store),
+        clock: () -> Long = { System.nanoTime() / 1_000_000L },
+    ): YouTubeApp {
+        val a = YouTubeApp(player, options, lanHttpClient(), fake.endpoints, sink, scope, clock)
         a.onSenderConnect = { connects.add(it.id) }
         a.onSenderDisconnect = { s, implicit -> disconnects.add(s.id to implicit) }
         apps.add(a)
@@ -278,6 +281,102 @@ class YouTubeAppTest {
         castAndPlay("VID00000001")
         rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
         awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun networkInterruptedSenderKeepsPlayingAfterReturn() = run {
+        var now = 1_000L
+        val a = startedApp(clock = { now })
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        a.onNetworkLost()
+        now += 5_000
+        a.onNetworkReturned()
+        now += 7_000
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(a.connectedSenders.isEmpty())
+        assertTrue(events.any { it.first == "lounge-app" && it.second["type"] == "noSendersLeft" && it.second["networkRecovery"] == true })
+        connect()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "explicit disconnect resets player") { player.status == PlayerStatus.IDLE }
+    }
+
+    @Test
+    fun networkInterruptedSenderKeepsPlayingDuringOutage() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun explicitDisconnectDuringNetworkRecoveryStillResetsPlayer() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        a.onNetworkReturned()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "explicit disconnect resets player") { player.status == PlayerStatus.IDLE }
+    }
+
+    @Test
+    fun implicitDisconnectAfterRecoveryWindowStillResetsPlayer() = run {
+        var now = 1_000L
+        val a = startedApp(clock = { now })
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        a.onNetworkReturned()
+        now += NETWORK_SENDER_RECOVERY_MS
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "expired recovery resets player") { player.status == PlayerStatus.IDLE }
+    }
+
+    @Test
+    fun senderConnectedAfterNetworkLossIsNotProtected() = run {
+        val a = startedApp()
+        a.onNetworkLost()
+        a.onNetworkReturned()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "new sender disconnect resets player") { player.status == PlayerStatus.IDLE }
+    }
+
+    @Test
+    fun senderReconnectedDuringRecoveryIsNotProtectedFromLaterDisconnects() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        a.onNetworkReturned()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "first implicit disconnect") { disconnects.size == 1 }
+        connect()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "subsequent disconnect resets player") { player.status == PlayerStatus.IDLE }
+    }
+
+    @Test
+    fun senderMissingFromSnapshotAfterNetworkReturnKeepsPlaying() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        a.onNetworkLost()
+        a.onNetworkReturned()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "unknown", ui = null))
+        awaitUntil(what = "unlisted sender disconnected") { disconnects.isNotEmpty() }
         barrier("cl")
         assertEquals(PlayerStatus.PLAYING, player.status)
     }

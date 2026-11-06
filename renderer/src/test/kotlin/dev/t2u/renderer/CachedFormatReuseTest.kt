@@ -1,6 +1,6 @@
 package dev.t2u.renderer
 
-// Auto mode plays a format that is already cached (when the speaker takes it) instead of building the one the priority list picks.
+// Auto mode follows the streaming chain regardless of cached formats.
 // Not a port of a Node title: the Kotlin cache keeps every built format side by side. GPL-3.0-only.
 
 import dev.t2u.lounge.Video
@@ -34,17 +34,17 @@ class CachedFormatReuseTest {
     }
 
     @Test
-    @DisplayName("auto mode plays the cached mp4 instead of the first format in the priority list")
-    fun autoUsesTheCachedFormat() = assertEquals("mp4", run("auto", listOf("mp4")))
+    @DisplayName("auto mode ignores a cached mp4")
+    fun autoIgnoresCachedMp4() = assertEquals("direct", run("auto", listOf("mp4")))
 
     @Test
-    @DisplayName("auto mode prefers the best cached format when several are cached")
-    fun autoPrefersTheBestCached() = assertEquals("mp4", run("auto", listOf("mp4", "flac")))
+    @DisplayName("auto mode ignores cached formats even when several are available")
+    fun autoIgnoresCachedFormats() = assertEquals("direct", run("auto", listOf("mp4", "mp3")))
 
     @Test
     @DisplayName("auto mode ignores a cached format the speaker does not accept")
     fun autoIgnoresACachedFormatTheSpeakerRefuses() =
-        assertEquals("mp3", run("auto", listOf("flac"), FakeRenderer(sink = "http-get:*:audio/mpeg:*")))
+        assertEquals("mp3", run("auto", listOf("mp4"), FakeRenderer(sink = "http-get:*:audio/mpeg:*")))
 
     @Test
     @DisplayName("auto mode with nothing cached follows the priority list")

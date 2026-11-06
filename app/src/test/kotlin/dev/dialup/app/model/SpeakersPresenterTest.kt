@@ -182,7 +182,7 @@ class SpeakersPresenterTest {
         assertEquals(emptyList(), l.live)
         assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
         assertTrue(l.saved.all { !it.online && it.manual })
-        assertEquals(ListNote.BRIDGE_OFF, l.note)
+        assertEquals(null, l.note)
     }
 
     @Test
@@ -190,7 +190,7 @@ class SpeakersPresenterTest {
         val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList())
         assertEquals(emptyList(), l.live)
         assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
-        assertEquals(ListNote.BRIDGE_OFF, l.note)
+        assertEquals(null, l.note)
     }
 
     @Test
@@ -242,30 +242,20 @@ class SpeakersPresenterTest {
     }
 
     @Test
-    fun `waiting for Wi-Fi lists the saved cards and says so, whether or not the service is up`() {
+    fun `waiting for Wi-Fi lists the saved cards with no note, whether or not the service is up`() {
         for (serviceUp in listOf(true, false)) {
             val l = listing(switchOn = true, serviceUp = serviceUp, bridgeUp = false, live = emptyList(), waiting = true)
             assertEquals(emptyList(), l.live)
             assertEquals(listOf("M", "S2"), l.saved.map { it.udn })
-            assertEquals(ListNote.WAITING_FOR_WIFI, l.note)
+            assertEquals(null, l.note)
         }
     }
 
     @Test
-    fun `the switch off says the bridge is off and a bridge up under it has no note`() {
-        assertEquals(ListNote.BRIDGE_OFF, listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList()).note)
+    fun `the switch off has no note, a starting bridge shows the spinner and a bridge up has no note`() {
+        assertEquals(null, listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList()).note)
         assertEquals(ListNote.LOOKING, listing(switchOn = true, serviceUp = true, bridgeUp = false, live = emptyList()).note)
         assertEquals(null, listing(switchOn = true, serviceUp = true, bridgeUp = true).note)
-    }
-
-    @Test
-    fun `add refusal says off, waiting for Wi-Fi, or nothing`() {
-        assertEquals(dev.dialup.app.AppModel.BRIDGE_OFF_ADD, addRefusal(serviceUp = false, bridgeUp = false, waitingForWifi = false))
-        assertEquals(dev.dialup.app.AppModel.BRIDGE_WAITING_ADD, addRefusal(serviceUp = false, bridgeUp = false, waitingForWifi = true))
-        assertEquals(dev.dialup.app.AppModel.BRIDGE_WAITING_ADD, addRefusal(serviceUp = true, bridgeUp = false, waitingForWifi = false))
-        assertEquals(null, addRefusal(serviceUp = true, bridgeUp = true, waitingForWifi = false))
-        assertEquals(null, addRefusal(serviceUp = false, bridgeUp = true, waitingForWifi = true))
-        assertTrue(!dev.dialup.app.AppModel.BRIDGE_WAITING_ADD.contains("Switch"), "the waiting text must not claim the switch is off")
     }
 
     @Test

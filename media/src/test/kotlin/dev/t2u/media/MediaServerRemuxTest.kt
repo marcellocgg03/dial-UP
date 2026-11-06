@@ -21,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Port of the remux.test.js titles that belong to the file formats (mp4 and flac) and to the download retries,
+ * Port of the remux.test.js titles that belong to the file format (mp4) and to the download retries,
  * against real /usr/bin/ffmpeg and ffprobe. The source a track is "downloaded" from is a generated 60 s fragmented
  * M4A (what YouTube serves); no network is involved. WSL has ffmpeg 4.4.2, the phone 7.1.1: these tests prove the
  * arguments and the file structure, seek accuracy on 7.1.1 is a device check.
@@ -102,7 +102,6 @@ class MediaServerRemuxTest {
     private fun serve(
         downloader: SourceDownloader,
         resolver: VideoResolver = StubResolver(),
-        flacBits: Int = 16,
         retryDelaysMs: List<Long> = listOf(10L, 10L),
     ): MediaServer {
         val builder = FileBuilder(
@@ -110,7 +109,6 @@ class MediaServerRemuxTest {
             launcher = launcher,
             resolver = resolver,
             downloader = downloader,
-            flacBits = flacBits,
             retryDelaysMs = retryDelaysMs,
         )
         return MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "pipe"), resolver, files = builder).also {
@@ -211,57 +209,6 @@ class MediaServerRemuxTest {
         assertFailsWith<IllegalArgumentException> { ms.registerVideo(VideoEntry("ccccccccccc", "ogg")) }
     }
 
-    // ----- flac, offset builds, coalescing (Task 2) ---------------------------------------------
-
-    @Test
-    @DisplayName("flac (\${bits}-bit): lossless file with byte ranges and correct length")
-    fun flacLosslessFileWithByteRangesAndCorrectLength() = runBlocking {
-        for (bits in listOf(16, 24)) {
-            val ms = serve(FakeSourceDownloader(source), flacBits = bits)
-            val entry = VideoEntry("eeeeeeeee$bits", "flac")
-            ms.prepare(entry)
-            val path = ms.registerVideo(entry)
-            assertTrue(path.endsWith(".flac"), path)
-
-            val res = get(ms, path)
-            assertEquals(200, res.status)
-            assertEquals("audio/flac", res.header("Content-Type"))
-            val built = File(buildDir, "eeeeeeeee$bits-flac-0.flac")
-            assertEquals(built.length(), res.header("Content-Length")!!.toLong())
-            assertEquals(built.length(), res.body.size.toLong())
-            assertEquals("fLaC", String(res.body, 0, 4, Charsets.ISO_8859_1))
-
-            assertEquals("flac", probe(built, "stream=codec_name"))
-            if (bits == 16) {
-                assertEquals("s16", probe(built, "stream=sample_fmt"))
-            } else {
-                assertEquals("s32", probe(built, "stream=sample_fmt"))
-            }
-            assertEquals(bits.toString(), probe(built, "stream=bits_per_raw_sample"))
-            assertTrue(kotlin.math.abs(duration(built) - 60.0) < 0.5, "duration ${duration(built)}")
-
-            val ranged = get(ms, path, mapOf("Range" to "bytes=0-99"))
-            assertEquals(206, ranged.status)
-            assertEquals(100, ranged.body.size)
-            assertEquals("fLaC", String(ranged.body, 0, 4, Charsets.ISO_8859_1))
-        }
-    }
-
-    @Test
-    @DisplayName("flac at offset (renderer cannot Seek)")
-    fun flacAtOffset() = runBlocking {
-        val ms = serve(FakeSourceDownloader(source))
-        ms.prepare(VideoEntry("fffffffffff", "flac"))
-        val whole = File(buildDir, "fffffffffff-flac-0.flac")
-        val wholeStamp = whole.lastModified()
-        ms.prepare(VideoEntry("fffffffffff", "flac", startAt = 30))
-        val cut = File(buildDir, "fffffffffff-flac-30.flac")
-        assertTrue(cut.isFile)
-        assertTrue(kotlin.math.abs(duration(cut) - 30.0) < 1.0, "duration ${duration(cut)}")
-        assertEquals(wholeStamp, whole.lastModified(), "the file for startAt 0 is not touched")
-        assertTrue(kotlin.math.abs(duration(whole) - 60.0) < 0.5)
-    }
-
     @Test
     @DisplayName("mp4 at offset (renderer cannot Seek) reuses the downloaded source")
     fun mp4AtOffsetReusesTheDownloadedSource() = runBlocking {
@@ -293,33 +240,26 @@ class MediaServerRemuxTest {
     }
 
     @Test
-    fun differentFormatsOfOneVideoShareTheDownload() = runBlocking {
+    fun differentOffsetsOfOneVideoShareTheDownload() = runBlocking {
         val downloader = FakeSourceDownloader(source)
         val ms = serve(downloader)
-        listOf(async { ms.prepare(VideoEntry("hhhhhhhhhhh", "mp4")) }, async { ms.prepare(VideoEntry("hhhhhhhhhhh", "flac")) }).awaitAll()
-        assertEquals(1, downloader.calls.get(), "one download for both formats")
+        listOf(async { ms.prepare(VideoEntry("hhhhhhhhhhh", "mp4")) }, async { ms.prepare(VideoEntry("hhhhhhhhhhh", "mp4", startAt = 30)) }).awaitAll()
+        assertEquals(1, downloader.calls.get(), "one download for both offsets")
         assertEquals(2, launcher.starts.get())
         Unit
     }
 
     @Test
-    fun theFlacBitDepthMustBe16Or24() {
-        assertFailsWith<IllegalArgumentException> {
-            FileBuilder(buildDir, launcher, StubResolver(), FakeSourceDownloader(source), flacBits = 32)
-        }
-    }
-
-    @Test
     fun theBuildArgumentsCarryOnlyFixedFlagsTheOffsetAndPathsInTheBuildDirectory() {
         val src = File(buildDir, "aaaaaaaaaaa.source")
-        val out = File(buildDir, "aaaaaaaaaaa-flac-30.flac.part")
-        val args = fileBuildArgs("flac", 24, 30, src, out)
+        val out = File(buildDir, "aaaaaaaaaaa-mp4-30.m4a.part")
+        val args = fileBuildArgs("mp4", 30, src, out)
         assertEquals(listOf("-ss", "30"), args.subList(args.indexOf("-ss"), args.indexOf("-ss") + 2))
         assertTrue(args.indexOf("-ss") < args.indexOf("-i"), "input-side seek")
         assertEquals(out.path, args.last())
         assertEquals(src.path, args[args.indexOf("-i") + 1])
-        assertTrue(args.containsAll(listOf("-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24", "-compression_level", "5", "-f", "flac")))
-        val mp4 = fileBuildArgs("mp4", 16, 0, src, File(buildDir, "x.part"))
+        assertTrue(args.containsAll(listOf("-c:a", "copy", "-movflags", "+faststart", "-f", "mp4")))
+        val mp4 = fileBuildArgs("mp4", 0, src, File(buildDir, "x.part"))
         assertTrue(mp4.containsAll(listOf("-c:a", "copy", "-movflags", "+faststart", "-f", "mp4")))
         assertFalse(mp4.contains("-ss"), "no seek at offset 0")
     }
@@ -437,13 +377,13 @@ class MediaServerRemuxTest {
     @Test
     fun ffmpegStartsWithOnlyTheValidatedIdTheOffsetAndPathsInsideTheBuildDirectory() = runBlocking {
         val builder = FileBuilder(buildDir, launcher, StubResolver(), FakeSourceDownloader(source), retryDelaysMs = emptyList())
-        builder.ensure("qqqqqqqqqqq", "flac", 12)
+        builder.ensure("qqqqqqqqqqq", "mp4", 12)
         val args = launcher.argLists.single()
         val root = buildDir.absoluteFile.path
         for (a in args) {
             if (a.contains('/')) assertTrue(a.startsWith("$root/"), "path outside the build directory: $a")
         }
-        assertTrue(args.any { it.startsWith("$root/qqqqqqqqqqq-flac-12.flac") })
+        assertTrue(args.any { it.startsWith("$root/qqqqqqqqqqq-mp4-12.m4a") })
         for (bad in listOf("../../etc/passwd", "abc; rm -rf /", "short", "has space 1", "ab/cdefghijk")) {
             assertFailsWith<IllegalArgumentException> { builder.ensure(bad, "mp4", 0) }
         }

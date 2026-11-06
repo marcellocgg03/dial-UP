@@ -46,7 +46,7 @@ fun loadConfigFile(file: File, base: Config): ConfigFileResult {
 
 private val KNOWN_KEYS = setOf(
     "include", "exclude", "outputFormat", "startTimeoutMs", "pollIntervalMs",
-    "mp3Bitrate", "flacBits", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel",
+    "mp3Bitrate", "ytdlpVerbose", "ytdlpChannel", "ffmpegLogLevel",
     "logLevel", "prefetch", "gapless", "cacheMb",
 )
 
@@ -62,12 +62,11 @@ private val KNOWN_KEYS = setOf(
  *   "include": "living|kitchen",        // string or array of strings: case-insensitive regexes on the speaker's
  *   "exclude": ["lamp", "^bath"],       //   friendly name; a speaker appears if it matches an include (or none is
  *                                       //   set) and matches no exclude
- *   "outputFormat": "auto",             // auto | direct | mp4 | adts | flac | mp3
+ *   "outputFormat": "auto",             // auto | direct | mp4 | adts | mp3
  *   "startTimeoutMs": 12000,            // integer 1000..120000
  *   "pollIntervalMs": 2000,             // integer 200..30000
  *   "mp3Bitrate": "192k",               // "64k" .. "320k"
- *   "flacBits": 16,                     // 16 or 24
- *   "ytdlpVerbose": false,              // boolean
+ *   "ytdlpVerbose": true,               // boolean
  *   "ytdlpChannel": "stable",           // stable | nightly: the yt-dlp release the daily background update installs
  *   "ffmpegLogLevel": "error",          // quiet panic fatal error warning info verbose debug
  *   "logLevel": "info",                 // off | info | debug: what the log file and logcat get (debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs)
@@ -103,10 +102,6 @@ fun parseConfigFile(text: String, base: Config): ConfigFileResult {
     integer(root, "startTimeoutMs", 1000L..120000L, warnings)?.let { config = config.copy(startTimeoutMs = it) }
     integer(root, "pollIntervalMs", 200L..30000L, warnings)?.let { config = config.copy(pollIntervalMs = it) }
     string(root, "mp3Bitrate", warnings, "must be 64k to 320k", ::isValidMp3Bitrate)?.let { config = config.copy(mp3Bitrate = it) }
-    root["flacBits"]?.let { el ->
-        val v = (el as? JsonPrimitive)?.takeIf { !it.isString && el !is JsonNull }?.intOrNull
-        if (v == 16 || v == 24) config = config.copy(flacBits = v) else warnings += "flacBits ignored: must be 16 or 24"
-    }
     root["ytdlpVerbose"]?.let { el ->
         val v = (el as? JsonPrimitive)?.takeIf { !it.isString && el !is JsonNull }?.booleanOrNull
         if (v != null) config = config.copy(ytdlpVerbose = v) else warnings += "ytdlpVerbose ignored: must be true or false"

@@ -46,11 +46,13 @@ import dev.dialup.app.model.updateMessage
 
 private val FORMATS = listOf(
     "auto" to "Automatic",
-    "direct" to "Direct",
     "mp4" to "MP4",
-    "adts" to "AAC stream (adts)",
-    "flac" to "FLAC",
-    "mp3" to "MP3",
+)
+
+/** What the menu shows for each of [FORMATS]; the button keeps the short label. */
+private val FORMAT_MENU_LABELS = mapOf(
+    "auto" to "Automatic Fallback (direct -> adts -> mp3)",
+    "mp4" to "mp4",
 )
 
 private val THEMES = listOf(
@@ -84,7 +86,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         HorizontalDivider()
         SwitchRow(
             title = "Clear the renderer when a cast ends",
-            support = "When a cast is ended or the phone disconnects, empty the renderer's queue",
+            support = "When a cast is manually disconnected, empty the renderer's queue",
             checked = ui.clearOnCastEnd,
             onChange = { presenter.setClearOnCastEnd(it) },
             tag = "setting-clear-on-end",
@@ -98,18 +100,21 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             tag = "setting-gapless",
         )
         HorizontalDivider()
-        CacheSection(ui, presenter)
-        HorizontalDivider()
         ChoiceRow(
             title = "Forced audio format",
             support = "A renderer that cannot play a forced format shows an error on its card instead of trying another format.",
             current = FORMATS.firstOrNull { it.first == ui.outputFormat }?.second ?: ui.outputFormat,
-            options = FORMATS.map { it.second },
+            options = FORMATS.map { FORMAT_MENU_LABELS[it.first] ?: it.second },
             onPick = { i -> presenter.setOutputFormat(FORMATS[i].first) },
             tag = "setting-format",
             optionTag = { "format-option-${FORMATS[it].first}" },
         )
         HorizontalDivider()
+        // Only mp4 builds and retains files; the other formats stream.
+        if (ui.outputFormat == "mp4") {
+            CacheSection(ui, presenter)
+            HorizontalDivider()
+        }
         HiddenSection(model)
         HorizontalDivider()
         YtDlpSection(ui, presenter)
@@ -187,6 +192,9 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
                     },
                     modifier = Modifier.testTag("cache-usage"),
                 )
+                if (usage != null && usage.temporaryBytes > 0) {
+                    Text("${megabytes(usage.temporaryBytes)} temporary playback files")
+                }
                 if (ui.cacheCustom) Text("Custom value from config.json")
                 ui.cacheWarning?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("cache-warning"))

@@ -412,7 +412,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         configSummaryJson = configSummary(loaded)
         h.evidence.event("config", configEvidenceFields(loaded))
         loaded.warnings.take(MAX_CONFIG_WARNING_EVENTS).forEach { h.evidence.event("config-warning", mapOf("text" to it)) }
-        // one gateway serves the resolver and the downloader that builds the mp4/flac source files
+        // one gateway serves the resolver and the downloader that builds the mp4 source files
         val gateway = AndroidYtDlpGateway(h.context, h.evidence)
         val resolver = CachingResolver(
             gateway,
@@ -681,13 +681,10 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 }
 
-/**
- * The media cache lives in the app's files directory, which Android never empties on its own (the cache directory is cleared
- * when storage runs low and by the system's Clear cache). Only the in-app Clear cache button deletes finished files. The files of
- * the old location are moved over once, so an update loses nothing.
- */
+/** Android can reclaim this directory, and its Clear cache action removes it. Move the old persistent files once. */
+@Synchronized
 internal fun mediaBufferDir(context: android.content.Context): File {
-    val dir = File(context.filesDir, "media-buffer").also { it.mkdirs() }
-    runCatching { dev.t2u.media.migrateCacheDir(File(context.cacheDir, "media-buffer/files"), File(dir, "files")) }
+    val dir = File(context.cacheDir, "media-buffer")
+    dev.t2u.media.migrateMediaBufferDir(File(context.filesDir, "media-buffer"), dir)
     return dir
 }

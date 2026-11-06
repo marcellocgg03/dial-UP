@@ -102,28 +102,46 @@ class MediaServerCacheTest {
         return text.toDouble()
     }
 
-    private fun cached(): List<String> = buildDir.listFiles()!!.map { it.name }.sorted()
+    private fun cached(): List<String> = buildDir.listFiles()!!.map { it.name }.filter { it != ".transient" }.sorted()
 
     @Test
-    @DisplayName("cache: a file larger than CACHE_MB is still served; older files are evicted first")
+    @DisplayName("oversized files play temporarily and are removed after release")
     fun aFileLargerThanTheCapIsStillServedAndOlderFilesAreEvictedFirst() = runBlocking {
         val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 60)), cacheLimitBytes = 1)
         val a = VideoEntry("mmmmmmmmmmm", "mp4")
-        ms.prepare(a)
-        val pathA = ms.registerVideo(a)
+        val pathA = ms.prepareAndRegister(a)
         val ra = get(ms, pathA)
         assertEquals(200, ra.status)
         assertTrue(durationOf(ra.body) > 59, "complete file served")
-        assertEquals(listOf("mmmmmmmmmmm-mp4-0.m4a", "mmmmmmmmmmm.source"), cached(), "just built: kept")
+        assertEquals(listOf("mmmmmmmmmmm-mp4-0.m4a"), cached(), "only the playback file is still needed")
+        assertEquals(0, ms.cacheInfo()!!.files)
+        assertTrue(ms.cacheInfo()!!.temporaryBytes > 0)
 
         // The renderer lets go of a stream when the next track replaces it (D-04); until then its token pins the file.
         ms.release(pathA)
-        val b = VideoEntry("nnnnnnnnnnn", "flac")
-        ms.prepare(b)
-        val rb = get(ms, ms.registerVideo(b))
+        assertEquals(emptyList(), cached(), "temporary file removed on release")
+        val b = VideoEntry("nnnnnnnnnnn", "mp4")
+        val pathB = ms.prepareAndRegister(b)
+        val rb = get(ms, pathB)
         assertEquals(200, rb.status)
-        assertEquals(listOf("nnnnnnnnnnn-flac-0.flac", "nnnnnnnnnnn.source"), cached(), "older track evicted")
+        assertEquals(listOf("nnnnnnnnnnn-mp4-0.m4a"), cached())
+        ms.release(pathB)
+        assertEquals(emptyList(), cached())
         Unit
+    }
+
+    @Test
+    fun sourceCanBeEvictedAfterConversionToMakeRoomForOutput() = runBlocking {
+        val source = makeSource("single-budget.m4a", 5)
+        val limit = source.length() * 3 / 2
+        val ms = serve(FakeSourceDownloader(source), cacheLimitBytes = limit)
+        val path = ms.prepareAndRegister(VideoEntry("xxxxxxxxxxx", "mp4"))
+        assertEquals(200, get(ms, path).status)
+        assertTrue(ms.cacheInfo()!!.bytes <= limit)
+        assertTrue(builtOf("xxxxxxxxxxx").isFile)
+        assertTrue(!File(buildDir, "xxxxxxxxxxx.source").exists())
+        ms.release(path)
+        assertTrue(builtOf("xxxxxxxxxxx").exists(), "the admitted output stays reusable")
     }
 
     @Test
@@ -214,10 +232,9 @@ class MediaServerCacheTest {
     fun stopReleasesEveryTokenPin() = runBlocking {
         val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)), cacheLimitBytes = 1)
         val a = VideoEntry("aaaaaaaaaaa", "mp4")
-        ms.prepare(a)
-        ms.registerVideo(a)
+        ms.prepareAndRegister(a)
         ms.stop()
-        assertTrue(builtOf("aaaaaaaaaaa").isFile, "stop keeps finished files")
+        assertTrue(!builtOf("aaaaaaaaaaa").exists(), "stop removes oversized temporary files")
         ms.start() // same builder, same pin table
         ms.prepare(VideoEntry("ccccccccccc", "mp4"))
         assertTrue(!builtOf("aaaaaaaaaaa").exists(), "the pin did not survive stop")
@@ -304,8 +321,8 @@ class MediaServerCacheTest {
         buildDir.mkdirs()
         File(buildDir, "aaaaaaaaaaa-mp4-0.m4a").writeBytes(ByteArray(100))
         File(buildDir, "aaaaaaaaaaa.source").writeBytes(ByteArray(50))
-        File(buildDir, "bbbbbbbbbbb-flac-0.flac").writeBytes(ByteArray(0))
-        File(buildDir, "bbbbbbbbbbb-flac-0.flac.part").writeBytes(ByteArray(10))
+        File(buildDir, "bbbbbbbbbbb-mp4-0.m4a").writeBytes(ByteArray(0))
+        File(buildDir, "bbbbbbbbbbb-mp4-0.m4a.part").writeBytes(ByteArray(10))
         File(buildDir, "ccccccccccc.source.download").writeBytes(ByteArray(10))
         File(buildDir, "ccccccccccc.source.download.info.json").writeBytes(ByteArray(10))
         File(buildDir, "ccccccccccc.source.download.ytdl").writeBytes(ByteArray(10))
@@ -323,7 +340,7 @@ class MediaServerCacheTest {
     fun stopKeepsFinishedFilesAndDeletesTempFiles() = runBlocking {
         val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 5)))
         ms.prepare(VideoEntry("ddddddddddd", "mp4"))
-        File(buildDir, "ddddddddddd-flac-0.flac.part").writeText("x")
+        File(buildDir, "ddddddddddd-mp4-0.m4a.part").writeText("x")
         File(buildDir, "eeeeeeeeeee.source.download").writeText("x")
         File(buildDir, "eeeeeeeeeee.source.download.info.json").writeText("x")
         ms.stop()
