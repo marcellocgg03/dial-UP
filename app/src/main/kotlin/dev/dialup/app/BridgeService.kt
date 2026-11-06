@@ -18,7 +18,7 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import dev.dialup.app.model.NetworkLossWatcher
-import dev.dialup.app.model.WIFI_LOSS_WINDOW_MS
+import dev.dialup.app.model.WIFI_REBIND_WINDOW_MS
 import dev.dialup.app.shouldShowCastNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -237,6 +237,7 @@ class BridgeService : Service(), SpikeHost {
      */
     override fun onDestroy() {
         evidence.event("service-stop")
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         ServiceHub.cast.value = null
         stopFeatures()
         releaseLocks()
@@ -466,7 +467,7 @@ class BridgeService : Service(), SpikeHost {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Bridge Status", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(count: CastCount, waiting: Boolean = false, ongoing: Boolean = foregroundActive): Notification {
+    private fun buildNotification(count: CastCount, ongoing: Boolean = foregroundActive): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -476,16 +477,16 @@ class BridgeService : Service(), SpikeHost {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
-            .setContentText(notificationText(count, waiting))
+            .setContentText(notificationText(count))
             .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(ongoing)
             .addAction(0, "Stop", stop)
             .build()
     }
 
-    private fun updateCastNotification(count: CastCount, waiting: Boolean) {
+    private fun updateCastNotification(count: CastCount, wifiAvailable: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
-        if (!shouldShowCastNotification(count)) {
+        if (!shouldShowCastNotification(count, wifiAvailable)) {
             if (foregroundActive) {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 foregroundActive = false
@@ -496,42 +497,55 @@ class BridgeService : Service(), SpikeHost {
             return
         }
 
-        val text = notificationText(count, waiting)
+        val text = notificationText(count)
         if (!foregroundActive) {
-            try {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    buildNotification(count, waiting, ongoing = true),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-                )
+            val promotionError = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    startCastForeground(count)
+                    null
+                } catch (e: ForegroundServiceStartNotAllowedException) {
+                    e
+                } catch (e: SecurityException) {
+                    e
+                }
+            } else {
+                try {
+                    startCastForeground(count)
+                    null
+                } catch (e: SecurityException) {
+                    e
+                }
+            }
+            if (promotionError == null) {
                 foregroundActive = true
                 lastNotifiedText = text
                 return
-            } catch (e: ForegroundServiceStartNotAllowedException) {
-                evidence.event(
-                    "feature-error",
-                    mapOf("where" to "promote-foreground", "error" to e.javaClass.name, "message" to e.message),
-                )
-            } catch (e: SecurityException) {
-                evidence.event(
-                    "feature-error",
-                    mapOf("where" to "promote-foreground", "error" to e.javaClass.name, "message" to e.message),
-                )
             }
+            evidence.event(
+                "feature-error",
+                mapOf("where" to "promote-foreground", "error" to promotionError.javaClass.name, "message" to promotionError.message),
+            )
         }
 
         if (text != lastNotifiedText) {
             lastNotifiedText = text
-            manager.notify(NOTIFICATION_ID, buildNotification(count, waiting))
+            manager.notify(NOTIFICATION_ID, buildNotification(count))
         }
     }
 
+    private fun startCastForeground(count: CastCount) {
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(count, ongoing = true),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
+    }
+
     /**
-     * The Wi-Fi-loss decision (WIFI-01, WIFI-02). Nothing being cast: the service stops at once when the last Wi-Fi client
-     * and hotspot address are gone. A cast waits [WIFI_LOSS_WINDOW_MS]; a return inside it leaves the rebind in
-     * [CastFeature] to run, the window's end stops the service. The switch stays on and [NetworkResume] starts the
-     * service again with Wi-Fi.
+     * The Wi-Fi-loss decision. A short drop keeps the bridge available for in-place rebind and playback resync.
+     * A continuous outage beyond [WIFI_REBIND_WINDOW_MS] stops the bridge/service without sending Stop or Clear to
+     * speakers; [NetworkResume] starts it again when Wi-Fi returns.
      */
     private suspend fun networkLossLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()
@@ -545,7 +559,7 @@ class BridgeService : Service(), SpikeHost {
             }
             evidence.event(
                 "net-pause",
-                mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_LOSS_WINDOW_MS, "casting" to casting),
+                mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_REBIND_WINDOW_MS, "casting" to casting),
             )
             features.filterIsInstance<CastFeature>().firstOrNull()?.onNetworkLossExpired()
             NetworkResume.arm(this)
@@ -568,14 +582,14 @@ class BridgeService : Service(), SpikeHost {
                     .distinctUntilChanged()
             }
         var lastCount: CastCount? = null
-        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, waiting -> count to waiting }.collect { (count, waiting) ->
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, unavailable -> count to unavailable }.collect { (count, unavailable) ->
             if (count != lastCount) {
                 lastCount = count
                 casting = count.casting
                 applyPlayLocks(playLocks.onCasting(count.casting), "casting")
                 evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             }
-            updateCastNotification(count, waiting)
+            updateCastNotification(count, wifiAvailable = !unavailable)
         }
     }
 

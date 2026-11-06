@@ -2,8 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
-// SVC-04: a renderer leaves playback already accepted by the speaker alone across a network loss. It clears the card's local
-// playback state, does not re-set or stop the speaker on return, and still tracks its own served addresses.
+// SVC-04: short network blips pause polling, then recover and resync the active renderer without losing its local queue.
 
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.Video
@@ -66,8 +65,8 @@ internal class NetworkChangeTest {
     }
 
     @Test
-    @DisplayName("network loss clears the card and leaves accepted playback alone across rebind")
-    fun networkLossDetachesCardPlaybackAndLeavesSpeakerAlone() {
+    @DisplayName("a short network loss preserves card state and resyncs playback after rebind")
+    fun networkLossRecoversPlaybackAfterRebind() {
         withFake { fake ->
             RendererHarness(fake, config = pinned("adts")).use { h ->
                 h.renderer.init()
@@ -75,25 +74,31 @@ internal class NetworkChangeTest {
                 val uri = fake.uris().single()
 
                 h.renderer.onNetworkLost()
-                waitUntil { h.renderer.ui.value.status == PlayerStatus.IDLE }
-                assertEquals(null, h.renderer.ui.value.track)
-                assertEquals(null, h.renderer.ui.value.position)
-                assertEquals(false, h.renderer.ui.value.queueHasCurrent)
+                assertEquals(PlayerStatus.PLAYING, h.renderer.ui.value.status)
+                assertEquals(A, h.renderer.ui.value.track?.videoId)
+                assertEquals(true, h.renderer.ui.value.queueHasCurrent)
                 assertEquals("PLAYING", fake.state.transport)
                 assertEquals(uri, fake.state.currentUri)
+                val playsBeforeRebind = fake.calls.count { it.action == "Play" }
 
-                // Allow any poll already in flight at the moment of loss to finish before checking for further traffic.
                 delay(150)
-                val callsAfterLoss = fake.calls.size
-                h.renderer.onNetworkChanged("127.0.0.2")
-                delay(300)
+                val pollsDuringLoss = fake.calls.count { it.action == "GetTransportInfo" }
+                delay(200)
+                assertEquals(pollsDuringLoss, fake.calls.count { it.action == "GetTransportInfo" }, "polling pauses during the outage")
 
-                assertEquals(callsAfterLoss, fake.calls.size, "the detached renderer is no longer polled or controlled")
-                assertEquals(listOf(uri), fake.uris())
-                assertEquals(uri, fake.state.currentUri)
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil {
+                    fake.uris().size > 1 &&
+                        fake.calls.count { it.action == "Play" } > playsBeforeRebind &&
+                        fake.state.transport == "PLAYING" &&
+                        fake.calls.count { it.action == "GetTransportInfo" } > pollsDuringLoss
+                }
+
+                assertEquals("127.0.0.2", java.net.URI(fake.uris().last()).host)
                 assertEquals("PLAYING", fake.state.transport)
-                assertEquals(PlayerStatus.IDLE, h.renderer.ui.value.status)
-                assertEquals(null, h.renderer.ui.value.track)
+                assertEquals(PlayerStatus.PLAYING, h.renderer.ui.value.status)
+                assertEquals(A, h.renderer.ui.value.track?.videoId)
+                assertEquals(true, h.renderer.ui.value.queueHasCurrent)
             }
         }
     }

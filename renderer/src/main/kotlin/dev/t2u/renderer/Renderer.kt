@@ -362,7 +362,6 @@ class Renderer(
     private val deps: RendererDeps,
 ) : Player(), ManagedRenderer {
     private val config: Config get() = deps.config
-    override val playbackDetached: Boolean get() = _networkDetached.value
 
     // Child scope: cancelled by destroy(), parented to the service scope so the service can stop everything.
     private val scope = CoroutineScope(deps.scope.coroutineContext + SupervisorJob(deps.scope.coroutineContext[Job]))
@@ -389,7 +388,6 @@ class Renderer(
     // The status UI follows these through [ui]; the property syntax and the private setters stay as they were (plan 07-03).
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     private val _lastError = MutableStateFlow<String?>(null)
-    private val _networkDetached = MutableStateFlow(false)
 
     var nowPlaying: NowPlaying?
         get() = _nowPlaying.value
@@ -434,25 +432,7 @@ class Renderer(
         snapshot(PlayerStatus.IDLE, null, null, null, _live.value),
     )
 
-    /** The card forgets playback after losing its connection; audio already accepted by the speaker is left alone. */
-    val ui: StateFlow<SpeakerUi> = combine(liveUi, _networkDetached) { live, detached ->
-        if (detached) {
-            live.copy(
-                status = PlayerStatus.IDLE,
-                track = null,
-                hasPrevious = false,
-                hasNext = false,
-                queueHasCurrent = false,
-                position = null,
-            )
-        } else {
-            live
-        }
-    }.stateIn(
-        scope,
-        SharingStarted.Eagerly,
-        snapshot(PlayerStatus.IDLE, null, null, null, _live.value),
-    )
+    val ui: StateFlow<SpeakerUi> = liveUi
 
     private val soap = SoapClient(deps.http)
 
@@ -789,7 +769,6 @@ class Renderer(
 
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         if (destroyed) return false
-        _networkDetached.value = false
         val adv = advanced
         advanced = null
         if (adv != null && adv.video.id == video.id && position < 2) {
@@ -1963,11 +1942,10 @@ class Renderer(
         }
     }
 
-    /** A lost connection detaches the card from playback without sending any command to the speaker. */
+    /** A lost connection pauses polling until the address is restored; playback state remains available for re-sync. */
     override suspend fun onNetworkLost() {
         if (destroyed) return
         networkDown = true
-        _networkDetached.value = true
         resetJob?.cancel() // a re-sync under way belongs to an address that is gone again
         resyncWatch = null
         stopPolling()
@@ -1983,8 +1961,8 @@ class Renderer(
 
     /**
      * The phone is on [host] now. Streams are built with it from here on and the old address is remembered as ours. A
-     * renderer detached by [onNetworkLost] is not polled or re-synced: its card stays empty and the speaker is left alone.
-     * A direct address change without a preceding loss still uses [resyncAfterNetworkReturn].
+     * A renderer paused by [onNetworkLost] is re-synced and polled after the address returns. A direct address change also
+     * uses [resyncAfterNetworkReturn].
      */
     override suspend fun onNetworkChanged(host: String) {
         if (destroyed) return
@@ -1995,7 +1973,6 @@ class Renderer(
         ownHosts = (ownHosts.filter { it != fresh && it != old } + listOfNotNull(old?.takeIf { it != fresh })).takeLast(OWN_HOSTS_KEPT)
         networkDown = false
         resetJob?.cancel() // a newer change replaces an older re-sync that is still waiting or reading
-        if (_networkDetached.value) return
         resetJob = scope.launch { resyncAfterNetworkReturn(ipChanged) }
     }
 
@@ -2047,6 +2024,12 @@ class Renderer(
                 }
                 // the player may have been stopped, or another track loaded, while the speaker was read
                 if (destroyed || networkDown || current !== c) return
+            }
+            if (state == "PLAYING") {
+                val handedOff = queuedTrackFor(reading?.get("TrackURI"))?.let { queuedTrack ->
+                    followQueuedTrack(queuedTrack, "rebind")
+                } == true
+                if (handedOff) return
             }
             attempt++
             when (resyncAction(holds, ipChanged, state, kind, attempt)) {
@@ -2195,13 +2178,8 @@ class Renderer(
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
                 // The speaker played on into the track it was given as next: follow it (D-09).
                 val via = rendererAdvancedVia()
-                if (via != null) {
-                    val taken = synchronized(queueLock) { queued.also { queued = null } }
-                    advanced = taken
-                    // The poll runs in the job this cancels: nothing below may suspend. The hand-off runs in its own coroutine.
-                    stopPolling()
-                    note("info", "Renderer continued into the next track", "videoId" to taken?.video?.id, "via" to via)
-                    handOffAfterGaplessSwitch(loadSeq.get())
+                val queuedTrack = queued
+                if (via != null && queuedTrack != null && followQueuedTrack(queuedTrack, via)) {
                     return
                 }
                 // Last, and it only launches: the poll must not wait for a prepare (D-05, D-16).
@@ -2359,6 +2337,28 @@ class Renderer(
         if (!fromPosition.isNullOrEmpty()) return if (fromPosition.contains(path)) "TrackURI" else null
         val fromMediaInfo = readCurrentUri()
         return if (fromMediaInfo != null && fromMediaInfo.contains(path)) "GetMediaInfo.CurrentURI" else null
+    }
+
+    private fun queuedTrackFor(uri: String?): Queued? {
+        if (uri.isNullOrEmpty()) return null
+        val candidate = queued ?: return null
+        val path = candidate.item.current.streamPath ?: return null
+        return candidate.takeIf { it.sentToRenderer && uri.contains(path) }
+    }
+
+    /**
+     * The speaker may advance while polling is paused for a network outage. Adopt that accepted next stream through the same
+     * queue hand-off as a polled transition instead of reloading the previous track during rebind.
+     */
+    private fun followQueuedTrack(candidate: Queued, via: String): Boolean {
+        val taken = synchronized(queueLock) {
+            if (queued !== candidate) null else queued.also { queued = null }
+        } ?: return false
+        advanced = taken
+        stopPolling()
+        note("info", "Renderer continued into the next track", "videoId" to taken.video.id, "via" to via)
+        handOffAfterGaplessSwitch(loadSeq.get())
+        return true
     }
 
     /** Does the speaker hold [q]'s stream as its current one (GetMediaInfo read once)? Compared with `contains`, never equality. */

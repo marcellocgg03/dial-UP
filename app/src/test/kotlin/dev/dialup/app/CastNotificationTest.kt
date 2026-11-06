@@ -30,25 +30,14 @@ class CastNotificationTest {
     }
 
     @Test
-    fun `while casting without a network the text says it is waiting`() {
-        assertEquals(NOTIFICATION_WAITING_TEXT, notificationText(CastCount(1, 3), waiting = true))
-        assertEquals("Waiting for Wi-Fi", NOTIFICATION_WAITING_TEXT)
-        assertEquals("1 renderer being cast to", notificationText(CastCount(1, 3), waiting = false))
-    }
-
-    @Test
-    fun `an idle bridge without a network keeps the count text`() {
-        assertEquals("0 renderers being cast to", notificationText(CastCount(0, 3), waiting = true))
-    }
-
-    @Test
     fun `no speakers reads 0 of 0`() {
         assertEquals("0 renderers being cast to", notificationText(CastCount(0, 0)))
     }
 
     @Test
-    fun `notification is shown only while a renderer is casting`() {
+    fun `notification is shown only while wifi is available and a renderer is casting`() {
         assertEquals(false, shouldShowCastNotification(CastCount(0, 1)))
+        assertEquals(false, shouldShowCastNotification(CastCount(1, 1), wifiAvailable = false))
         assertEquals(true, shouldShowCastNotification(CastCount(1, 1)))
     }
 
@@ -65,7 +54,7 @@ class CastNotificationTest {
     }
 
     @Test
-    fun `detached playback is hidden from the notification but keeps the network loss wait active`() = runBlocking {
+    fun `hidden notification count does not shorten the network loss recovery window`() = runBlocking {
         val source = FakeSource(CastCount(0, 1), active = CastCount(1, 1))
 
         assertEquals(CastCount(0, 1), sumCastCounts(listOf(source)).first())

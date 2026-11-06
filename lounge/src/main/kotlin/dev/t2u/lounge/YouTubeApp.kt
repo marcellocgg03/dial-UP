@@ -594,12 +594,7 @@ class YouTubeApp(
 
         if (before.autoplay?.id != after.autoplay?.id) out.add(OutgoingMessage.autoplayUpNext(aid, after.autoplay?.id))
 
-        if (name == "setPlaylist" && (
-                player.playbackDetached ||
-                    before.current?.id != after.current?.id ||
-                    before.current?.context?.index != after.current?.context?.index
-            )
-        ) {
+        if (name == "setPlaylist" && (before.current?.id != after.current?.id || before.current?.context?.index != after.current?.context?.index)) {
             if (player.status != PlayerStatus.STOPPED) player.stop(aid)
             val video = after.current
             if (video != null) player.play(video, (jsParseInt(payload.text("currentTime")) ?: 0).toDouble(), aid)

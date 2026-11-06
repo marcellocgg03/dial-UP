@@ -200,8 +200,8 @@ class BridgeRebindTest {
     }
 
     @Test
-    @DisplayName("after network loss speaker polling stays stopped and a speaker stop is not mirrored")
-    fun pollsStayPausedAfterNetworkLoss() = h.run<Unit> {
+    @DisplayName("a short network loss pauses polling, then resyncs a track whose speaker buffer stopped")
+    fun pollsPauseAndPlaybackResyncsAfterNetworkLoss() = h.run<Unit> {
         val bridge = h.newBridge()
         bridge.start()
         h.launch(bridge)
@@ -211,9 +211,9 @@ class BridgeRebindTest {
         h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
 
         bridge.networkLost()
-        h.awaitUntil("the visible cast count clears") { bridge.visibleCastCount.value.casting == 0 }
+        h.awaitUntil("the visible cast count remains active") { bridge.visibleCastCount.value.casting == 1 }
         h.awaitUntil("the underlying count remains active") { bridge.castCount.value.casting == 1 }
-        // the stream broke on the speaker: with polls running the renderer would mirror this stop to the phone
+        // the stream broke on the speaker; the paused poll must not mirror the stop to the sender
         h.fakeRenderer.state.transport = "STOPPED"
         delay(150) // a poll that was already sending finishes
         val polled = h.speakerCount("GetTransportInfo")
@@ -222,10 +222,14 @@ class BridgeRebindTest {
         assertEquals("PLAYING", rendererStatus(bridge), "the phone still sees the player playing")
         assertTrue(h.events.none { it.first == "renderer" && (it.second["message"] as? String)?.contains("mirroring the stop") == true })
 
-        h.fakeRenderer.state.transport = "PLAYING"
+        val uriCount = h.setAvTransportUris().size
+        val playCount = h.speakerCount("Play")
         bridge.rebindNetwork(h.network(other))
-        delay(800) // rebind must not resume polling for the detached renderer
-        assertEquals(polled, h.speakerCount("GetTransportInfo"), "no poll after the move")
+        h.awaitUntil("the old track is reloaded from the new address") { h.setAvTransportUris().size > uriCount }
+        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris().last()))
+        h.awaitUntil("playback restarts") { h.speakerCount("Play") > playCount }
+        h.awaitUntil("polling resumes") { h.speakerCount("GetTransportInfo") > polled }
+        assertEquals("PLAYING", rendererStatus(bridge))
     }
 
     @Test
@@ -251,8 +255,8 @@ class BridgeRebindTest {
     }
 
     @Test
-    @DisplayName("a track cast before the move is not reset when the renderer rebinds")
-    fun aCastTrackIsNotResetAfterRebind() = h.run<Unit> {
+    @DisplayName("a track cast before the move is re-set on the speaker at its reported position")
+    fun aCastTrackIsResetAfterRebind() = h.run<Unit> {
         val bridge = h.newBridge()
         bridge.start()
         h.launch(bridge)
@@ -265,38 +269,10 @@ class BridgeRebindTest {
         val playCount = h.speakerCount("Play")
         bridge.networkLost()
         bridge.rebindNetwork(h.network(other))
-        delay(1000)
 
-        assertEquals(setUriCount, h.setAvTransportUris().size, "the receiver is not told to reload the track")
-        assertEquals(playCount, h.speakerCount("Play"), "the receiver is not told to resume playback")
-        assertEquals("PLAYING", h.fakeRenderer.state.transport, "receiver playback continues")
-        assertEquals("PLAYING", rendererStatus(bridge))
-    }
-
-    @Test
-    @DisplayName("a fresh setPlaylist for the same track reattaches the card after network loss")
-    fun aSameTrackRecastReattachesAfterNetworkLoss() = h.run<Unit> {
-        val bridge = h.newBridge()
-        bridge.start()
-        h.launch(bridge)
-        h.connectSender()
-        cast(bridge, "AAAAAAAAAAA")
-        h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
-
-        bridge.networkLost()
-        bridge.rebindNetwork(h.network(other))
-        delay(150)
-        val oldUriCount = h.setAvTransportUris().size
-        val oldPollCount = h.speakerCount("GetTransportInfo")
-        h.rpc("cl", "setPlaylist", h.playlist("AAAAAAAAAAA"))
-
-        h.awaitUntil("the same track is loaded from the new address") {
-            h.setAvTransportUris().size > oldUriCount
-        }
+        h.awaitUntil("the track is reset on the speaker") { h.setAvTransportUris().size > setUriCount }
         assertEquals("127.0.0.2", hostOf(h.setAvTransportUris().last()))
-        h.awaitUntil("the card is reattached") {
-            bridge.speakers.value.singleOrNull()?.let { it.status == PlayerStatus.PLAYING && it.queueHasCurrent } == true
-        }
-        h.awaitUntil("polling resumes") { h.speakerCount("GetTransportInfo") > oldPollCount }
+        h.awaitUntil("the receiver is told to play again") { h.speakerCount("Play") > playCount }
+        assertEquals("PLAYING", rendererStatus(bridge))
     }
 }

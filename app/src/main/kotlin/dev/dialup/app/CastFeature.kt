@@ -60,11 +60,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * was applied is logged as a `config` event and shown under "config" by `cast-state`, and `reload-config` restarts the
  * bridge (without clearing the speakers) so an edited file takes effect without reinstalling.
  *
- * A Wi-Fi change does not restart the bridge (plan 05-10, SVC-04): every address change freezes the renderers at once
- * ([Bridge.networkLost]); after a 2 s debounce [rebindAction] decides, and a new address waits up to 20 s for a validated
- * Wi-Fi network and then moves the running bridge in place ([Bridge.rebindNetwork]). Playback already accepted by a speaker
- * is left alone on loss; the app drops its local playback display and does not re-set the track on return. Only
- * `reload-config` still restarts it. A start that throws, or finds no Wi-Fi, is logged
+ * A Wi-Fi blip pauses renderer polling at once, then after a 2 s debounce the bridge moves in place and resyncs playback
+ * when Wi-Fi returns. A continuous outage beyond [dev.dialup.app.model.WIFI_REBIND_WINDOW_MS] stops the bridge/service
+ * without sending Stop or Clear to speakers; Wi-Fi return starts a fresh bridge. Only `reload-config` otherwise restarts it.
+ * A start that throws, or finds no Wi-Fi, is logged
  * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on (GUI-10).
  */
 class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
@@ -187,7 +186,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     private val networkLossCount = MutableStateFlow(CastCount(0, 0))
 
-    /** Derived from the bridge's card-visible state, so detached playback no longer appears in the notification (D-06). */
+    /** Derived from the bridge's card-visible state and used only to decide whether to show the cast notification (D-06). */
     override val castCount: StateFlow<CastCount> = count.asStateFlow()
     override val networkLossCastCount: StateFlow<CastCount> = networkLossCount.asStateFlow()
 

@@ -12,20 +12,11 @@ import kotlinx.coroutines.flow.flowOf
  */
 data class CastCount(val casting: Int, val total: Int)
 
-/** A user-visible cast notification is present only while at least one renderer is actively casting. */
-fun shouldShowCastNotification(c: CastCount): Boolean = c.casting > 0
+/** A user-visible cast notification is present only while Wi-Fi is available and a renderer is actively casting. */
+fun shouldShowCastNotification(c: CastCount, wifiAvailable: Boolean = true): Boolean = wifiAvailable && c.casting > 0
 
-/** The persistent notification text (D-06, SVC-01). */
+/** The cast notification text (D-06). */
 fun notificationText(c: CastCount): String = "${c.casting} ${if (c.casting == 1) "renderer" else "renderers"} being cast to"
-
-/** The notification text while a renderer is being cast to and the phone has no Wi-Fi: the bridge waits for it to return. */
-const val NOTIFICATION_WAITING_TEXT = "Waiting for Wi-Fi"
-
-/**
- * What the one notification on the one channel says: the waiting line while something is being cast to and the phone has
- * no network, the cast count otherwise. An idle bridge without a network is stopping, so it keeps the count text.
- */
-fun notificationText(c: CastCount, waiting: Boolean): String = if (waiting && c.casting > 0) NOTIFICATION_WAITING_TEXT else notificationText(c)
 
 /**
  * Implemented by a feature that binds to a network. [networkUp] is false while it has none (after its own debounce and
@@ -61,7 +52,7 @@ fun sumCastCounts(sources: List<CastCountSource>): Flow<CastCount> {
     return sumCounts(sources.map { it.castCount })
 }
 
-/** Sums actual playback counts, including renderers whose cards have been detached from their receiver state. */
+/** Sums actual playback counts independently of whether a cast notification is currently shown. */
 fun sumNetworkLossCastCounts(sources: List<CastCountSource>): Flow<CastCount> =
     sumCounts(sources.map { it.networkLossCastCount })
 

@@ -9,23 +9,20 @@ class NetworkLossPolicyTest {
     @Test
     fun `present continues whatever the count and time`() {
         for (casting in listOf(0, 1, 5)) {
-            for (down in listOf(0L, 119_999L, 120_000L, 900_000L)) {
+            for (down in listOf(0L, 4_999L, 5_000L, 900_000L)) {
                 assertEquals(LossAction.CONTINUE, lossAction(true, casting, down))
             }
         }
     }
 
     @Test
-    fun `absent with nothing cast stops idle`() {
-        assertEquals(LossAction.STOP_IDLE, lossAction(false, 0, 0))
-        assertEquals(LossAction.STOP_IDLE, lossAction(false, 0, 500_000))
-    }
-
-    @Test
-    fun `absent with a cast waits until the window ends`() {
+    fun `absent with or without a cast waits for the blip window`() {
+        assertEquals(LossAction.WAIT, lossAction(false, 0, 0))
+        assertEquals(LossAction.WAIT, lossAction(false, 0, 4_999))
         assertEquals(LossAction.WAIT, lossAction(false, 1, 0))
-        assertEquals(LossAction.WAIT, lossAction(false, 1, 119_999))
-        assertEquals(LossAction.STOP_EXPIRED, lossAction(false, 1, 120_000))
+        assertEquals(LossAction.WAIT, lossAction(false, 1, 4_999))
+        assertEquals(LossAction.STOP_IDLE, lossAction(false, 0, 5_000))
+        assertEquals(LossAction.STOP_EXPIRED, lossAction(false, 1, 5_000))
         assertEquals(LossAction.STOP_EXPIRED, lossAction(false, 2, 400_000))
     }
 

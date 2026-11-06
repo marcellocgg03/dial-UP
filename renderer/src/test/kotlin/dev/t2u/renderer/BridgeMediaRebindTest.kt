@@ -99,4 +99,17 @@ class BridgeMediaRebindTest {
         assertTrue(bridge.housekeeping("adb"))
         assertTrue(h.events.none { it.first == "media-repair" }, "no repair when the media server listens: ${h.events.takeLast(10)}")
     }
+
+    @Test
+    fun aSameAddressNetworkReturnDoesNotRestartTheMediaServer() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        val port = mediaPort(bridge)
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(h.loopback))
+
+        assertEquals(404, statusOf("127.0.0.1", port), "the media server remains available at its existing address")
+        assertTrue(attempts().isEmpty(), "same-address recovery does not restart the media listener")
+    }
 }
