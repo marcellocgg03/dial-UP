@@ -102,6 +102,10 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     @OptIn(ExperimentalCoroutinesApi::class)
     val speakers: Flow<List<SpeakerUi>> = bridgeState.flatMapLatest { it?.speakers ?: flowOf(emptyList()) }
 
+    /** True while the bridge is inside a multicast renderer-search reply window. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val searching: Flow<Boolean> = bridgeState.flatMapLatest { it?.searching ?: flowOf(false) }
+
     /** The bridge now, for the controls that act on one speaker (plan 07-08); null while there is none. */
     fun currentBridge(): Bridge? = bridgeState.value
 

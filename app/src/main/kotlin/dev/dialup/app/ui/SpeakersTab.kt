@@ -17,13 +17,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import android.os.SystemClock
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -35,7 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.AppModel
 import dev.dialup.app.BatteryGate
 import dev.dialup.app.model.EmptyPhase
-import dev.dialup.app.model.REFRESH_AFTER_MS
+import dev.dialup.app.model.SEARCH_IDLE_GRACE_MS
 import dev.dialup.app.model.SpeakersPresenter
 import dev.dialup.app.model.emptyPhase
 import dev.dialup.app.model.addRefusal
@@ -85,19 +83,19 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         hidden = hidden.mapTo(HashSet()) { it.udn },
         names = names,
     )
-    // GUI-14: the spinner shows at once; after REFRESH_AFTER_MS with nothing found the Refresh button appears, and a press
-    // hides it and starts the wait again
+    // GUI-14: the spinner shows while the bridge is inside a multicast search window (Bridge.searching) and, at the start, until
+    // the search is first seen; once it has been idle for SEARCH_IDLE_GRACE_MS with nothing found, the Refresh button shows instead
     val looking = listing.note == ListNote.LOOKING
-    var refreshTick by remember { mutableIntStateOf(0) }
-    var showRefresh by remember { mutableStateOf(false) }
-    LaunchedEffect(looking, refreshTick) {
-        showRefresh = false
-        if (looking) {
-            val startedAt = SystemClock.elapsedRealtime()
-            delay(REFRESH_AFTER_MS)
-            showRefresh = emptyPhase(SystemClock.elapsedRealtime() - startedAt) == EmptyPhase.SPINNER_WITH_REFRESH
+    val searching by model.searching.collectAsStateWithLifecycle()
+    var idleSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(looking, searching) {
+        idleSettled = false
+        if (looking && !searching) {
+            delay(SEARCH_IDLE_GRACE_MS)
+            idleSettled = true
         }
     }
+    val phase = emptyPhase(searching, idleSettled)
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -126,13 +124,11 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            CircularProgressIndicator(Modifier.testTag("speakers-spinner"))
-                            if (showRefresh) {
+                            if (phase == EmptyPhase.SPINNER) {
+                                CircularProgressIndicator(Modifier.testTag("speakers-spinner"))
+                            } else {
                                 OutlinedButton(
-                                    onClick = {
-                                        refreshTick++
-                                        model.refreshRenderers("ui")
-                                    },
+                                    onClick = { model.refreshRenderers("ui") },
                                     modifier = Modifier.testTag("btn-refresh"),
                                 ) { Text("Refresh") }
                             }

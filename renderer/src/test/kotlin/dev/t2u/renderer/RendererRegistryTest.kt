@@ -601,7 +601,7 @@ class RendererRegistryTest {
     fun schedulesRunRetryDueEveryTenSeconds() = runTest {
         val h = Harness(initBehaviour = { throw java.io.IOException("down") })
         h.alive()
-        val job = h.registry.launchSchedules(this) { }
+        val job = h.registry.launchSchedules(this) { true }
         runCurrent()
         h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
         advanceTimeBy(RendererRegistry.RETRY_CHECK_MS - 1)
@@ -673,7 +673,7 @@ class RendererRegistryTest {
     fun searchedMakesPruneNormal() = runTest {
         val h = Harness()
         h.alive()
-        val job = h.registry.launchSchedules(this) { }
+        val job = h.registry.launchSchedules(this) { true }
         runCurrent()
         advanceTimeBy(6_000)
         h.now.addAndGet(2L * 60 * 60 * 1000)
@@ -684,6 +684,23 @@ class RendererRegistryTest {
         assertEquals(0, h.events.named("prune-deferred").size)
         assertEquals(1, h.events.named("stale").size)
         assertEquals(0, h.registry.count.value)
+        job.cancel()
+    }
+
+    @Test
+    @DisplayName("a failed scheduled search does not count as a fresh discovery round")
+    fun failedSearchDoesNotRefreshPruneClock() = runTest {
+        val h = Harness()
+        h.alive()
+        val job = h.registry.launchSchedules(this) { false }
+        runCurrent()
+
+        h.now.addAndGet(2L * 60 * 60 * 1000)
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        assertEquals(1, h.events.named("prune-deferred").size)
+        assertEquals(0, h.events.named("stale").size)
         job.cancel()
     }
 

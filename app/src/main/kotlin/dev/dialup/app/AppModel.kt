@@ -102,6 +102,10 @@ class AppModel private constructor(context: Context) {
     val speakers: StateFlow<List<SpeakerUi>> =
         cast.flatMapLatest { it?.speakers ?: flowOf(emptyList()) }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** True while the running bridge is inside a multicast renderer-search reply window. */
+    val searching: StateFlow<Boolean> =
+        cast.flatMapLatest { it?.searching ?: flowOf(false) }.stateIn(scope, SharingStarted.Eagerly, false)
+
     /** How many speakers are being cast to; 0 while the bridge is off. */
     val casting: StateFlow<Int> =
         cast.flatMapLatest { it?.castCount?.map { c -> c.casting } ?: flowOf(0) }
