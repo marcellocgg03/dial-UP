@@ -10,19 +10,18 @@ val FORMATS: Map<String, FormatSpec> = linkedMapOf(
     "direct" to FormatSpec(null, null, true),
     "mp4" to FormatSpec("audio/mp4", "m4a", true),
     "adts" to FormatSpec("audio/aac", "aac", false),
-    "flac" to FormatSpec("audio/flac", "flac", true),
     "mp3" to FormatSpec("audio/mpeg", "mp3", false),
 )
 
-/** Order tried by auto-detection (formats.js FALLBACK_CHAIN). */
-val FALLBACK_CHAIN: List<String> = listOf("direct", "mp4", "adts", "flac", "mp3")
+/** Order tried by auto-detection. mp4 is not in it: it downloads and caches the whole track, so it is forced-only. */
+val FALLBACK_CHAIN: List<String> = listOf("direct", "adts", "mp3")
 
 /** Formats built as a complete file in the cache and served with byte ranges (formats.js FILE_FORMATS). */
-val FILE_FORMATS: List<String> = listOf("mp4", "flac")
+val FILE_FORMATS: List<String> = listOf("mp4")
 
 private fun spec(format: String): FormatSpec = FORMATS[format] ?: throw IllegalArgumentException("unknown format: $format")
 
-/** DLNA.ORG_PN profile names (formats.js dlnaFeatures); FLAC and direct have none, renderers go by MIME. */
+/** DLNA.ORG_PN profile names (formats.js dlnaFeatures); direct has none, renderers go by MIME. */
 private val PROFILE_NAMES = mapOf(
     "mp4" to "DLNA.ORG_PN=AAC_ISO_320;",
     "adts" to "DLNA.ORG_PN=AAC_ADTS_320;",

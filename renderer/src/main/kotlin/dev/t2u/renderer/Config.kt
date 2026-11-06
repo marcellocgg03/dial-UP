@@ -18,7 +18,7 @@ const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
 const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
 
 /** Every value `outputFormat` may take (config.js): "auto" walks the learned chain, the rest force one format. */
-val OUTPUT_FORMATS = setOf("auto", "direct", "mp4", "adts", "flac", "mp3")
+val OUTPUT_FORMATS = setOf("auto", "direct", "mp4", "adts", "mp3")
 
 /** The ffmpeg `-loglevel` names a config may select (T-03-09: a whitelist, never free text in an argument list). */
 val FFMPEG_LOG_LEVELS = setOf("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug")
@@ -81,21 +81,20 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  *   filter, which is [nameFilter].
  * @property nameFilter DISC-04 include/exclude patterns on the friendly name; applied in Renderer.init (plan 03-06).
  * @property mp3Bitrate ffmpeg bitrate for the mp3 format.
- * @property flacBits bit depth for the flac format.
- * @property ytdlpVerbose debug switch, consumed by the bridge (plan 03-10).
+ * @property ytdlpVerbose adds `-v` to every yt-dlp lookup so the log can show its steps (on by default); consumed by the bridge.
  * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly"
  *   (PLAY-02). Read by the app before every update attempt, so an edited config.json applies at the next one.
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
  * @property logLevel "off", "info" (the default) or "debug" (SVC-06, D-11): what the app's event log file and logcat get;
  *   debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs. Applied at service start and at every bridge start.
- * @property outputFormat "auto" (the Node default) walks the format chain direct, mp4, adts, flac, mp3 with the
+ * @property outputFormat "auto" (the Node default) walks the format chain direct, adts, mp3 with the
  *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
  *   next track; tuning for tests, not readable from config.json (plan 03-09).
  * @property playRetryDelaysMs the waits before the retries of a track whose lookup or preparation failed for an unclear
  *   reason (D-11): the track is tried again after each wait, with a fresh lookup, and skipped when the last retry fails;
  *   tuning for tests, not readable from config.json, like [queueSettleTimeoutMs].
- * @property cacheMb size cap in MiB of the converted and downloaded track cache (built mp4/flac files and .source
+ * @property cacheMb size cap in MiB of the converted and downloaded track cache (built mp4 files and .source
  *   files; the pipe range cache and read-ahead are separate). Read by the cache each time it prunes, so a changed
  *   value applies at the next prune (D-02; Node CACHE_MB, default 512 there). 0 is legal: only the file just built stays.
  * @property prefetch prepares the next track while the current one plays (Node PREFETCH).
@@ -124,8 +123,7 @@ data class Config(
     val excludeServers: List<String> = listOf("QuickShareUPnP"),
     val nameFilter: NameFilter = NameFilter.ALLOW_ALL,
     val mp3Bitrate: String = "192k",
-    val flacBits: Int = 16,
-    val ytdlpVerbose: Boolean = false,
+    val ytdlpVerbose: Boolean = true,
     val ytdlpChannel: String = YTDLP_DEFAULT_CHANNEL,
     val ffmpegLogLevel: String = "error",
     val logLevel: String = "info",
@@ -142,7 +140,6 @@ data class Config(
             "outputFormat \"$outputFormat\" is not one of ${OUTPUT_FORMATS.joinToString(", ")}"
         }
         require(isValidMp3Bitrate(mp3Bitrate)) { "mp3Bitrate must be a number from 64 to 320 followed by k" }
-        require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
         require(ffmpegLogLevel in FFMPEG_LOG_LEVELS) { "ffmpegLogLevel must be one of ${FFMPEG_LOG_LEVELS.joinToString(", ")}" }
         require(logLevel in LOG_LEVELS) { "logLevel must be one of ${LOG_LEVELS.joinToString(", ")}" }
         require(nameFilter.problems().isEmpty()) { nameFilter.problems().joinToString("; ") }

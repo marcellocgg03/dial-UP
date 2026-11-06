@@ -181,7 +181,7 @@ class SettingsPresenterTest {
         assertEquals(0, p.state.value.cacheMb)
         assertFalse(p.state.value.cacheCustom)
         val w = p.state.value.cacheWarning
-        assertTrue(w != null && "only the file just built is kept" in w, w)
+        assertTrue(w != null && "new tracks are temporary" in w, w)
     }
 
     @Test
@@ -226,10 +226,10 @@ class SettingsPresenterTest {
         assertFalse(p.state.value.gapless)
         assertTrue(p.restart.visible.value)
 
-        assertTrue(p.setOutputFormat("mp3"))
+        assertTrue(p.setOutputFormat("mp4"))
         runCurrent()
-        assertEquals("mp3", settings.data.value.outputFormat)
-        assertEquals("mp3", p.state.value.outputFormat)
+        assertEquals("mp4", settings.data.value.outputFormat)
+        assertEquals("mp4", p.state.value.outputFormat)
     }
 
     @Test
@@ -274,6 +274,7 @@ class SettingsPresenterTest {
         val settings = FakeSettingsPort()
         val p = presenter(settings)
         assertFalse(p.setOutputFormat("wav"))
+        assertFalse(p.setOutputFormat("mp3"))
         assertNull(settings.data.value.outputFormat)
         assertEquals(0, settings.updates)
         assertFalse(p.restart.visible.value)

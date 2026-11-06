@@ -100,7 +100,7 @@ class SettingsTest {
             logEnabled = false,
             gapless = false,
             cacheMb = 512,
-            outputFormat = "mp3",
+            outputFormat = "mp4",
             ytdlpChannel = "nightly",
         )
         settings(f).update { all }
@@ -114,6 +114,7 @@ class SettingsTest {
             """{"cacheMb":-1,"gapless":false}""",
             """{"cacheMb":40000,"gapless":false}""",
             """{"outputFormat":"ogg","gapless":false}""",
+            """{"outputFormat":"mp3","gapless":false}""",
             """{"ytdlpChannel":"master","gapless":false}""",
             """{"logEnabled":"yes","gapless":false}""",
             """{"bridgeEnabled":"no","gapless":false}""",

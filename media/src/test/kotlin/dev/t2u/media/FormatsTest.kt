@@ -8,9 +8,9 @@ import kotlin.test.assertTrue
 /** formats.js: the fallback order, the file formats and mimeOf. */
 class FormatsTest {
     @Test
-    fun fallbackChainAndFileFormatsKeepTheNodeOrder() {
-        assertEquals(listOf("direct", "mp4", "adts", "flac", "mp3"), FALLBACK_CHAIN)
-        assertEquals(listOf("mp4", "flac"), FILE_FORMATS)
+    fun fallbackChainContainsOnlyStreamingFormats() {
+        assertEquals(listOf("direct", "adts", "mp3"), FALLBACK_CHAIN)
+        assertEquals(listOf("mp4"), FILE_FORMATS)
         assertTrue(FALLBACK_CHAIN.all { it in FORMATS })
     }
 

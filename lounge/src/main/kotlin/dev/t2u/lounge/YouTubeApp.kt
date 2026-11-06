@@ -51,6 +51,7 @@ class AppException(message: String, cause: Throwable? = null) : Exception(messag
 enum class AppState { STOPPED, STARTING, RUNNING, STOPPING }
 
 private val SAFE_PID = Regex("^[A-Za-z0-9-]{1,64}$")
+internal const val NETWORK_SENDER_RECOVERY_MS = 30_000L
 
 /**
  * One cast target's lounge app. [player] is what the sender controls; [scope] runs the sessions and the fire-and-forget
@@ -63,6 +64,7 @@ class YouTubeApp(
     endpoints: LoungeEndpoints,
     private val sink: EventSink,
     private val scope: CoroutineScope,
+    private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     @Volatile
     var state: AppState = AppState.STOPPED
@@ -99,6 +101,10 @@ class YouTubeApp(
 
     private val connected = CopyOnWriteArrayList<Sender>()
     private val implicitlyDisconnected = CopyOnWriteArrayList<Sender>()
+    private val networkRecoveryLock = Any()
+    private var networkDown = false
+    private var networkRecoveryUntil = 0L
+    private var networkSenders = emptySet<String>()
 
     @Volatile
     private var autoplayOnConnect: AutoplayMode = AutoplayMode.ENABLED
@@ -136,6 +142,33 @@ class YouTubeApp(
 
     fun setResetPlayerOnDisconnectPolicy(value: ResetPlayerOnDisconnectPolicy) {
         resetPolicy = value
+    }
+
+    /** Remember existing senders before lounge reports their network-related disappearance. */
+    fun onNetworkLost() {
+        synchronized(networkRecoveryLock) {
+            if (!networkDown) {
+                networkDown = true
+                networkSenders = connected.map { it.id }.toSet()
+            }
+        }
+    }
+
+    fun onNetworkReturned() {
+        synchronized(networkRecoveryLock) {
+            if (networkDown) {
+                networkDown = false
+                networkRecoveryUntil = monotonicMs() + NETWORK_SENDER_RECOVERY_MS
+            }
+        }
+    }
+
+    private fun networkInterrupted(sender: Sender): Boolean = synchronized(networkRecoveryLock) {
+        sender.id in networkSenders && (networkDown || monotonicMs() < networkRecoveryUntil)
+    }
+
+    private fun forgetNetworkSender(id: String) {
+        synchronized(networkRecoveryLock) { networkSenders = networkSenders - id }
     }
 
     /** Restores or creates the pid, then begins both sessions at once. On failure both are ended and the error is rethrown. */
@@ -215,6 +248,11 @@ class YouTubeApp(
         state = AppState.STOPPING
         val senders = connected.toList()
         connected.clear()
+        synchronized(networkRecoveryLock) {
+            networkDown = false
+            networkSenders = emptySet()
+            networkRecoveryUntil = 0L
+        }
         implicitlyDisconnected.clear()
         player.removeStateListener(stateListener)
         player.removeFailureListener(failureListener)
@@ -297,6 +335,7 @@ class YouTubeApp(
                 val dropped = connected.toList()
                 connected.clear()
                 implicitlyDisconnected.clear()
+                synchronized(networkRecoveryLock) { networkSenders = emptySet() }
                 activeSession = target
                 post(active, listOf(OutgoingMessage.loungeScreenDisconnected()))
                 // yt-cast-receiver clears the list before it walks it, so it never reports these; here they are reported
@@ -616,6 +655,7 @@ class YouTubeApp(
             note("senderConnected", "client" to session.client.displayName, "app" to sender.app, "name" to sender.name)
             implicitlyDisconnected.removeAll { it.id == sender.id }
             connected.add(sender)
+            forgetNetworkSender(sender.id)
             setAutoplayModeBySenderCapabilities(aid)
             enforceMutePolicy(aid)
             val nav = player.getNavInfo()
@@ -642,11 +682,12 @@ class YouTubeApp(
         if (implicit && implicitlyDisconnected.none { it.id == sender.id }) implicitlyDisconnected.add(sender)
 
         if (connected.isEmpty()) {
-            val reset = when (resetPolicy) {
+            val preserveNetworkPlayback = implicit && networkInterrupted(sender)
+            val reset = !preserveNetworkPlayback && when (resetPolicy) {
                 ResetPlayerOnDisconnectPolicy.ALL_DISCONNECTED -> true
                 ResetPlayerOnDisconnectPolicy.ALL_EXPLICITLY_DISCONNECTED -> implicitlyDisconnected.isEmpty()
             }
-            note("noSendersLeft", "policy" to resetPolicy.wire, "resetPlayer" to reset)
+            note("noSendersLeft", "policy" to resetPolicy.wire, "resetPlayer" to reset, "networkRecovery" to preserveNetworkPlayback)
             if (reset) {
                 // CAST-06: reset() also clears the speaker (Player.doClear), even when playback had already stopped.
                 player.reset()
@@ -654,6 +695,7 @@ class YouTubeApp(
         } else if (player.autoplayMode == AutoplayMode.UNSUPPORTED) {
             setAutoplayModeBySenderCapabilities(aid)
         }
+        forgetNetworkSender(sender.id)
         if (connected.isNotEmpty()) enforceMutePolicy(aid)
         safely { onSenderDisconnect(sender, implicit) }
         return emptyList()

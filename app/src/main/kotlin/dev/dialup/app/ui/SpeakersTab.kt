@@ -36,7 +36,6 @@ import dev.dialup.app.model.EmptyPhase
 import dev.dialup.app.model.SEARCH_IDLE_GRACE_MS
 import dev.dialup.app.model.SpeakersPresenter
 import dev.dialup.app.model.emptyPhase
-import dev.dialup.app.model.addRefusal
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.ListNote
 import dev.dialup.app.model.rendererListing
@@ -102,22 +101,13 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "add-speaker") {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
-                    Text("Add renderer by address")
-                }
-                addRefusal(running, bridgeUp, waiting)?.let { why ->
-                    Text(why, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
-                }
+            OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
+                Text("Add renderer by address")
             }
         }
         listing.note?.let { note ->
             item(key = "empty-note") {
                 when (note) {
-                    ListNote.BRIDGE_OFF ->
-                        Text("The bridge is off", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag("bridge-off"))
-                    ListNote.WAITING_FOR_WIFI ->
-                        Text("Waiting for Wi-Fi", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp).testTag("speakers-waiting-wifi"))
                     ListNote.LOOKING ->
                         Column(
                             Modifier.fillMaxWidth().padding(vertical = 8.dp),

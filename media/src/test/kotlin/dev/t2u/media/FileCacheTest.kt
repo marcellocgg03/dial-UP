@@ -3,7 +3,12 @@ package dev.t2u.media
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -28,6 +33,101 @@ class FileCacheTest {
     }
 
     private fun names(): List<String> = dir.list().orEmpty().filter { it != ".uncached" }.sorted()
+
+    @Test
+    fun admissionEvictsOldUnusedFilesAndUsesActualSize() {
+        put("$idA-mp4-0.m4a", 60, 1_000)
+        val part = put("$idB.source.download", 50, 2_000)
+        assertTrue(cache.publish(part, File(dir, "$idB.source")))
+        assertFalse(File(dir, "$idA-mp4-0.m4a").exists())
+        assertEquals(50L, cache.info().bytes)
+        assertEquals(0L, cache.info().temporaryBytes)
+    }
+
+    @Test
+    fun oversizedFileIsTemporaryAndDoesNotEvictExistingCache() {
+        put("$idA-mp4-0.m4a", 60, 1_000)
+        val part = put("$idB.source.download", 101, 2_000)
+        val dest = File(dir, "$idB.source")
+        val first = cache.pin(dest)
+        val second = cache.pin(dest)
+        assertFalse(cache.publish(part, dest))
+        assertEquals(60L, cache.info().bytes)
+        assertEquals(101L, cache.info().temporaryBytes)
+        cache.discardWhenUnused(dest)
+        first()
+        assertTrue(dest.exists(), "another reader still owns the file")
+        second()
+        assertFalse(dest.exists())
+        assertEquals(60L, cache.info().bytes)
+    }
+
+    @Test
+    fun admittedFileFitsExactlyAndPinnedEntriesAreNeverEvicted() {
+        val a = put("$idA.source", 60, 1_000)
+        val release = cache.pin(a)
+        val b = File(dir, "$idB.source")
+        assertTrue(cache.publish(put("first.download", 40, 2_000), b))
+        assertEquals(100L, cache.info().bytes)
+        val c = File(dir, "ccccccccccc.source")
+        assertFalse(cache.publish(put("second.download", 50, 3_000), c))
+        assertTrue(a.exists())
+        assertTrue(b.exists(), "do not evict files when pinned data prevents admission")
+        assertEquals(100L, cache.info().bytes)
+        assertEquals(50L, cache.info().temporaryBytes)
+        cache.discardWhenUnused(c)
+        release()
+    }
+
+    @Test
+    fun abandonedTemporaryFilesAreRemovedOnRestart() {
+        val dest = File(dir, "$idA.source")
+        assertFalse(cache.publish(put("source.download", 101, 1_000), dest))
+        val restarted = FileCache(dir, { limit })
+        assertEquals(101L, restarted.info().temporaryBytes)
+        restarted.scan()
+        assertFalse(dest.exists())
+        assertEquals(0L, restarted.info().temporaryBytes)
+    }
+
+    @Test
+    fun releaseBeforePublicationRemovesTemporaryFileOnceBuildReleasesIt() {
+        val dest = File(dir, "$idA.source")
+        val build = cache.pin(dest)
+        cache.discardWhenUnused(dest)
+        assertFalse(cache.publish(put("source.download", 101, 1_000), dest))
+        assertTrue(dest.exists())
+        build()
+        assertFalse(dest.exists())
+    }
+
+    @Test
+    fun concurrentAdmissionsNeverExceedTheBudget() {
+        val a = File(dir, "$idA.source")
+        val b = File(dir, "$idB.source")
+        val releaseA = cache.pin(a)
+        val releaseB = cache.pin(b)
+        val partA = put("a.download", 80, 1_000)
+        val partB = put("b.download", 80, 1_000)
+        val ready = CountDownLatch(1)
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val first = workers.submit<Boolean> { ready.await(); cache.publish(partA, a) }
+            val second = workers.submit<Boolean> { ready.await(); cache.publish(partB, b) }
+            ready.countDown()
+            val results = listOf(first.get(5, TimeUnit.SECONDS), second.get(5, TimeUnit.SECONDS))
+            assertEquals(1, results.count { it })
+            assertEquals(80L, cache.info().bytes)
+            assertEquals(80L, cache.info().temporaryBytes)
+            cache.discardWhenUnused(a)
+            cache.discardWhenUnused(b)
+            releaseA()
+            releaseB()
+            assertEquals(0L, cache.info().temporaryBytes)
+        } finally {
+            workers.shutdownNow()
+        }
+    }
 
     @Test
     fun evictionOrderIsOldestModifiedFirstTiesByName() {
@@ -276,7 +376,53 @@ class FileCacheTest {
         assertEquals(1, migrateCacheDir(old, new))
         assertEquals(listOf("$idA-mp4-0.m4a", "$idA.source"), new.list().orEmpty().sorted())
         assertEquals(99L, File(new, "$idA.source").length(), "an existing file is not replaced")
+        assertEquals(emptyList(), old.list().orEmpty().toList(), "legacy duplicates and unfinished files are removed")
+        assertEquals(0, migrateCacheDir(old, new))
         assertEquals(0, migrateCacheDir(File(root, "missing"), new))
+    }
+
+    @Test
+    fun migrationPreservesAndMergesZeroLimitManifest() {
+        val old = File(root, "old").also { it.mkdirs() }
+        val new = File(root, "new").also { it.mkdirs() }
+        File(old, ".uncached").writeText("$idA.source\n")
+        File(old, "$idA.source").writeBytes(ByteArray(10))
+        File(new, ".uncached").writeText("$idB.source\n")
+        File(new, "$idB.source").writeBytes(ByteArray(10))
+
+        assertEquals(1, migrateCacheDir(old, new))
+        assertEquals(listOf("$idA.source", "$idB.source"), File(new, ".uncached").readLines())
+        assertEquals(emptyList(), old.list().orEmpty().toList())
+    }
+
+    @Test
+    fun migrationDoesNotDeleteLegacyFileWhenDestinationIsADirectory() {
+        val old = File(root, "old").also { it.mkdirs() }
+        val new = File(root, "new").also { it.mkdirs() }
+        val src = File(old, "$idA.source").also { it.writeBytes(ByteArray(10)) }
+        File(new, src.name).mkdirs()
+
+        assertFailsWith<IOException> { migrateCacheDir(old, new) }
+        assertEquals(10L, src.length())
+    }
+
+    @Test
+    fun migratingMediaBufferRemovesOnlyOldRangeCacheFiles() {
+        val old = File(root, "old")
+        val files = File(old, "files").also { it.mkdirs() }
+        val ranges = File(old, "range-cache").also { it.mkdirs() }
+        File(files, "$idA.source").writeBytes(ByteArray(10))
+        File(ranges, "stream.bin").writeBytes(ByteArray(10))
+        File(ranges, "stream.part").writeBytes(ByteArray(10))
+        File(ranges, "other.txt").writeBytes(ByteArray(10))
+        val new = File(root, "new")
+
+        migrateMediaBufferDir(old, new)
+        assertTrue(File(new, "files/$idA.source").isFile)
+        assertEquals(listOf("other.txt"), ranges.list().orEmpty().toList())
+        File(new, "files/$idA.source").delete()
+        migrateMediaBufferDir(old, new)
+        assertFalse(File(new, "files/$idA.source").exists(), "cleared files must not reappear")
     }
 
     @Test

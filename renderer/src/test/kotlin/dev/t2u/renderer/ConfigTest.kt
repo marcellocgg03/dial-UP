@@ -77,14 +77,14 @@ class ConfigTest {
     }
 
     @Test
-    fun outputFormatWhitelistHasTheSixNodeFormats() {
-        for (f in listOf("auto", "direct", "mp4", "adts", "flac", "mp3")) {
+    fun outputFormatWhitelistHasTheFiveSupportedFormats() {
+        for (f in listOf("auto", "direct", "mp4", "adts", "mp3")) {
             Config(dataDir = File("data"), outputFormat = f).validate()
         }
         for (f in listOf("wav", "")) {
             val e = assertFailsWith<IllegalArgumentException>(f) { Config(dataDir = File("data"), outputFormat = f).validate() }
             assertTrue("outputFormat" in e.message.orEmpty())
         }
-        assertEquals(setOf("auto", "direct", "mp4", "adts", "flac", "mp3"), OUTPUT_FORMATS)
+        assertEquals(setOf("auto", "direct", "mp4", "adts", "mp3"), OUTPUT_FORMATS)
     }
 }

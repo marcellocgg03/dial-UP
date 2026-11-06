@@ -142,6 +142,10 @@ data class ResolvedInfo(
     val formatId: String?,
     /** The raw `yt-dlp --dump-json` text, kept so a download can reuse it (`--load-info-json`). It holds signed URLs. */
     val rawJson: String? = null,
+    /** Estimated stream size from yt-dlp, when no exact size is available. It is not a hard upper bound. */
+    val filesizeApprox: Long? = null,
+    /** Redacted yt-dlp progress lines from a verbose lookup (player download, client attempts, JS solving). */
+    val steps: List<String> = emptyList(),
 ) {
     /** Never prints the signed URL, the headers or [rawJson] (T-03-22): logs and events only see the descriptive fields. */
     override fun toString(): String =
@@ -212,9 +216,10 @@ fun parseInfo(json: String, id: String): ResolvedInfo {
         album = root.str("album").orEmpty(),
         thumbnail = root.str("thumbnail").orEmpty(),
         duration = root.number("duration")?.takeIf { it.isFinite() } ?: 0.0,
-        filesize = fmt.longNumber("filesize") ?: 0L,
+        filesize = fmt.longNumber("filesize")?.takeIf { it > 0 } ?: 0L,
         formatId = fmt.str("format_id"),
         rawJson = json,
+        filesizeApprox = fmt.longNumber("filesize_approx")?.takeIf { it > 0 },
     )
 }
 
@@ -319,6 +324,22 @@ class Resolver(private val gateway: YtDlpGateway) {
 
         /** Keeps the host of any URL in yt-dlp's error text, drops path and signed query (T-01-12). */
         fun redactUrls(text: String): String = URL_WITH_PATH.replace(text, "$1/...")
+
+        private const val MAX_STEPS = 25
+        private const val MAX_STEP_CHARS = 160
+
+        /**
+         * The lines of a verbose lookup that say what yt-dlp did: the `[youtube]` steps and the JS runtime/challenge
+         * lines. Video ids are dropped and URLs reduced to their host (T-01-12); nothing else from stderr is kept.
+         */
+        fun stepLines(result: GatewayResult, id: String): List<String> =
+            result.stderrHead.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("[youtube]") || it.contains("JS runtimes") || it.contains("[jsc]") }
+                .map { redactUrls(it.replace("$id:", "")).replace(Regex("\\s+"), " ").take(MAX_STEP_CHARS) }
+                .distinct()
+                .take(MAX_STEPS)
+                .toList()
 
         /** yt-dlp prints "[debug] JS runtimes: ..." under -v. */
         fun jsRuntimeLine(result: GatewayResult): String? {
@@ -445,12 +466,13 @@ class CachingResolver(
             throw ResolveException("yt-dlp failed for $id: ${Resolver.redactUrls(e.message ?: e.javaClass.simpleName).take(300)}")
         }
         if (result.exitCode != 0) throw ResolveException("yt-dlp failed for $id: ${Resolver.errorTail(result.stderrTail)}")
-        val info = try {
+        val parsed = try {
             parseInfo(result.stdout, id)
         } catch (e: Exception) {
             // a JSON parse message can quote the input, which holds signed URLs: reduce them to scheme and host
             throw ResolveException(Resolver.redactUrls(e.message ?: e.javaClass.simpleName).take(300))
         }
+        val info = parsed.copy(steps = Resolver.stepLines(result, id))
         synchronized(lock) {
             cache[id] = Cached(info, urlExpiry(info.url, clock()))
             while (cache.size > MAX_CACHE_ENTRIES) cache.remove(cache.keys.first())
@@ -467,7 +489,7 @@ class CachingResolver(
                     "ms" to (System.nanoTime() - startedNanos) / 1_000_000,
                     "urlHost" to info?.let { urlHost(it.url) },
                     "expire" to info?.let { urlExpire(it.url) },
-                ),
+                ) + if (result == "miss" && info != null && info.steps.isNotEmpty()) mapOf("steps" to info.steps) else emptyMap(),
             )
         } catch (_: Throwable) {
             // logging must never break a lookup

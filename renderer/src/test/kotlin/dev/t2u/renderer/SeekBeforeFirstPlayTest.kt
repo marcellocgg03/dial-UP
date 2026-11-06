@@ -123,9 +123,9 @@ internal class SeekBeforeFirstPlayTest {
     fun anEarlySeekDoesNotCondemnTheFormat() {
         rig {
             advance(2000) // the log: seekTo 143 came two seconds after the load
-            assertTrue(r.seek(143.0))
+            assertTrue(r.seek(1.0))
 
-            tick(13) // the Lamp spends 13 s TRANSITIONING near the end of the file, then plays at 2:23
+            tick(13) // the speaker spends 13 s TRANSITIONING after the native Seek
             tick(2)
 
             assertTrue(!fellBack(), "no format fallback: ${h.notes("Renderer did not start").map { it["message"] }}")
@@ -134,7 +134,7 @@ internal class SeekBeforeFirstPlayTest {
             assertEquals("direct", storedFormat(h.dataDir), "the learned format is kept")
             assertEquals("PLAYING", fake.state.transport)
             val position = r.getPosition()
-            assertTrue(position in 143.0..147.0, "the speaker plays the end of the song: $position")
+            assertTrue(position in 1.0..5.0, "the speaker plays at the seek target: $position")
             assertEquals(PlayerStatus.PLAYING, r.status)
         }
     }
@@ -146,33 +146,27 @@ internal class SeekBeforeFirstPlayTest {
             tick(8)
             waitUntil { h.formats().size >= 2 }
 
-            assertTrue(fellBack(), "Renderer did not start direct - trying mp4")
-            assertEquals(listOf("direct", "mp4"), h.formats().take(2))
+            assertTrue(fellBack(), "Renderer did not start direct - trying mp3")
+            assertEquals(listOf("direct", "mp3"), h.formats().take(2))
         }
     }
 
     @Test
-    @DisplayName("a fallback reload after an accepted seek lands at the seek target, not at the start of the song")
+    @DisplayName("an early seek on direct reloads at the target, not at the start of the song")
     fun aReloadAtAPositionPlaysFromThatPosition() {
-        // direct never starts, even after its Seek; mp4 starts at once and takes a 1 s Seek.
+        // direct never starts; an early seek reloads mp3 from the requested offset.
         rig(
             transitionMs = Long.MAX_VALUE / 4,
-            setup = { mimic, fake -> mimic.holdStartWhile { !fake.state.currentMetaData.contains("audio/mp4:DLNA.ORG_PN") } },
+            setup = { mimic, fake -> mimic.holdStartWhile { !fake.state.currentMetaData.contains("audio/mpeg:") } },
         ) {
             advance(2000)
             assertTrue(r.seek(145.0))
-            mimic.laggingSeek(lagMs = 0, transitionMs = 1000, staleRelTime = "0:00:00", clock = clock::now) // for the mp4 Seek
 
-            var steps = 0
-            while (h.formats().size < 2 && steps++ < 40) tick(1)
-            assertTrue(fellBack(), "a dead speaker still ends with a fallback")
-            assertEquals(listOf("direct", "mp4"), h.formats().take(2))
+            assertEquals(listOf("direct", "mp3"), h.formats())
 
-            waitUntil { fake.calls.count { it.action == "Seek" } >= 2 }
             tick(3)
-            val seeks = fake.calls.filter { it.action == "Seek" }.map { Regex("<Target>([^<]*)</Target>").find(it.body)?.groupValues?.get(1) }
-            assertEquals(2, seeks.size, "one Seek on direct, one on the reloaded mp4: $seeks")
-            assertEquals("00:02:25", seeks.last(), "the reloaded file is sought to the position that was asked for: $seeks")
+            assertEquals(0, fake.calls.count { it.action == "Seek" }, "the direct stream is not natively sought")
+            assertEquals(145, h.registered[1].startAt, "the MP3 stream starts at the requested position")
             val position = r.getPosition()
             assertTrue(position in 145.0..150.0, "the position told to the phone is the speaker's: $position")
         }
@@ -182,14 +176,14 @@ internal class SeekBeforeFirstPlayTest {
     @DisplayName("repeated seeks cannot keep a dead speaker waiting for ever: the hard cap ends the start wait")
     fun repeatedSeeksCannotKeepADeadSpeakerWaitingForever() {
         rig(transitionMs = Long.MAX_VALUE / 4) {
-            repeat(4) { i ->
-                assertTrue(r.seek(100.0 + i))
+            repeat(4) {
+                assertTrue(r.seek(1.0))
                 tick(3)
             }
             assertTrue(!fellBack(), "12 s of seeks every 3 s: each one restarts the clock")
 
-            repeat(6) { i ->
-                r.seek(110.0 + i)
+            repeat(6) {
+                r.seek(1.0)
                 tick(3)
             }
             waitUntil { h.formats().size >= 2 }

@@ -86,7 +86,6 @@ class MediaServerFileTest {
         )
         assertEquals("DLNA.ORG_PN=MP3;DLNA.ORG_OP=00;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000", dlnaFeatures("mp3"))
         assertEquals("DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000", dlnaFeatures("direct"))
-        assertEquals("DLNA.ORG_OP=01;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000", dlnaFeatures("flac"))
     }
 
     // ----- registry ------------------------------------------------------------------------------

@@ -4,7 +4,7 @@ package dev.t2u.renderer
 // driven against the upnp FakeRenderer. GPL-3.0-only.
 //
 // Adaptations from the Node tests (plan 03-12 copies these into PARITY.md "Adaptations"):
-//  * Each test pins outputFormat; Node's setup used "auto" and a fake that advertised the format it needed.
+//  * The original ported tests pin outputFormat; the auto-mode tests advertise the formats they need.
 //  * The Node fake rejected Seek through bareFaultOn; the Kotlin fake can switch the fault off mid-test.
 //  * A restart offset is clamped to one second before the end of the track (T-03-30); Node does not clamp.
 //  * A native Seek on a file that itself starts at an offset is sent relative to that file; Node sends the
@@ -45,17 +45,83 @@ internal class SeekFallbackTest {
         calls.filter { it.action == "Seek" }.map { Regex("<Target>(.*?)</Target>").find(it.body)?.groupValues?.get(1) ?: "" }
 
     @Test
-    @DisplayName("FLAC: if the renderer rejects Seek, a new FLAC starting at the offset is sent")
-    fun flacRejectedSeekLoadsAFileAtTheOffset() {
-        withFake(FakeRenderer(bareFaultOn = setOf("Seek"))) { fake ->
-            RendererHarness(fake, config = pinned("flac")).use { h ->
+    @DisplayName("auto direct seeks past one second by loading ADTS at the target")
+    fun autoDirectSeekReloadsAdtsAtTarget() {
+        withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/aac:*,http-get:*:audio/mpeg:*")) { fake ->
+            RendererHarness(fake, config = pinned("auto"), duration = 1000.0).use { h ->
                 h.renderer.init()
                 assertTrue(h.renderer.doPlay(Video(A), 0.0))
-                assertTrue(h.renderer.doSeek(50.0))
-                assertEquals(listOf("flac" to 0, "flac" to 50), h.registered.map { it.format to it.startAt })
-                assertEquals(1, fake.count("Seek"), "the native Seek was tried first")
+                assertTrue(h.renderer.doSeek(600.0))
+                assertEquals(listOf("direct" to 0, "adts" to 600), h.registered.map { it.format to it.startAt })
+                assertEquals(listOf("direct" to 0, "adts" to 600), h.prepared.map { it.format to it.startAt })
                 assertEquals(2, fake.count("SetAVTransportURI"))
-                assertTrue(h.notes("Renderer rejected Seek").isNotEmpty(), "the fallback is noted")
+                assertEquals(0, fake.count("Seek"))
+                assertTrue(fake.state.currentUri.endsWith(".aac"), fake.state.currentUri)
+                assertTrue(fake.state.currentMetaData.contains("audio/aac:"), fake.state.currentMetaData)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("auto direct seeks at or below one second use native Seek")
+    fun autoDirectShortSeeksAreNative() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("auto"), duration = 1000.0).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(h.renderer.doSeek(0.5))
+                assertTrue(h.renderer.doSeek(1.0))
+                assertEquals(listOf("00:00:00", "00:00:01"), fake.seekTargets())
+                assertEquals(listOf("direct" to 0), h.registered.map { it.format to it.startAt })
+                assertEquals(1, fake.count("SetAVTransportURI"))
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("auto direct seek uses MP3 when the speaker does not accept AAC")
+    fun autoDirectSeekReloadsMp3WithoutAac() {
+        withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*")) { fake ->
+            RendererHarness(fake, config = pinned("auto"), duration = 1000.0).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(h.renderer.doSeek(600.9))
+                assertEquals(listOf("direct" to 0, "mp3" to 600), h.registered.map { it.format to it.startAt })
+                assertEquals(2, fake.count("SetAVTransportURI"))
+                assertEquals(0, fake.count("Seek"))
+                assertTrue(fake.state.currentUri.endsWith(".mp3"), fake.state.currentUri)
+                assertTrue(fake.state.currentMetaData.contains("audio/mpeg:"), fake.state.currentMetaData)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an auto mid-track start prepares ADTS at the requested offset")
+    fun autoMidTrackStartUsesAdtsAtOffset() {
+        withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/aac:*,http-get:*:audio/mpeg:*")) { fake ->
+            RendererHarness(fake, config = pinned("auto"), duration = 1000.0).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 300.0))
+                assertEquals(listOf("adts" to 300), h.prepared.map { it.format to it.startAt })
+                assertEquals(listOf("adts" to 300), h.registered.map { it.format to it.startAt })
+                assertEquals(1, fake.count("SetAVTransportURI"))
+                assertEquals(0, fake.count("Seek"))
+                assertTrue(fake.state.currentUri.endsWith(".aac"), fake.state.currentUri)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("forced direct keeps the native Seek for a mid-track target")
+    fun forcedDirectStillUsesNativeSeek() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("direct"), duration = 1000.0).use { h ->
+                h.renderer.init()
+                assertTrue(h.renderer.doPlay(Video(A), 0.0))
+                assertTrue(h.renderer.doSeek(600.0))
+                assertEquals(listOf("00:10:00"), fake.seekTargets())
+                assertEquals(listOf("direct" to 0), h.registered.map { it.format to it.startAt })
+                assertEquals(1, fake.count("SetAVTransportURI"))
             }
         }
     }
@@ -143,7 +209,7 @@ internal class SeekFallbackTest {
                 assertTrue(h.renderer.doSeek(500.0))
                 assertEquals(209, h.registered.last().startAt)
             }
-            RendererHarness(fake, config = pinned("flac")).use { h ->
+            RendererHarness(fake, config = pinned("mp4")).use { h ->
                 h.renderer.init()
                 assertTrue(h.renderer.doPlay(Video(A), 0.0))
                 assertTrue(h.renderer.doSeek(210.0))
@@ -169,7 +235,7 @@ internal class SeekFallbackTest {
     @DisplayName("a native Seek on a file that starts at an offset is relative to that file")
     fun nativeSeekOnAnOffsetFileIsRelative() {
         withFake(FakeRenderer(bareFaultOn = setOf("Seek"))) { fake ->
-            RendererHarness(fake, config = pinned("flac")).use { h ->
+            RendererHarness(fake, config = pinned("mp4")).use { h ->
                 h.renderer.init()
                 assertTrue(h.renderer.doPlay(Video(A), 0.0))
                 assertTrue(h.renderer.doSeek(80.0))
@@ -192,7 +258,7 @@ internal class SeekFallbackTest {
     @DisplayName("a rejected-Seek seek on a paused player loads the new file without a Play")
     fun pausedFallbackSeekStaysPaused() {
         withFake(FakeRenderer(bareFaultOn = setOf("Seek"))) { fake ->
-            RendererHarness(fake, config = pinned("flac")).use { h ->
+            RendererHarness(fake, config = pinned("mp4")).use { h ->
                 val r = h.renderer
                 r.init()
                 assertTrue(r.play(Video(A), 0.0))

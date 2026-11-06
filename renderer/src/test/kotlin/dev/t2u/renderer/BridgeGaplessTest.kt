@@ -118,6 +118,20 @@ class BridgeGaplessTest {
             it.first == "renderer" && it.second["message"] == "Renderer continued into the next track"
         }, "rebind alone does not advance the queue")
 
+        h.rpc("cl", "loungeStatus", h.loungeStatus(emptyList(), "dev-1", ui = null))
+        h.awaitUntil("the interrupted sender disconnects without resetting playback") {
+            h.events.any { it.first == "lounge-app" && it.second["type"] == "noSendersLeft" && it.second["networkRecovery"] == true }
+        }
+        val nowPlayingReplies = h.count("nowPlaying")
+        h.rpc("cl", "getNowPlaying")
+        h.awaitUntil("the disconnect has been handled") { h.count("nowPlaying") > nowPlayingReplies }
+        assertEquals(stops, h.speakerCount("Stop"), "an implicit network disconnect must not stop playback")
+        assertEquals(plays, h.speakerCount("Play"), "it must not restart playback")
+        assertEquals(currentUri, h.fakeRenderer.state.currentUri)
+        assertEquals(nextUri, h.fakeRenderer.state.nextUri)
+        assertEquals(1, bridge.visibleCastCount.value.casting)
+        h.connectSender()
+
         h.fakeRenderer.advance()
         h.awaitUntil("normal gapless handoff advances to the second track") {
             h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == B }

@@ -70,11 +70,8 @@ fun deleteOffered(s: SpeakerUi): Boolean = s.manual
  */
 fun savedManualVisible(switchOn: Boolean, serviceUp: Boolean, bridgeUp: Boolean): Boolean = !(switchOn && serviceUp && bridgeUp)
 
-/**
- * What the empty Renderers list shows: [BRIDGE_OFF] "The bridge is off", [LOOKING] the spinner (the bridge is starting or
- * searching), [WAITING_FOR_WIFI] "Waiting for Wi-Fi".
- */
-enum class ListNote { BRIDGE_OFF, LOOKING, WAITING_FOR_WIFI }
+/** What the empty Renderers list shows: [LOOKING] the spinner (the bridge is starting or searching). With the bridge off or waiting for Wi-Fi it shows nothing. */
+enum class ListNote { LOOKING }
 
 /** The Renderers list as drawn: the running bridge's cards [live], the greyed [saved] cards, and the [note] when [live] is empty. */
 data class RendererListing(val live: List<SpeakerUi>, val saved: List<SpeakerUi>, val note: ListNote?)
@@ -85,8 +82,7 @@ data class RendererListing(val live: List<SpeakerUi>, val saved: List<SpeakerUi>
  * is on and the service and the bridge are both up, and then [saved] is not drawn (the bridge's list already merges it). In every
  * other case [live] is empty and [saved] are the greyed saved cards ([savedSpeakerCards]: hidden UDNs are skipped, user [names]
  * applied), so Hide and Restore are unchanged and a saved renderer that is also discovered shows once. The note is null while
- * live cards are shown; otherwise "waiting for Wi-Fi" when [waitingForWifi], else "looking" (the spinner) when the switch is on,
- * else "bridge off". [switchOn] is the switch as the bridge sees it: on and the battery exemption held. The DIAL targets go
+ * live cards are shown, while [waitingForWifi] and while the switch is off; otherwise "looking" (the spinner). [switchOn] is the switch as the bridge sees it: on and the battery exemption held. The DIAL targets go
  * with the bridge stop (Bridge.stop, registry.removeAll), not with this rule.
  */
 fun rendererListing(
@@ -103,23 +99,10 @@ fun rendererListing(
     val shownLive = if (showLive) live else emptyList()
     val shownSaved = if (showLive) emptyList() else savedSpeakerCards(saved, hidden, names)
     val note = when {
-        shownLive.isNotEmpty() -> null
-        waitingForWifi -> ListNote.WAITING_FOR_WIFI
-        switchOn -> ListNote.LOOKING
-        else -> ListNote.BRIDGE_OFF
+        shownLive.isNotEmpty() || waitingForWifi || !switchOn -> null
+        else -> ListNote.LOOKING
     }
     return RendererListing(shownLive, shownSaved, note)
-}
-
-/**
- * Why Add speaker cannot work now, or null when it can (review WR-04): the switch is off ([serviceUp] false), or the service runs
- * but has no bridge yet ([serviceUp] true, [bridgeUp] false: waiting for Wi-Fi, a failed start or a restart), or a bridge exists. [waitingForWifi] (the switch is on and the phone has no Wi-Fi) says the bridge waits, also with the
- * service stopped.
- */
-fun addRefusal(serviceUp: Boolean, bridgeUp: Boolean, waitingForWifi: Boolean): String? = when {
-    bridgeUp -> null
-    waitingForWifi || serviceUp -> AppModel.BRIDGE_WAITING_ADD
-    else -> AppModel.BRIDGE_OFF_ADD
 }
 
 /**

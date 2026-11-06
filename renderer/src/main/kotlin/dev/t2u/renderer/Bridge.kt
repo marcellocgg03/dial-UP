@@ -105,7 +105,7 @@ data class BridgeCount(val casting: Int, val total: Int)
  *
  * The last three are injectable so tests can stand in for YouTube and googlevideo, and default to production: [innerTubeEndpoints]
  * is www.youtube.com, [upstreamPolicy] proxies googlevideo hosts over https only (T-03-31), and [sourceDownloader] (wired in
- * plan 03-11 on Android) is what the file formats mp4 and flac download their source with; without it, or without [launcher]
+ * plan 03-11 on Android) is what the file format mp4 downloads their source with; without it, or without [launcher]
  * or [bufferDir], file builds are unavailable.
  */
 data class BridgeDeps(
@@ -874,7 +874,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         // mediaPort 0 means "any free port" (tests); the Node range check applies to the real port below
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
         val wifi = net.wifiIp.hostAddress.orEmpty()
-        // File builds (mp4, flac) need ffmpeg, a place to write and a way to download the source. The builder keeps its
+        // File builds (mp4) need ffmpeg, a place to write and a way to download the source. The builder keeps its
         // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
         // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
         // directory itself. The media server owns the builder's lifetime.
@@ -887,7 +887,6 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 launcher,
                 deps.resolver,
                 downloader,
-                flacBits = base.flacBits,
                 ffmpegLogLevel = base.ffmpegLogLevel,
                 // read by the cache at every prune, so the deferred cache slider needs no restart
                 cacheLimitBytes = { cacheCapMb(base).toLong() * 1_048_576L },
@@ -1469,6 +1468,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             if (!started.get() || stopped.get()) return
             networkDown = true
             emit("bridge", "event" to "network-lost")
+            for (tracked in receiverList.toList()) tracked.receiver.onNetworkLost()
             // polls pause on every renderer: what a broken stream does on the speaker is not mirrored to the phone (plan 05-08)
             for (r in registry?.renderers().orEmpty()) step("renderer", "network-lost") { r.onNetworkLost() }
         }
@@ -1536,6 +1536,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             }
             // the renderers learn the new address (they re-set the loaded track in their own scopes, one slow speaker holds up no other)
             for (r in registry?.renderers().orEmpty()) step("renderer", "rebind") { r.onNetworkChanged(newIp) }
+            for (tracked in receiverList.toList()) tracked.receiver.onNetworkReturned()
             networkDown = false
             step("search", "rebind") { multicastSearch("rebind") }
             emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
@@ -1690,6 +1691,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                         put("files", c.files)
                         put("bytes", c.bytes)
                         put("limitBytes", c.limitBytes)
+                        put("temporaryFiles", c.temporaryFiles)
+                        put("temporaryBytes", c.temporaryBytes)
                     }
                 } ?: JsonNull,
             )

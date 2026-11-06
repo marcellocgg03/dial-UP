@@ -162,22 +162,12 @@ class ConfigFileTest {
     }
 
     @Test
-    fun flacBits() {
-        assertEquals(24, parse("""{"flacBits":24}""").config.flacBits)
-        assertEquals(16, parse("""{"flacBits":16}""").config.flacBits)
-        for (bad in listOf("20", "\"24\"", "24.0", "true")) {
-            val r = parse("""{"flacBits":$bad}""")
-            assertEquals(base.flacBits, r.config.flacBits, bad)
-            assertEquals(1, r.warnings.size, bad)
-        }
-    }
-
-    @Test
     fun ytdlpVerbose() {
         assertTrue(parse("""{"ytdlpVerbose":true}""").config.ytdlpVerbose)
+        assertFalse(parse("""{"ytdlpVerbose":false}""").config.ytdlpVerbose)
         for (bad in listOf("\"yes\"", "1", "null")) {
             val r = parse("""{"ytdlpVerbose":$bad}""")
-            assertFalse(r.config.ytdlpVerbose, bad)
+            assertTrue(r.config.ytdlpVerbose, bad)
             assertEquals(1, r.warnings.size, bad)
         }
     }
@@ -282,6 +272,14 @@ class ConfigFileTest {
     }
 
     @Test
+    fun removedFlacOutputFormatWarnsAndUsesDefault() {
+        val r = parse("""{"outputFormat":"flac"}""")
+        assertEquals(base.outputFormat, r.config.outputFormat)
+        assertEquals(1, r.warnings.size)
+        assertContains(r.warnings.single(), "outputFormat")
+    }
+
+    @Test
     fun outputFormatValues() {
         val w = parse("""{"outputFormat":"wav"}""")
         assertEquals(base.outputFormat, w.config.outputFormat)
@@ -305,26 +303,25 @@ class ConfigFileTest {
     @Test
     fun noWarningEverEchoesRejectedValues() {
         val r = parse(
-            """{"include":["[BADREGEX"],"outputFormat":"BADFORMAT","startTimeoutMs":"BADSTR","pollIntervalMs":99999999,"mp3Bitrate":"BADRATE","flacBits":"BADBITS","ytdlpVerbose":"BADBOOL","ffmpegLogLevel":"BADLEVEL","zzz":1}""",
+            """{"include":["[BADREGEX"],"outputFormat":"BADFORMAT","startTimeoutMs":"BADSTR","pollIntervalMs":99999999,"mp3Bitrate":"BADRATE","ytdlpVerbose":"BADBOOL","ffmpegLogLevel":"BADLEVEL","zzz":1}""",
         )
         assertTrue(r.warnings.size >= 8)
-        assertNoLeak(r, "BADREGEX", "BADFORMAT", "BADSTR", "99999999", "BADRATE", "BADBITS", "BADBOOL", "BADLEVEL")
+        assertNoLeak(r, "BADREGEX", "BADFORMAT", "BADSTR", "99999999", "BADRATE", "BADBOOL", "BADLEVEL")
         r.config.validate()
     }
 
     @Test
     fun aFullValidFileAppliesEverythingAndValidates() {
         val r = parse(
-            """{"include":"living","exclude":["lamp"],"outputFormat":"flac","startTimeoutMs":20000,"pollIntervalMs":1000,
-            "mp3Bitrate":"320k","flacBits":24,"ytdlpVerbose":true,"ffmpegLogLevel":"info"}""",
+            """{"include":"living","exclude":["lamp"],"outputFormat":"mp4","startTimeoutMs":20000,"pollIntervalMs":1000,
+            "mp3Bitrate":"320k","ytdlpVerbose":true,"ffmpegLogLevel":"info"}""",
         )
         assertEquals(emptyList(), r.warnings)
         val c = r.config
-        assertEquals("flac", c.outputFormat)
+        assertEquals("mp4", c.outputFormat)
         assertEquals(20000L, c.startTimeoutMs)
         assertEquals(1000L, c.pollIntervalMs)
         assertEquals("320k", c.mp3Bitrate)
-        assertEquals(24, c.flacBits)
         assertTrue(c.ytdlpVerbose)
         assertEquals("info", c.ffmpegLogLevel)
         assertNotNull(c.nameFilter)

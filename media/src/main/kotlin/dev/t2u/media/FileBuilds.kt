@@ -13,8 +13,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 
 // Port of the mp4 / flac half of reference/tube2upnp/src/mediaServer.js (#remuxToFile, #runRemux, #sourceFile,
@@ -41,7 +39,6 @@ class FileBuildException(message: String, cause: Throwable? = null) : Exception(
  */
 fun fileBuildArgs(
     format: String,
-    flacBits: Int,
     startAt: Int,
     source: File,
     output: File,
@@ -50,12 +47,6 @@ fun fileBuildArgs(
     require(startAt >= 0) { "startAt must not be negative" }
     val codec = when (format) {
         "mp4" -> listOf("-c:a", "copy", "-movflags", "+faststart", "-f", "mp4")
-        // AAC decodes to float: store it as 16- or 24-bit integer PCM, losslessly compressed.
-        "flac" -> {
-            require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
-            val depth = if (flacBits == 24) listOf("-sample_fmt", "s32", "-bits_per_raw_sample", "24") else listOf("-sample_fmt", "s16")
-            listOf("-c:a", "flac") + depth + listOf("-compression_level", "5", "-f", "flac")
-        }
         else -> throw IllegalArgumentException("format $format is not a file format")
     }
     // Input-side -ss: ffmpeg seeks in the source instead of decoding up to the offset.
@@ -77,16 +68,11 @@ class FileBuilder(
     private val launcher: PipeLauncher,
     private val resolver: VideoResolver,
     private val downloader: SourceDownloader,
-    private val flacBits: Int = 16,
     private val ffmpegLogLevel: String = "error",
     cacheLimitBytes: () -> Long = { DEFAULT_CACHE_LIMIT_BYTES },
     private val retryDelaysMs: List<Long> = listOf(2000L, 5000L),
     private val onEvent: (Map<String, Any?>) -> Unit = {},
 ) {
-    init {
-        require(flacBits == 16 || flacBits == 24) { "flacBits must be 16 or 24" }
-    }
-
     private val dir: File = dir.absoluteFile
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
@@ -97,7 +83,7 @@ class FileBuilder(
 
     /** The cached file formats ([FILE_FORMATS], in chain order) already built for [videoId] from the start. */
     fun cachedFormats(videoId: String): List<String> =
-        FILE_FORMATS.filter { isFinished(finalFile(videoId, it, 0)) }
+        FILE_FORMATS.filter { isFinished(finalFile(videoId, it, 0)) && !cache.isTransient(finalFile(videoId, it, 0)) }
 
     /** The finished file for the key, or null when it is not there. */
     fun fileFor(videoId: String, format: String, startAt: Int): File? {
@@ -155,9 +141,11 @@ class FileBuilder(
     /** Pins [file] for as long as a response reads it; call the returned release when done (one-shot). */
     fun pin(file: File): () -> Unit = cache.pin(file)
 
-    /** True while a build or a source download of [videoId] runs: its source must not be evicted under it. */
-    private fun isBusy(videoId: String): Boolean =
-        synchronized(lock) { buildJobs.keys.any { it.startsWith("$videoId-") } || sourceJobs.containsKey(videoId) }
+    fun sourcePin(videoId: String): () -> Unit = cache.pin(sourcePath(videoId))
+
+    fun discardSourceWhenUnused(videoId: String) = cache.discardWhenUnused(sourcePath(videoId))
+
+    fun discardWhenUnused(file: File) = cache.discardWhenUnused(file)
 
     // ------------------------------------------------------------------------------------ names
 
@@ -185,19 +173,15 @@ class FileBuilder(
 
     private suspend fun build(videoId: String, format: String, startAt: Int, final: File): File {
         if (isFinished(final)) return final
-        // Pinned while ffmpeg reads it (Node `unpinSrc`); a prune of another build may have taken a source between
-        // its download and this pin, in which case it is downloaded again.
-        var src = sourceFile(videoId)
-        var unpinSrc = cache.pin(src)
-        if (!isFinished(src)) {
-            unpinSrc()
-            src = sourceFile(videoId)
-            unpinSrc = cache.pin(src)
-        }
+        val src = sourcePath(videoId)
+        val unpinSrc = cache.pin(src)
+        val unpinFinal = cache.pin(final)
+        var sourceReleased = false
         val part = File(final.path + ".part")
-        val args = fileBuildArgs(format, flacBits, startAt, src, part, ffmpegLogLevel)
         var proc: Process? = null
         try {
+            sourceFile(videoId)
+            val args = fileBuildArgs(format, startAt, src, part, ffmpegLogLevel)
             withContext(Dispatchers.IO) {
                 dir.mkdirs()
                 part.delete()
@@ -212,18 +196,24 @@ class FileBuilder(
                     Resolver.redactUrls("ffmpeg $format build exited $code: $tail".trim()).take(MAX_MESSAGE),
                 )
             }
+            cache.discardWhenUnused(src)
+            unpinSrc()
+            sourceReleased = true
             withContext(Dispatchers.IO) {
-                Files.move(part.toPath(), final.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                cache.publish(part, final)
             }
         } catch (e: Throwable) {
             withContext(NonCancellable + Dispatchers.IO) { part.delete() }
             throw e
         } finally {
             proc?.let { p -> withContext(NonCancellable + Dispatchers.IO) { if (p.isAlive) p.destroyForcibly() } }
-            unpinSrc()
+            if (!sourceReleased) {
+                cache.discardWhenUnused(src)
+                unpinSrc()
+            }
+            unpinFinal()
+            cache.forgetDiscardIfMissing(final)
         }
-        // D-04: the file just built and its source are kept even when they alone exceed the cap.
-        cache.prune(keep = setOf(final.name, src.name), busy = ::isBusy)
         emit("built", videoId, format, startAt)
         return final
     }
@@ -253,7 +243,10 @@ class FileBuilder(
         val job = synchronized(lock) {
             sourceJobs[videoId] ?: scope.async(start = CoroutineStart.LAZY) { downloadSource(videoId, dest) }.also { j ->
                 sourceJobs[videoId] = j
-                j.invokeOnCompletion { synchronized(lock) { sourceJobs.remove(videoId, j) } }
+                j.invokeOnCompletion {
+                    synchronized(lock) { sourceJobs.remove(videoId, j) }
+                    cache.forgetDiscardIfMissing(dest)
+                }
                 j.start()
             }
         }
@@ -276,11 +269,10 @@ class FileBuilder(
                     part.delete()
                 }
                 val info = resolver.resolve(videoId)
+                val eligible = cache.canEverFit(info.filesize)
                 downloader.download(videoId, info, part)
                 check(isFinished(part)) { "the download left no file" }
-                withContext(Dispatchers.IO) { Files.move(part.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING) }
-                // Sources downloaded for the pipe rung are bounded by the same cap.
-                cache.prune(keep = setOf(dest.name), busy = ::isBusy)
+                withContext(Dispatchers.IO) { cache.publish(part, dest, eligible) }
                 emit("downloaded", videoId, "source", 0)
                 return dest
             } catch (e: CancellationException) {
