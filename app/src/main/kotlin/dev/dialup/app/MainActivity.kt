@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         recreated = savedInstanceState != null
-        NetworkResume.removeLegacyChannel(this)
+        // NetworkResume.removeLegacyChannel(this)
         enableEdgeToEdge()
         refreshPermissions()
         setContent {

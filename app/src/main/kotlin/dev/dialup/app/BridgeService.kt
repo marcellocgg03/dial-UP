@@ -181,12 +181,6 @@ class BridgeService : Service(), SpikeHost {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (intent?.action == ACTION_CLEAR_LOG) {
-            // D-11: empties the current log and its rotated files; the first line of the new log says so
-            evidence.clear()
-            evidence.event("log-cleared", mapOf("source" to "notification"))
-            if (bootstrapped) return START_STICKY
-        }
         if (!bootstrapped) {
             bootstrapped = true
             val reason = startReasonOf(intent == null, intent?.action, intent?.getStringExtra(EXTRA_START_REASON))
@@ -465,7 +459,7 @@ class BridgeService : Service(), SpikeHost {
 
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "DialUP", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Bridge Status", NotificationManager.IMPORTANCE_LOW))
     }
 
     private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
@@ -475,20 +469,13 @@ class BridgeService : Service(), SpikeHost {
             Intent(this, BridgeService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        // Sharing the log moved to the Settings tab (author 2026-11-01); the notification keeps Stop and Clear log.
-        val clearLog = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, BridgeService::class.java).setAction(ACTION_CLEAR_LOG),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
             .setContentText(notificationText(count, waiting))
             .setSmallIcon(R.drawable.ic_stat_dialup)
             .setOngoing(true)
             .addAction(0, "Stop", stop)
-            .addAction(0, "Clear log", clearLog)
             .build()
     }
 
@@ -549,7 +536,6 @@ class BridgeService : Service(), SpikeHost {
 
     companion object {
         const val ACTION_STOP = "dev.dialup.STOP"
-        const val ACTION_CLEAR_LOG = "dev.dialup.CLEAR_LOG"
         const val CHANNEL_ID = "dialup"
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
