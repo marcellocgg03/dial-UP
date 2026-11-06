@@ -46,7 +46,7 @@ contains, and what is still unverified, is listed in its release notes.
    and after a few seconds a **Refresh** button searches again at once. Opening the app also searches once.
 3. Open the YouTube or the YouTube Music app, tap the cast icon and pick the renderer. In the cast menu it is listed
    with a speaker emoji in front of its name and the text `(app)` after it. Playlists, pause, next and previous work from
-   the YouTube app; the card also has play/pause, previous, next, stop and clear buttons.
+   the YouTube app; the card also has play/pause, previous, next, and a Stop button that stops and clears the speaker.
 4. **Add renderer** adds a speaker by its IPv4 address when discovery cannot see it (private Wi-Fi addresses only, for
    example `192.168.1.40`). The speaker must answer before it gets a card, and it is saved under that address, so add it
    again if the speaker gets a new address.
