@@ -20,15 +20,11 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 ## Features
 
 - **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
-- **Caching** (MP4 format only): with the MP4 format forced, audio files are cached locally for future playback without needing to be downloaded with yt-dlp again. The cache settings appear only when MP4 is selected. Older unused entries are evicted to make room; files that do not fit remain temporary and are removed after playback. Android's system Clear cache action also removes these files. The cache limit covers retained source and converted files, not temporary playback files, downloads in progress, or the separately bounded streaming range cache.
-- **Forced audio format**: Automatic by default; Automatic or MP4 can be selected. Automatic tries Direct, then AAC stream (adts, skipped for non-AAC sources), then MP3, and uses the first one the renderer supports natively. Seeks and mid-track starts on Direct are restarted as an AAC stream (adts, else MP3) at the target position, because speakers scan a large fragmented MP4 slowly when seeking natively. MP4 is never chosen automatically because it downloads and caches the whole track first
+- **Caching** (MP4 only): with MP4 forced, audio files are cached locally so they aren't downloaded with yt-dlp again. Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
+- **Forced audio format**: Automatic (direct -> adts -> mp3) by default, or force MP4. Automatic plays the first format the renderer supports natively and starts right away without caching
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
-- **Wi-Fi recovery**: Brief outages are given five seconds to rebind and resync; after that, the phone-side bridge stops
-  without stopping renderer playback and restarts when Wi-Fi returns. During a brief recovery, an implicit sender
-  disconnect does not stop playback; explicit disconnects still end the cast. Playback may still interrupt if the
-  renderer exhausts its buffer while the phone is unreachable. The cast notification appears only while Wi-Fi is available
-  and casting is active.
+- **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
 ## Privacy
 
@@ -80,3 +76,10 @@ GPL-3.0-only, see `LICENSE`. Third-party components are listed in `THIRD_PARTY_N
 DialUP is based on [Tube2U[PnP]](https://github.com/deaksa/tube2upnp) / [upnpTube](https://github.com/mas94uk/upnpTube) (GPL-3.0-only), so it is released under the same licence.
 The APK also bundles GPL-covered binaries (FFmpeg and ffprobe from the Termux build, and the youtubedl-android
 modules) together with CPython, QuickJS and yt-dlp.
+
+### Source offer
+
+- The source of DialUP is this repository; every release is tagged, and the tag matches the APK.
+- The source of the bundled binaries is linked, pinned to the exact versions, in `THIRD_PARTY_NOTICES.md`
+  (youtubedl-android tag `0.18.1`, FFmpeg 7.1.1, the Termux ffmpeg build recipe at commit `c7585599a9`).
+- If a link is unavailable, open an issue and the complete corresponding source will be provided.
