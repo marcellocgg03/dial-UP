@@ -106,7 +106,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         item(key = "add-speaker") {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
-                    Text("Add renderer")
+                    Text("Add renderer by address")
                 }
                 addRefusal(running, bridgeUp, waiting)?.let { why ->
                     Text(why, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("add-needs-bridge"))
