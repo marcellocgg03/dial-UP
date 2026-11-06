@@ -36,7 +36,6 @@ class SpeakersPresenterTest {
         val b = buttonsFor(speaker(PlayerStatus.PLAYING, aTrack), busy = false)
         assertEquals(PlayPause.PAUSE, b.playPause)
         assertTrue(b.stop)
-        assertTrue(b.clear)
     }
 
     @Test
@@ -47,22 +46,23 @@ class SpeakersPresenterTest {
     }
 
     @Test
-    fun `stopped with a current queue item or a track offers play but no stop`() {
+    fun `stopped with a current queue item or a track offers play and stop`() {
         val withQueue = buttonsFor(speaker(PlayerStatus.STOPPED, queueHasCurrent = true), busy = false)
         assertEquals(PlayPause.PLAY, withQueue.playPause)
-        assertEquals(false, withQueue.stop)
+        assertTrue(withQueue.stop)
         val withTrack = buttonsFor(speaker(PlayerStatus.STOPPED, aTrack), busy = false)
         assertEquals(PlayPause.PLAY, withTrack.playPause)
-        assertEquals(false, withTrack.stop)
+        assertTrue(withTrack.stop)
     }
 
     @Test
-    fun `stopped with neither and idle offer no play`() {
-        assertEquals(PlayPause.DISABLED, buttonsFor(speaker(PlayerStatus.STOPPED), busy = false).playPause)
+    fun `stopped with neither and idle offer no play or stop`() {
+        val stopped = buttonsFor(speaker(PlayerStatus.STOPPED), busy = false)
+        assertEquals(PlayPause.DISABLED, stopped.playPause)
+        assertEquals(false, stopped.stop)
         val idle = buttonsFor(speaker(PlayerStatus.IDLE), busy = false)
         assertEquals(PlayPause.DISABLED, idle.playPause)
         assertEquals(false, idle.stop)
-        assertTrue(idle.clear, "clear is on whenever the speaker is online")
     }
 
     @Test
@@ -86,7 +86,7 @@ class SpeakersPresenterTest {
 
     @Test
     fun `offline or busy disables every button`() {
-        val off = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false, clear = false)
+        val off = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false)
         val playing = speaker(PlayerStatus.PLAYING, aTrack, hasPrevious = true, hasNext = true)
         assertEquals(off, buttonsFor(playing.copy(online = false), busy = false))
         assertEquals(off, buttonsFor(playing, busy = true))
@@ -140,7 +140,7 @@ class SpeakersPresenterTest {
     @Test
     fun `a command that throws still frees the card`() = runTest {
         val presenter = SpeakersPresenter(this) { _, _ -> error("boom") }
-        presenter.press("a", SpeakerAction.CLEAR)
+        presenter.press("a", SpeakerAction.STOP)
         advanceUntilIdle()
         assertEquals(emptySet(), presenter.busy.value)
     }

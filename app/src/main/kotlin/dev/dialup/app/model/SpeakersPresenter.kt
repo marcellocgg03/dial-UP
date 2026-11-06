@@ -20,15 +20,15 @@ import kotlinx.coroutines.launch
 enum class PlayPause { PLAY, PAUSE, DISABLED }
 
 /** Which of a card's buttons can be tapped (plan 07-08, GUI-02). There is no volume button (T-02-36). */
-data class CardButtons(val playPause: PlayPause, val stop: Boolean, val previous: Boolean, val next: Boolean, val clear: Boolean)
+data class CardButtons(val playPause: PlayPause, val stop: Boolean, val previous: Boolean, val next: Boolean)
 
-private val NO_BUTTONS = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false, clear = false)
+private val NO_BUTTONS = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false)
 
 /**
  * Enables a button only when its action can do something: pause while playing; play while paused, or
- * while stopped with something to play; stop while loading, playing or paused; previous and next from the queue's navigation
- * info; clear whenever the speaker is online. An offline speaker, or one whose last command is still running ([busy], Pitfall 9),
- * has every button off.
+ * while stopped with something to play; stop and clear while playback is active/loading or there is a current track/queue
+ * item; previous and next from the queue's navigation info. An offline speaker, or one whose last command is still running
+ * ([busy], Pitfall 9), has every button off.
  */
 fun buttonsFor(s: SpeakerUi, busy: Boolean): CardButtons {
     if (!s.online || busy) return NO_BUTTONS
@@ -38,8 +38,9 @@ fun buttonsFor(s: SpeakerUi, busy: Boolean): CardButtons {
         PlayerStatus.STOPPED -> if (s.queueHasCurrent || s.track != null) PlayPause.PLAY else PlayPause.DISABLED
         PlayerStatus.IDLE, PlayerStatus.LOADING -> PlayPause.DISABLED
     }
-    val stop = s.status == PlayerStatus.PLAYING || s.status == PlayerStatus.PAUSED || s.status == PlayerStatus.LOADING
-    return CardButtons(playPause, stop, previous = s.hasPrevious, next = s.hasNext, clear = true)
+    val stop = s.status == PlayerStatus.PLAYING || s.status == PlayerStatus.PAUSED || s.status == PlayerStatus.LOADING ||
+        s.queueHasCurrent || s.track != null
+    return CardButtons(playPause, stop, previous = s.hasPrevious, next = s.hasNext)
 }
 
 /** The action behind the play/pause button, or null when it is disabled. */
