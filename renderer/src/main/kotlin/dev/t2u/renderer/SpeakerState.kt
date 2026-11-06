@@ -28,24 +28,22 @@ data class SpeakerUi(
 )
 
 /** What a speaker card's buttons can ask of a speaker (plan 07-08, GUI-02). There is deliberately no volume action (T-02-36). */
-enum class SpeakerAction { PLAY, PAUSE, STOP, PREVIOUS, NEXT, CLEAR }
+enum class SpeakerAction { PLAY, PAUSE, STOP, PREVIOUS, NEXT }
 
 /**
  * Runs a card [action] on this speaker. A card command is a local command (no sender id): it goes through the same [Renderer]
- * player methods as the phone's commands, so the YouTube sender sees it as a normal state change. It never resets the player
- * (that path is the gated [Renderer.doClear] of the clear-when-cast-ends setting) and never changes the loudness. CLEAR is a
- * stop followed by [Renderer.clearSpeaker] whether or not that setting is on; that call leaves a speaker playing another
- * source alone (T-03-26). Returns whether the speaker did what was asked.
+ * player methods as the phone's commands, so the YouTube sender sees it as a normal state change. STOP stops and clears the
+ * speaker whether or not the clear-when-cast-ends setting is on; clearing leaves a speaker playing another source alone
+ * (T-03-26). Returns whether the speaker did what was asked.
  */
 suspend fun Renderer.perform(action: SpeakerAction): Boolean = when (action) {
     SpeakerAction.PLAY -> resume()
     SpeakerAction.PAUSE -> pause()
-    SpeakerAction.STOP -> stop()
-    SpeakerAction.PREVIOUS -> previous()
-    SpeakerAction.NEXT -> next()
-    SpeakerAction.CLEAR -> {
+    SpeakerAction.STOP -> {
         stop()
         clearSpeaker()
         true
     }
+    SpeakerAction.PREVIOUS -> previous()
+    SpeakerAction.NEXT -> next()
 }
