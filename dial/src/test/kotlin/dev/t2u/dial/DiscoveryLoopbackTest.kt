@@ -85,6 +85,8 @@ class DiscoveryLoopbackTest {
             assertTrue(launch.statusCode() == 200 || launch.statusCode() == 201, "launch status ${launch.statusCode()}")
             val loc = launch.headers().firstValue("LOCATION").orElseThrow()
             assertTrue(loc.startsWith("http://127.0.0.1:$dialPort/ytcr/apps/YouTube/"), loc)
+            // the request report runs after the response is flushed, so the client can win the race
+            awaitReports(seen) { r -> r.size >= 3 && r.any { it.method == "POST" } }
             val post = seen.first { it.method == "POST" }
             assertEquals("pairingCode=<redacted len 3>&theme=cl", post.body)
             assertEquals("t2u-test", post.headers["User-Agent"])
@@ -93,6 +95,11 @@ class DiscoveryLoopbackTest {
             responder.stop()
             dial.stop()
         }
+    }
+
+    private fun awaitReports(seen: List<DialRequest>, ready: (List<DialRequest>) -> Boolean) {
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while (!ready(seen.toList()) && System.nanoTime() < deadline) Thread.sleep(10)
     }
 
     @Test
