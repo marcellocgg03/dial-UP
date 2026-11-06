@@ -1,6 +1,7 @@
 package dev.dialup.app
 
 import android.app.ActivityManager
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -17,7 +18,8 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import dev.dialup.app.model.NetworkLossWatcher
-import dev.dialup.app.model.WIFI_LOSS_WINDOW_MS
+import dev.dialup.app.model.WIFI_REBIND_WINDOW_MS
+import dev.dialup.app.shouldShowCastNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -94,12 +96,13 @@ class BridgeService : Service(), SpikeHost {
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
     private var startForegroundFailed = false
+    private var foregroundActive = false
     private var logDirFact: File? = null
 
     /** The cast count last seen by [castCountLoop]; the heartbeat carries it so a sleep window shows whether casting was on. */
     @Volatile
     private var casting = 0
-    private var lastNotifiedText: String = notificationText(CastCount(0, 0))
+    private var lastNotifiedText: String? = notificationText(CastCount(0, 0))
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -125,9 +128,10 @@ class BridgeService : Service(), SpikeHost {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildNotification(CastCount(0, 0)),
+                buildNotification(CastCount(0, 0), ongoing = true),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
+            foregroundActive = true
         } catch (t: Throwable) {
             foregroundError = t
         }
@@ -233,6 +237,7 @@ class BridgeService : Service(), SpikeHost {
      */
     override fun onDestroy() {
         evidence.event("service-stop")
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         ServiceHub.cast.value = null
         stopFeatures()
         releaseLocks()
@@ -462,7 +467,7 @@ class BridgeService : Service(), SpikeHost {
         nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Bridge Status", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(count: CastCount, waiting: Boolean = false): Notification {
+    private fun buildNotification(count: CastCount, ongoing: Boolean = foregroundActive): Notification {
         val stop = PendingIntent.getService(
             this,
             0,
@@ -472,24 +477,81 @@ class BridgeService : Service(), SpikeHost {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DialUP")
-            .setContentText(notificationText(count, waiting))
+            .setContentText(notificationText(count))
             .setSmallIcon(R.drawable.ic_stat_dialup)
-            .setOngoing(true)
+            .setOngoing(ongoing)
             .addAction(0, "Stop", stop)
             .build()
     }
 
+    private fun updateCastNotification(count: CastCount, wifiAvailable: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (!shouldShowCastNotification(count, wifiAvailable)) {
+            if (foregroundActive) {
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                foregroundActive = false
+            } else {
+                manager.cancel(NOTIFICATION_ID)
+            }
+            lastNotifiedText = null
+            return
+        }
+
+        val text = notificationText(count)
+        if (!foregroundActive) {
+            val promotionError = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    startCastForeground(count)
+                    null
+                } catch (e: ForegroundServiceStartNotAllowedException) {
+                    e
+                } catch (e: SecurityException) {
+                    e
+                }
+            } else {
+                try {
+                    startCastForeground(count)
+                    null
+                } catch (e: SecurityException) {
+                    e
+                }
+            }
+            if (promotionError == null) {
+                foregroundActive = true
+                lastNotifiedText = text
+                return
+            }
+            evidence.event(
+                "feature-error",
+                mapOf("where" to "promote-foreground", "error" to promotionError.javaClass.name, "message" to promotionError.message),
+            )
+        }
+
+        if (text != lastNotifiedText) {
+            lastNotifiedText = text
+            manager.notify(NOTIFICATION_ID, buildNotification(count))
+        }
+    }
+
+    private fun startCastForeground(count: CastCount) {
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(count, ongoing = true),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
+    }
+
     /**
-     * The Wi-Fi-loss decision (WIFI-01, WIFI-02). Nothing being cast: the service stops at once when the last Wi-Fi client
-     * and hotspot address are gone. A cast waits [WIFI_LOSS_WINDOW_MS]; a return inside it leaves the rebind in
-     * [CastFeature] to run, the window's end stops the service. The switch stays on and [NetworkResume] starts the
-     * service again with Wi-Fi.
+     * The Wi-Fi-loss decision. A short drop keeps the bridge available for in-place rebind and playback resync.
+     * A continuous outage beyond [WIFI_REBIND_WINDOW_MS] stops the bridge/service without sending Stop or Clear to
+     * speakers; [NetworkResume] starts it again when Wi-Fi returns.
      */
     private suspend fun networkLossLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()
         if (sources.isEmpty()) return
         val present: Flow<Boolean> = combine(sources.map { it.wifiPresent }) { all -> all.all { it } }
-        val castingNow: Flow<Int> = sumCastCounts(features.filterIsInstance<CastCountSource>()).map { it.casting }
+        val castingNow: Flow<Int> = sumNetworkLossCastCounts(features.filterIsInstance<CastCountSource>()).map { it.casting }
         NetworkLossWatcher(present, castingNow, SystemClock::elapsedRealtime) { action, downMs ->
             if (!AppSettings.of(this).data.value.bridgeEnabled) {
                 evidence.event("net-pause", mapOf("skipped" to "switch-off"))
@@ -497,8 +559,9 @@ class BridgeService : Service(), SpikeHost {
             }
             evidence.event(
                 "net-pause",
-                mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_LOSS_WINDOW_MS, "casting" to casting),
+                mapOf("action" to action.wire, "downMs" to downMs, "windowMs" to WIFI_REBIND_WINDOW_MS, "casting" to casting),
             )
+            features.filterIsInstance<CastFeature>().firstOrNull()?.onNetworkLossExpired()
             NetworkResume.arm(this)
             stopSelf()
         }.run()
@@ -519,18 +582,14 @@ class BridgeService : Service(), SpikeHost {
                     .distinctUntilChanged()
             }
         var lastCount: CastCount? = null
-        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, waiting -> count to waiting }.collect { (count, waiting) ->
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, unavailable -> count to unavailable }.collect { (count, unavailable) ->
             if (count != lastCount) {
                 lastCount = count
                 casting = count.casting
                 applyPlayLocks(playLocks.onCasting(count.casting), "casting")
                 evidence.event("cast-count", mapOf("casting" to count.casting, "total" to count.total))
             }
-            val text = notificationText(count, waiting)
-            if (text != lastNotifiedText) {
-                lastNotifiedText = text
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(count, waiting))
-            }
+            updateCastNotification(count, wifiAvailable = !unavailable)
         }
     }
 

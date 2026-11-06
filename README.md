@@ -24,6 +24,9 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Forced audio format**: Automatic by default; Direct, MP4, AAC stream (adts), FLAC and MP3 can be forced. Automatic will play in the highest quality audio format a given renderer supports natively
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
+- **Wi-Fi recovery**: Brief outages are given five seconds to rebind and resync; after that, the phone-side bridge stops
+  without stopping renderer playback and restarts when Wi-Fi returns. The cast notification appears only while Wi-Fi is
+  available and casting is active.
 
 ## Privacy
 

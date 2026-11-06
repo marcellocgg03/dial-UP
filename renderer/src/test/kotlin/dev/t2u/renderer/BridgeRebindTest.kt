@@ -7,6 +7,7 @@ package dev.t2u.renderer
 // Every test is `= h.run<Unit> { ... }`: JUnit silently skips a test whose expression body returns a value.
 
 import kotlinx.coroutines.delay
+import dev.t2u.lounge.PlayerStatus
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -199,8 +200,8 @@ class BridgeRebindTest {
     }
 
     @Test
-    @DisplayName("while the network is down no speaker poll runs and a stop on the speaker is not mirrored; after the move polling resumes")
-    fun pollsPauseWhileTheNetworkIsDown() = h.run<Unit> {
+    @DisplayName("a short network loss pauses polling, then resyncs a track whose speaker buffer stopped")
+    fun pollsPauseAndPlaybackResyncsAfterNetworkLoss() = h.run<Unit> {
         val bridge = h.newBridge()
         bridge.start()
         h.launch(bridge)
@@ -210,7 +211,9 @@ class BridgeRebindTest {
         h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
 
         bridge.networkLost()
-        // the stream broke on the speaker: with polls running the renderer would mirror this stop to the phone
+        h.awaitUntil("the visible cast count remains active") { bridge.visibleCastCount.value.casting == 1 }
+        h.awaitUntil("the underlying count remains active") { bridge.castCount.value.casting == 1 }
+        // the stream broke on the speaker; the paused poll must not mirror the stop to the sender
         h.fakeRenderer.state.transport = "STOPPED"
         delay(150) // a poll that was already sending finishes
         val polled = h.speakerCount("GetTransportInfo")
@@ -219,9 +222,14 @@ class BridgeRebindTest {
         assertEquals("PLAYING", rendererStatus(bridge), "the phone still sees the player playing")
         assertTrue(h.events.none { it.first == "renderer" && (it.second["message"] as? String)?.contains("mirroring the stop") == true })
 
-        h.fakeRenderer.state.transport = "PLAYING"
+        val uriCount = h.setAvTransportUris().size
+        val playCount = h.speakerCount("Play")
         bridge.rebindNetwork(h.network(other))
-        h.awaitUntil("polling resumes after the move") { h.speakerCount("GetTransportInfo") > polled }
+        h.awaitUntil("the old track is reloaded from the new address") { h.setAvTransportUris().size > uriCount }
+        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris().last()))
+        h.awaitUntil("playback restarts") { h.speakerCount("Play") > playCount }
+        h.awaitUntil("polling resumes") { h.speakerCount("GetTransportInfo") > polled }
+        assertEquals("PLAYING", rendererStatus(bridge))
     }
 
     @Test
@@ -247,8 +255,8 @@ class BridgeRebindTest {
     }
 
     @Test
-    @DisplayName("a track cast before the move is re-set on the speaker with a URL on the new address and the player is still PLAYING")
-    fun aCastTrackIsResetOnTheNewAddress() = h.run<Unit> {
+    @DisplayName("a track cast before the move is re-set on the speaker at its reported position")
+    fun aCastTrackIsResetAfterRebind() = h.run<Unit> {
         val bridge = h.newBridge()
         bridge.start()
         h.launch(bridge)
@@ -257,12 +265,14 @@ class BridgeRebindTest {
         assertEquals("127.0.0.1", hostOf(h.setAvTransportUris().first()))
         h.awaitUntil("the player plays") { rendererStatus(bridge) == "PLAYING" }
 
+        val setUriCount = h.setAvTransportUris().size
+        val playCount = h.speakerCount("Play")
         bridge.networkLost()
         bridge.rebindNetwork(h.network(other))
-        h.awaitUntil("the track is re-set on the speaker") { h.setAvTransportUris().size >= 2 }
 
-        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris()[1]))
-        h.awaitUntil("Play after the re-set") { h.speakerCount("Play") >= 2 }
+        h.awaitUntil("the track is reset on the speaker") { h.setAvTransportUris().size > setUriCount }
+        assertEquals("127.0.0.2", hostOf(h.setAvTransportUris().last()))
+        h.awaitUntil("the receiver is told to play again") { h.speakerCount("Play") > playCount }
         assertEquals("PLAYING", rendererStatus(bridge))
     }
 }

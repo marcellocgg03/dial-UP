@@ -90,6 +90,75 @@ class BridgeGaplessTest {
     }
 
     @Test
+    @DisplayName("a same-address network return keeps the current stream alive and gapless advances only when the speaker advances")
+    fun sameAddressNetworkReturnKeepsTheCurrentStreamAlive() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig().copy(prefetch = true))
+        castAbc(bridge)
+
+        h.awaitUntil("the first track is loaded and the second is queued") {
+            h.setAvTransportUris().isNotEmpty() && h.fakeRenderer.state.nextUri.isNotEmpty()
+        }
+        h.awaitUntil("the renderer is playing") { rendererState(bridge)["status"]?.jsonPrimitive?.content == "PLAYING" }
+        val currentUri = h.fakeRenderer.state.currentUri
+        val nextUri = h.fakeRenderer.state.nextUri
+        val loads = h.setAvTransportUris().size
+        val plays = h.speakerCount("Play")
+        val stops = h.speakerCount("Stop")
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(h.loopback))
+
+        assertEquals(currentUri, h.fakeRenderer.state.currentUri, "the current stream remains loaded")
+        assertEquals(nextUri, h.fakeRenderer.state.nextUri, "the queued track remains queued")
+        assertEquals(loads, h.setAvTransportUris().size, "the current stream was not reloaded")
+        assertEquals(plays, h.speakerCount("Play"), "the current stream was not restarted")
+        assertEquals(stops, h.speakerCount("Stop"), "the current stream was not stopped")
+        assertTrue(h.events.none { it.first == "media-rebind" }, "same-address recovery leaves the media server running")
+        assertTrue(h.events.none {
+            it.first == "renderer" && it.second["message"] == "Renderer continued into the next track"
+        }, "rebind alone does not advance the queue")
+
+        h.fakeRenderer.advance()
+        h.awaitUntil("normal gapless handoff advances to the second track") {
+            h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == B }
+        }
+        assertEquals(loads, h.setAvTransportUris().size, "normal gapless playback still avoids a reload")
+    }
+
+    @Test
+    @DisplayName("a queued track that starts while Wi-Fi is down is adopted on rebind without reloading the previous track")
+    fun aQueuedTrackThatStartsDuringNetworkLossIsAdoptedOnRebind() = h.run<Unit> {
+        val bridge = h.newBridge(h.testConfig().copy(prefetch = true))
+        castAbc(bridge)
+
+        h.awaitUntil("the first track is loaded and the second is queued") {
+            h.setAvTransportUris().isNotEmpty() && h.fakeRenderer.state.nextUri.isNotEmpty()
+        }
+        h.awaitUntil("the player is reported as casting") { bridge.visibleCastCount.value.casting == 1 }
+        val loads = h.setAvTransportUris().size
+        val stops = h.speakerCount("Stop")
+        val plays = h.speakerCount("Play")
+
+        bridge.networkLost()
+        assertEquals(1, bridge.visibleCastCount.value.casting, "a short outage retains the cast state")
+        h.fakeRenderer.advance()
+
+        bridge.rebindNetwork(h.network(java.net.InetAddress.getByName("127.0.0.2")))
+        h.awaitUntil("the sender follows the queued track") {
+            h.messages().any { it.first == "nowPlaying" && it.second["videoId"] == B }
+        }
+
+        assertEquals(loads, h.setAvTransportUris().size, "the current track was not reloaded")
+        assertEquals(stops, h.speakerCount("Stop"), "the hand-off did not stop the speaker")
+        assertEquals(plays, h.speakerCount("Play"), "the already-playing queued track was not played again")
+        assertTrue(h.events.any {
+            it.first == "renderer" &&
+                (it.second["message"] as? String) == "Renderer continued into the next track" &&
+                it.second["via"] == "rebind"
+        })
+    }
+
+    @Test
     @DisplayName("a speaker without SetNextAVTransportURI advances at the end of the track with the prepared track")
     fun aSpeakerWithoutSetNextAdvancesWithThePreparedTrack() {
         h.close()

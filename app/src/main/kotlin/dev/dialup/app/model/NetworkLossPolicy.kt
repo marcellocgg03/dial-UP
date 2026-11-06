@@ -19,43 +19,30 @@ enum class LossAction(val wire: String) {
     STOP_EXPIRED("expired"),
 }
 
-/**
- * How long a cast waits for Wi-Fi to come back before the service stops (WIFI-02). The timed outage test of plan 07.1-11
- * tunes this value.
- */
-const val WIFI_LOSS_WINDOW_MS = 120_000L
-
-/**
- * How long a bridge with nothing being cast waits after Wi-Fi is gone before the service stops. Zero: the network
- * callbacks already are the grace (WIFI-01). The timed outage test of plan 07.1-11 may raise it.
- */
-const val IDLE_STOP_DELAY_MS = 0L
+/** A Wi-Fi outage this short is treated as a blip: keep the bridge available to rebind and resync. */
+const val WIFI_REBIND_WINDOW_MS = 5_000L
 
 /**
  * The whole decision for a given moment of a Wi-Fi outage. A phone with a Wi-Fi client or hotspot address continues;
- * without one and with nothing being cast the service stops at once; with a cast it waits [windowMs] and then stops.
+ * otherwise the bridge remains available for [windowMs] so a blip can rebind, then stops whether or not a cast is active.
  */
-fun lossAction(wifiPresent: Boolean, casting: Int, downForMs: Long, windowMs: Long = WIFI_LOSS_WINDOW_MS): LossAction = when {
+fun lossAction(wifiPresent: Boolean, casting: Int, downForMs: Long, windowMs: Long = WIFI_REBIND_WINDOW_MS): LossAction = when {
     wifiPresent -> LossAction.CONTINUE
+    downForMs.coerceAtLeast(0L) < windowMs -> LossAction.WAIT
     casting <= 0 -> LossAction.STOP_IDLE
-    downForMs.coerceAtLeast(0L) >= windowMs -> LossAction.STOP_EXPIRED
-    else -> LossAction.WAIT
+    else -> LossAction.STOP_EXPIRED
 }
 
 /**
- * Turns two flows (is there a Wi-Fi client or hotspot address, how many renderers are being cast to) into a single stop
- * decision. The window is keyed on system-level presence, never on the bridge's own network state, so a return shortly
- * before the window ends whose rebind is still running is not cut off (RESEARCH Pitfall 2). The start of the outage is
- * kept across changes of the cast count, so a count change during an outage does not restart the window. A cast that
- * ends during the outage turns the wait into the idle stop at once (RESEARCH Pitfall 8). [onStop] runs once, with the
- * action and how long the network had been gone, and then [run] returns.
+ * Turns Wi-Fi presence and the active-cast count into a stop decision. The outage window is keyed on system-level
+ * presence, never on the bridge's own network state, and is shared by idle and casting states so a cast-count change
+ * cannot restart or prematurely end a blip recovery. [onStop] runs once after a continuous outage and [run] returns.
  */
 class NetworkLossWatcher(
     private val wifiPresent: Flow<Boolean>,
     private val casting: Flow<Int>,
     private val clock: () -> Long,
-    private val windowMs: Long = WIFI_LOSS_WINDOW_MS,
-    private val idleStopDelayMs: Long = IDLE_STOP_DELAY_MS,
+    private val windowMs: Long = WIFI_REBIND_WINDOW_MS,
     private val onStop: suspend (LossAction, Long) -> Unit,
 ) {
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -69,15 +56,9 @@ class NetworkLossWatcher(
                 return@transformLatest
             }
             val since = lostAt ?: clock().also { lostAt = it }
-            if (!isCasting) {
-                val wait = idleStopDelayMs - (clock() - since)
-                if (wait > 0) delay(wait)
-                emit(LossAction.STOP_IDLE to (clock() - since))
-            } else {
-                val wait = windowMs - (clock() - since)
-                if (wait > 0) delay(wait)
-                emit(LossAction.STOP_EXPIRED to (clock() - since))
-            }
+            val wait = windowMs - (clock() - since)
+            if (wait > 0) delay(wait)
+            emit((if (isCasting) LossAction.STOP_EXPIRED else LossAction.STOP_IDLE) to (clock() - since))
         }.first()
         onStop(decision.first, decision.second)
     }

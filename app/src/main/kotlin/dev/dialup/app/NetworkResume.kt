@@ -14,7 +14,7 @@ import android.util.Log
 import java.net.Inet4Address
 
 /**
- * The service stops itself when Wi-Fi is lost with nothing cast, or after the cast wait window (plan 07.1-01); the switch in
+ * The service stops itself after Wi-Fi has been absent beyond the short rebind window (plan 07.1-01); the switch in
  * the app stays on. This object is what brings it back. [arm] registers a Wi-Fi network callback with a PendingIntent, which
  * the system keeps delivering even after the app process was killed; [NetworkResumeReceiver] then starts the service once a
  * Wi-Fi client address exists, the switch is on and the battery exemption is held. The start paths that find no network

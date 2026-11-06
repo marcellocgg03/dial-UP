@@ -197,14 +197,16 @@ class BridgeMediaWiringTest {
         h.connectSender()
         h.rpc("cl", "setPlaylist", h.playlist(VID))
 
+        var rendererState = ""
         var error: String? = null
-        h.awaitUntil("the renderer reports a failure") {
-            error = bridge.state()["renderers"].toString().let { Regex("\"lastError\":\"([^\"]*)\"").find(it)?.groupValues?.get(1) }
-            error != null
+        h.awaitUntil("the renderer reports a failure and stops") {
+            rendererState = bridge.state()["renderers"].toString()
+            error = Regex("\"lastError\":\"([^\"]*)\"").find(rendererState)?.groupValues?.get(1)
+            error != null && rendererState.contains("\"status\":\"STOPPED\"")
         }
         assertTrue(assertNotNull(error).contains("file builder"), "lastError was $error")
         assertTrue(h.setAvTransportUris().isEmpty(), "nothing was loaded on the speaker")
-        assertTrue(bridge.state()["renderers"].toString().contains("\"status\":\"STOPPED\""), "the renderer is stopped: ${bridge.state()}")
+        assertTrue(rendererState.contains("\"status\":\"STOPPED\""), "the renderer is stopped: $rendererState")
         assertEquals("true", bridge.state()["running"].toString())
     }
 }

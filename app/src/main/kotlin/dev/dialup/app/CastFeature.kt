@@ -60,10 +60,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * was applied is logged as a `config` event and shown under "config" by `cast-state`, and `reload-config` restarts the
  * bridge (without clearing the speakers) so an edited file takes effect without reinstalling.
  *
- * A Wi-Fi change does not restart the bridge (plan 05-10, SVC-04): every address change freezes the renderers at once
- * ([Bridge.networkLost]); after a 2 s debounce [rebindAction] decides, and a new address waits up to 20 s for a validated
- * Wi-Fi network and then moves the running bridge in place ([Bridge.rebindNetwork]), so receivers, lounge sessions and
- * the playing track survive. Only `reload-config` still restarts it. A start that throws, or finds no Wi-Fi, is logged
+ * A Wi-Fi blip pauses renderer polling at once, then after a 2 s debounce the bridge moves in place and resyncs playback
+ * when Wi-Fi returns. A continuous outage beyond [dev.dialup.app.model.WIFI_REBIND_WINDOW_MS] stops the bridge/service
+ * without sending Stop or Clear to speakers; Wi-Fi return starts a fresh bridge. Only `reload-config` otherwise restarts it.
+ * A start that throws, or finds no Wi-Fi, is logged
  * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on (GUI-10).
  */
 class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
@@ -80,6 +80,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     private var consecutiveBindFailures = 0
     private var countJob: Job? = null
     private var updaterJob: Job? = null
+    @Volatile private var networkLossExpired = false
     @Volatile private var updater: YtDlpUpdater? = null
     private val settingsState = MutableStateFlow<Settings?>(null)
 
@@ -183,8 +184,11 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     private val count = MutableStateFlow(CastCount(0, 0))
 
-    /** Derived from the bridge's player states, so CastCount(0, 0) until the bridge exists (D-06). */
+    private val networkLossCount = MutableStateFlow(CastCount(0, 0))
+
+    /** Derived from the bridge's card-visible state and used only to decide whether to show the cast notification (D-06). */
     override val castCount: StateFlow<CastCount> = count.asStateFlow()
+    override val networkLossCastCount: StateFlow<CastCount> = networkLossCount.asStateFlow()
 
     // ----- SpikeFeature --------------------------------------------------------------------------
 
@@ -242,12 +246,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     /**
      * Every explicit stop ends here: the header switch (plan 07-04 persists it first), the notification Stop and adb stop.
-     * D-03: playback ends, so every speaker playing our stream gets a Stop; it is emptied as well (CAST-06) only when the
-     * "clear the speaker when a cast ends" setting is on (GUI-08). Then every receiver says byebye and goodbye before the
-     * service goes. The stop or clear is bounded to about 4 s and runs in parallel across speakers, so the worst case
-     * stays short.
+     * Explicit stops end playback and may clear speakers according to the setting. A Wi-Fi-loss timeout only stops the local
+     * bridge; it leaves playback already accepted by speakers alone.
      */
     override fun stop() {
+        val preserveSpeakerPlayback = networkLossExpired
+        networkLossExpired = false
         networkUpState.value = true
         wifiPresentState.value = true
         host?.let { HousekeepingAlarm.cancel(it.context) }
@@ -261,12 +265,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         // The shutdown runs on the process scope, never on the calling (main) thread, and never waits here (review WR-02).
         // The token is registered before this returns, so a start on a new service instance sees the stop in flight (CR-01 a).
         val h = host
-        val clear = settings?.data?.value?.clearOnCastEnd == true
+        val clear = !preserveSpeakerPlayback && settings?.data?.value?.clearOnCastEnd == true
         val token = BridgeLifecycle.beginStop()
         BridgeLifecycle.scope.launch {
             val started = System.nanoTime()
             try {
-                BridgeLifecycle.mutex.withLock { stopBridge(clearSpeakers = clear, stopSpeakers = true) }
+                BridgeLifecycle.mutex.withLock { stopBridge(clearSpeakers = clear, stopSpeakers = !preserveSpeakerPlayback) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -277,6 +281,11 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 token.complete()
             }
         }
+    }
+
+    /** A Wi-Fi-loss timeout stops the local bridge, not playback already accepted by the speaker. */
+    fun onNetworkLossExpired() {
+        networkLossExpired = true
     }
 
     /**
@@ -445,7 +454,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         b.startSuspending()
         bridge = b
         startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat)
-        countJob = h.scope.launch { b.castCount.collect { count.value = CastCount(it.casting, it.total) } }
+        countJob = h.scope.launch {
+            combine(b.visibleCastCount, b.castCount) { visible, active -> visible to active }.collect { (visible, active) ->
+                count.value = CastCount(visible.casting, visible.total)
+                networkLossCount.value = CastCount(active.casting, active.total)
+            }
+        }
         scheduleWarmUp(h, b)
     }
 
@@ -463,6 +477,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             b?.stop(clearSpeakers, stopSpeakers)
         } finally {
             count.value = CastCount(0, 0)
+            networkLossCount.value = CastCount(0, 0)
         }
     }
 
