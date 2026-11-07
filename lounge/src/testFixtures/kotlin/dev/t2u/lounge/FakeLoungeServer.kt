@@ -27,6 +27,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -82,6 +83,10 @@ class FakeLoungeServer : AutoCloseable {
 
     /** The next this many message POSTs (bind with count >= 1) answer 500 and are not recorded in [sent]. */
     val failNextSends = AtomicInteger(0)
+
+    /** Holds message POST responses while set. */
+    @Volatile
+    var sendGate: CompletableDeferred<Unit>? = null
 
     private val screenIdCalls = AtomicInteger(0)
     private val freshCounter = AtomicInteger(0)
@@ -177,6 +182,7 @@ class FakeLoungeServer : AutoCloseable {
                         call.respondText("", PLAIN, HttpStatusCode.InternalServerError)
                     } else {
                         sent.getOrPut(theme) { CopyOnWriteArrayList() }.add(form)
+                        sendGate?.await()
                         call.respondText("7\n[1,4,0]", PLAIN)
                     }
                 }

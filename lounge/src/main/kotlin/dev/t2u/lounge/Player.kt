@@ -35,8 +35,16 @@ data class PlayerState(
     val senderCode: Int get() = if (buffering && status == PlayerStatus.PLAYING) PlayerStatus.LOADING.code else status.code
 }
 
-/** [aid] is the id of the sender command this state answers (null for a state the player raised itself). */
-data class PlayerStateEvent(val aid: Int?, val current: PlayerState, val previous: PlayerState?)
+/**
+ * [aid] identifies the sender command (null for an unsolicited state). [fromVolumeChange] identifies
+ * the operation that produced the snapshots; other state fields can also change while it runs.
+ */
+data class PlayerStateEvent(
+    val aid: Int?,
+    val current: PlayerState,
+    val previous: PlayerState?,
+    val fromVolumeChange: Boolean = false,
+)
 
 /** A listener must not break playback: its exceptions are caught and reported to [Player.events]. */
 fun interface PlayerStateListener {
@@ -287,11 +295,21 @@ abstract class Player {
 
     /** Sends the volume to the speaker (level 0 when muting with zeroVolumeLevelOnMute) and reports the new state. */
     suspend fun setVolume(volume: Volume, aid: Int? = null): Boolean {
+        val before = getState()
+        val result = applyVolume(volume)
+        if (result) emitState(PlayerStateEvent(aid, getState(), before, fromVolumeChange = true))
+        return result
+    }
+
+    /**
+     * Applies a volume without reading unrelated playback state or emitting a state event. The caller must report
+     * the speaker's actual volume, including after a failure.
+     */
+    suspend fun applyVolume(volume: Volume): Boolean {
         val v = if (zeroVolumeLevelOnMute && volume.muted && volume.level > 0) volume.copy(level = 0) else volume
         log("setVolume", "level" to v.level, "muted" to v.muted)
-        val before = getState()
         val result = doSetVolume(v)
-        if (result) emitState(PlayerStateEvent(aid, getState(), before))
+        if (!result) log("setVolumeFailed", "level" to v.level, "muted" to v.muted)
         return result
     }
 

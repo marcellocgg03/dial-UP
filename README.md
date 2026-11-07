@@ -26,6 +26,9 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
+For volume requests that include a button direction, DialUP avoids applying a stale target in the opposite direction
+and reports the speaker's current volume back to the sender. Slider requests without a direction remain absolute.
+
 ## Privacy
 
 - No account, no server of its own and no analytics. Everything runs locally.

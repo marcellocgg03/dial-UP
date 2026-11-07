@@ -5,10 +5,13 @@ package dev.t2u.lounge
 
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.lanHttpClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -252,6 +255,19 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun mutePolicyReportsActualVolumeEvenWhenItDoesNotChange() = run {
+        startedApp()
+        connect(app = "android-phone-21.16.256")
+        player.volume = Volume(0, true)
+        val before = count("cl", "onVolumeChanged")
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "40"); put("muted", "true") })
+        awaitUntil(what = "unchanged muted volume reported") { count("cl", "onVolumeChanged") > before }
+        val reported = messages("cl").last { it.first == "onVolumeChanged" }.second
+        assertEquals("0", reported["volume"])
+        assertEquals("true", reported["muted"])
+    }
+
+    @Test
     fun explicitDisconnectOfTheLastSenderResetsThePlayer() = run {
         val a = startedApp()
         connect()
@@ -430,7 +446,7 @@ class YouTubeAppTest {
     }
 
     @Test
-    fun threeVolumeEventsWithin200msProduceOneVolumeMessage() = run {
+    fun successiveVolumeRequestsReportTheLatestVolume() = run {
         startedApp()
         connect()
         player.volume = Volume(30, false)
@@ -442,10 +458,284 @@ class YouTubeAppTest {
             "setVolume" to buildJsonObject { put("volume", "50") },
         )
         awaitUntil(what = "three volume calls") { player.calls.count { it.startsWith("volume:") } == 3 }
-        awaitUntil(what = "one volume message") { count("cl", "onVolumeChanged") > before }
-        delay(600)
-        assertEquals(before + 1, count("cl", "onVolumeChanged"))
+        awaitUntil(what = "latest volume message") {
+            messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).any { it.second["volume"] == "50" }
+        }
         assertEquals("50", messages("cl").last { it.first == "onVolumeChanged" }.second["volume"])
+    }
+
+    private suspend fun blockSendQueue(): CompletableDeferred<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        fake.sendGate = gate
+        val before = count("cl", "nowPlaying")
+        rpc("cl", "getNowPlaying")
+        awaitUntil(what = "send queue blocked") { count("cl", "nowPlaying") > before }
+        return gate
+    }
+
+    private fun releaseSendQueue(gate: CompletableDeferred<Unit>) {
+        fake.sendGate = null
+        gate.complete(Unit)
+    }
+
+    private suspend fun incomingBarrier() {
+        val before = events.count { (kind, fields) -> kind == "lounge-app" && fields["name"] == "volumeTestBarrier" }
+        rpc("cl", "volumeTestBarrier")
+        awaitUntil(what = "incoming messages processed") {
+            events.count { (kind, fields) -> kind == "lounge-app" && fields["name"] == "volumeTestBarrier" } > before
+        }
+    }
+
+    @Test
+    fun newerVolumeUpRequestCancelsOlderReportBeforeSlowSpeakerRead() = run {
+        assertNewVolumeCancelsOlderReport(30, 39, 42, 9, 12)
+    }
+
+    @Test
+    fun newerVolumeDownRequestCancelsOlderReportBeforeSlowSpeakerRead() = run {
+        assertNewVolumeCancelsOlderReport(60, 51, 48, -9, -12)
+    }
+
+    private suspend fun assertNewVolumeCancelsOlderReport(start: Int, first: Int, last: Int, firstDelta: Int, lastDelta: Int) {
+        startedApp()
+        connect()
+        player.volume = Volume(start, false)
+        val before = count("cl", "onVolumeChanged")
+        val sendGate = blockSendQueue()
+        val readStarted = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        try {
+            rpc("cl", "setVolume", buildJsonObject { put("volume", "$first"); put("delta", "$firstDelta") })
+            awaitUntil(what = "first volume applied") { player.volume.level == first }
+            incomingBarrier()
+            player.beforeGetVolume = {
+                readStarted.complete(Unit)
+                releaseRead.await()
+            }
+            rpc("cl", "setVolume", buildJsonObject { put("volume", "$last"); put("delta", "$lastDelta") })
+            readStarted.await()
+            releaseSendQueue(sendGate)
+            delay(100)
+            assertEquals(before, count("cl", "onVolumeChanged"), "obsolete $first must not be reported")
+        } finally {
+            player.beforeGetVolume = {}
+            releaseRead.complete(Unit)
+            releaseSendQueue(sendGate)
+        }
+        awaitUntil(what = "volume $last reported") {
+            messages("cl").any { it.first == "onVolumeChanged" && it.second["volume"] == "$last" }
+        }
+        assertEquals(listOf("$last"), messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).map { it.second["volume"] })
+        assertEquals(listOf("volume:$first:false", "volume:$last:false"), player.calls.filter { it.startsWith("volume:") })
+    }
+
+    @Test
+    fun unchangedVolumeRequestStillReplacesOlderReport() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        val before = count("cl", "onVolumeChanged")
+        rpcBatch(
+            "cl",
+            "setVolume" to buildJsonObject { put("volume", "40") },
+            "setVolume" to buildJsonObject { put("volume", "40") },
+        )
+        awaitUntil(what = "volume confirmed") { count("cl", "onVolumeChanged") > before }
+        assertTrue(messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).all { it.second["volume"] == "40" })
+        assertEquals(1, player.calls.count { it.startsWith("volume:") })
+    }
+
+    @Test
+    fun repeatedIdenticalButtonRequestsReceiveFeedbackDuringTheHold() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        val before = count("cl", "onVolumeChanged")
+        coroutineScope {
+            val hold = async {
+                repeat(12) {
+                    rpc("cl", "setVolume", buildJsonObject { put("volume", "33"); put("delta", "3") })
+                    delay(100)
+                }
+            }
+            awaitUntil(timeoutMs = 700, what = "volume feedback during button hold") {
+                count("cl", "onVolumeChanged") > before
+            }
+            assertFalse(hold.isCompleted)
+            hold.await()
+        }
+        assertEquals(1, player.calls.count { it == "volume:33:false" })
+    }
+
+    @Test
+    fun volumeDownNeverRaisesSpeakerWhenSenderTargetsMoveBackwards() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(50, false)
+        val before = count("cl", "onVolumeChanged")
+        rpcBatch(
+            "cl",
+            "setVolume" to buildJsonObject { put("volume", "40"); put("delta", "-6") },
+            "setVolume" to buildJsonObject { put("volume", "46"); put("delta", "-9") },
+            "setVolume" to buildJsonObject { put("volume", "34"); put("delta", "-6") },
+            "setVolume" to buildJsonObject { put("volume", "43"); put("delta", "-3") },
+        )
+        incomingBarrier()
+        awaitUntil(what = "final volume confirmed") {
+            messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).lastOrNull()?.second?.get("volume") == "34"
+        }
+        assertEquals(listOf("volume:40:false", "volume:34:false"), player.calls.filter { it.startsWith("volume:") })
+        assertEquals(Volume(34, false), player.volume)
+    }
+
+    @Test
+    fun volumeUpNeverLowersSpeakerWhenSenderTargetsMoveBackwards() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(20, false)
+        rpcBatch(
+            "cl",
+            "setVolume" to buildJsonObject { put("volume", "26"); put("delta", "9") },
+            "setVolume" to buildJsonObject { put("volume", "23"); put("delta", "3") },
+            "setVolume" to buildJsonObject { put("volume", "32"); put("delta", "6") },
+            "setVolume" to buildJsonObject { put("volume", "29"); put("delta", "6") },
+        )
+        incomingBarrier()
+        assertEquals(listOf("volume:26:false", "volume:32:false"), player.calls.filter { it.startsWith("volume:") })
+        assertEquals(Volume(32, false), player.volume)
+    }
+
+    @Test
+    fun changingButtonDirectionAndUsingSliderRemainResponsive() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(50, false)
+        rpcBatch(
+            "cl",
+            "setVolume" to buildJsonObject { put("volume", "40"); put("delta", "-3") },
+            "setVolume" to buildJsonObject { put("volume", "43"); put("delta", "3") },
+            "setVolume" to buildJsonObject { put("volume", "25") },
+            "setVolume" to buildJsonObject { put("volume", "60"); put("delta", "0") },
+            "setVolume" to buildJsonObject { put("volume", "57"); put("delta", -3) },
+        )
+        incomingBarrier()
+        assertEquals(
+            listOf("volume:40:false", "volume:43:false", "volume:25:false", "volume:60:false", "volume:57:false"),
+            player.calls.filter { it.startsWith("volume:") },
+        )
+    }
+
+    @Test
+    fun directionalRequestUsesCurrentExternalSpeakerVolumeAndReportsItWhenTargetIsStale() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(20, false)
+        val before = count("cl", "onVolumeChanged")
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "40"); put("delta", "-3") })
+        awaitUntil(what = "actual external volume reported") { count("cl", "onVolumeChanged") > before }
+        assertEquals("20", messages("cl").last { it.first == "onVolumeChanged" }.second["volume"])
+        assertTrue(player.calls.none { it.startsWith("volume:") })
+    }
+
+    @Test
+    fun directionalRequestPreservesMutePolicyWhenLevelIsStale() = run {
+        startedApp()
+        connect(app = "youtube-desktop")
+        player.volume = Volume(20, false)
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "40"); put("delta", "-3"); put("muted", "true") })
+        awaitUntil(what = "speaker muted at current level") { "volume:20:true" in player.calls }
+        assertEquals(Volume(20, true), player.volume)
+    }
+
+    @Test
+    fun invalidVolumeDeltaIsLoggedAndNotApplied() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(20, false)
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "40"); put("delta", "bad") })
+        awaitUntil(what = "malformed delta logged") {
+            events.any { (kind, fields) -> kind == "lounge-app" && fields["reason"] == "delta is not a number" }
+        }
+        assertTrue(player.calls.none { it.startsWith("volume:") })
+        assertEquals(Volume(20, false), player.volume)
+    }
+
+    @Test
+    fun volumeCommandsDoNotWaitForPlaybackPosition() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        val blockedPosition = CompletableDeferred<Unit>()
+        player.beforeGetPosition = { blockedPosition.await() }
+        val beforeVolume = count("cl", "onVolumeChanged")
+        try {
+            rpc("cl", "setVolume", buildJsonObject { put("volume", "40") })
+            awaitUntil(what = "volume reported without playback position") { count("cl", "onVolumeChanged") > beforeVolume }
+            assertEquals("40", messages("cl").last { it.first == "onVolumeChanged" }.second["volume"])
+        } finally {
+            player.beforeGetPosition = {}
+            blockedPosition.complete(Unit)
+        }
+    }
+
+    @Test
+    fun getVolumeCancelsAnOlderQueuedReport() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        val before = count("cl", "onVolumeChanged")
+        val gate = blockSendQueue()
+        try {
+            rpcBatch(
+                "cl",
+                "setVolume" to buildJsonObject { put("volume", "40") },
+                "getVolume" to null,
+            )
+            awaitUntil(what = "volume read") { player.volume.level == 40 }
+            incomingBarrier()
+        } finally {
+            releaseSendQueue(gate)
+        }
+        awaitUntil(what = "current volume returned") {
+            messages("cl").any { it.first == "onVolumeChanged" && it.second["volume"] == "40" }
+        }
+        delay(300)
+        assertEquals(listOf("40"), messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).map { it.second["volume"] })
+    }
+
+    @Test
+    fun externalVolumeStateCancelsAnOlderQueuedReport() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        val before = count("cl", "onVolumeChanged")
+        val gate = blockSendQueue()
+        try {
+            rpc("cl", "setVolume", buildJsonObject { put("volume", "40") })
+            awaitUntil(what = "first volume applied") { player.volume.level == 40 }
+            incomingBarrier()
+            player.volume = Volume(45, false)
+            player.notifyExternalStateChange(null)
+        } finally {
+            releaseSendQueue(gate)
+        }
+        awaitUntil(what = "external volume reported") {
+            messages("cl").any { it.first == "onVolumeChanged" && it.second["volume"] == "45" }
+        }
+        delay(300)
+        assertEquals(listOf("45"), messages("cl").filter { it.first == "onVolumeChanged" }.drop(before).map { it.second["volume"] })
+    }
+
+    @Test
+    fun failedVolumeRequestReportsActualVolume() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+        player.volumeResult = false
+        val before = count("cl", "onVolumeChanged")
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "40") })
+        awaitUntil(what = "actual volume after failure") { count("cl", "onVolumeChanged") > before }
+        assertEquals("30", messages("cl").last { it.first == "onVolumeChanged" }.second["volume"])
     }
 
     @Test
