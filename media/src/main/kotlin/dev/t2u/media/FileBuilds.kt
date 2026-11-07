@@ -147,10 +147,6 @@ class FileBuilder(
 
     fun discardWhenUnused(file: File) = cache.discardWhenUnused(file)
 
-    /** True while a build or a source download of [videoId] runs: its source must not be evicted under it. */
-    private fun isBusy(videoId: String): Boolean =
-        synchronized(lock) { buildJobs.keys.any { it.startsWith("$videoId-") } || sourceJobs.containsKey(videoId) }
-
     // ------------------------------------------------------------------------------------ names
 
     private fun keyOf(videoId: String, format: String, startAt: Int): String = "$videoId-$format-$startAt"
@@ -205,8 +201,6 @@ class FileBuilder(
             sourceReleased = true
             withContext(Dispatchers.IO) {
                 cache.publish(part, final)
-                // D-04: the file just built and its source are kept even when they alone exceed the cap.
-                cache.prune(keep = setOf(final.name, src.name), busy = ::isBusy)
             }
         } catch (e: Throwable) {
             withContext(NonCancellable + Dispatchers.IO) { part.delete() }
@@ -239,7 +233,7 @@ class FileBuilder(
     // ------------------------------------------------------------------------------------ source
 
     /**
-     * The downloaded source of [videoId]: reused when present, otherwise one shared download with the retries of
+     * The downloaded source of [videoId]: shared while in use, otherwise one download with the retries of
      * [downloadSource]. The pipe formats use it as the last rung when YouTube keeps refusing ffmpeg (Node
      * `#existingSourceFile`). Throws [FileBuildException] when every attempt failed.
      */
@@ -275,14 +269,9 @@ class FileBuilder(
                     part.delete()
                 }
                 val info = resolver.resolve(videoId)
-                val eligible = cache.canEverFit(info.filesize)
                 downloader.download(videoId, info, part)
                 check(isFinished(part)) { "the download left no file" }
-                withContext(Dispatchers.IO) {
-                    cache.publish(part, dest, eligible)
-                    // Sources are kept so they can be reused for builds and by the pipe rung.
-                    cache.prune(keep = setOf(dest.name), busy = ::isBusy)
-                }
+                withContext(Dispatchers.IO) { cache.publish(part, dest, eligible = false) }
                 emit("downloaded", videoId, "source", 0)
                 return dest
             } catch (e: CancellationException) {

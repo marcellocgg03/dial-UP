@@ -105,6 +105,29 @@ class MediaServerCacheTest {
     private fun cached(): List<String> = buildDir.listFiles()!!.map { it.name }.filter { it != ".transient" }.sorted()
 
     @Test
+    fun mp4KeepsOnlyRendererReadyFilesAndReusesThem() = runBlocking {
+        val source = makeSource("source.m4a", 5)
+        val downloader = FakeSourceDownloader(source)
+        val limit = source.length() * 2 + 1_000
+        val ms = serve(downloader, cacheLimitBytes = limit)
+        val a = VideoEntry("aaaaaaaaaaa", "mp4")
+        val b = VideoEntry("bbbbbbbbbbb", "mp4")
+        val pathA = ms.prepareAndRegister(a)
+        assertEquals(200, get(ms, pathA).status)
+        ms.release(pathA)
+        val pathB = ms.prepareAndRegister(b)
+        assertEquals(200, get(ms, pathB).status)
+        ms.release(pathB)
+
+        assertEquals(listOf("aaaaaaaaaaa-mp4-0.m4a", "bbbbbbbbbbb-mp4-0.m4a"), cached())
+        assertEquals(2, ms.cacheInfo()!!.files)
+        assertEquals(0, ms.cacheInfo()!!.temporaryFiles)
+        assertTrue(ms.cacheInfo()!!.bytes <= limit)
+        ms.prepare(a)
+        assertEquals(2, downloader.calls.get(), "replaying a cached MP4 does not download again")
+    }
+
+    @Test
     @DisplayName("oversized files play temporarily and are removed after release")
     fun aFileLargerThanTheCapIsStillServedAndOlderFilesAreEvictedFirst() = runBlocking {
         val ms = serve(FakeSourceDownloader(makeSource("src.m4a", 60)), cacheLimitBytes = 1)
@@ -307,9 +330,9 @@ class MediaServerCacheTest {
         second.prepare(entry)
         assertEquals(1, downloader.calls.get(), "served from the cache kept on disk, not downloaded again")
         assertTrue(!File(buildDir, "jjjjjjjjjjj.source.download").exists(), "partial file removed")
-        assertTrue(second.cacheInfo()!!.files >= 2)
+        assertEquals(1, second.cacheInfo()!!.files)
 
-        assertTrue(second.clearCache() >= 2)
+        assertEquals(1, second.clearCache())
         assertEquals(0, second.cacheInfo()!!.files)
         second.prepare(entry)
         assertEquals(2, downloader.calls.get(), "downloaded again after clearing")
@@ -344,7 +367,7 @@ class MediaServerCacheTest {
         File(buildDir, "eeeeeeeeeee.source.download").writeText("x")
         File(buildDir, "eeeeeeeeeee.source.download.info.json").writeText("x")
         ms.stop()
-        assertEquals(listOf("ddddddddddd-mp4-0.m4a", "ddddddddddd.source"), cached())
+        assertEquals(listOf("ddddddddddd-mp4-0.m4a"), cached())
         Unit
     }
 
@@ -367,7 +390,7 @@ class MediaServerCacheTest {
             val (status, _) = RawHttp.readHead(socket.getInputStream().buffered())
             assertEquals(200, status)
             delay(200)
-            assertEquals(1, ms.clearCache(), "only the source is deleted")
+            assertEquals(0, ms.clearCache(), "the playback file is pinned and the source is already gone")
             assertEquals(listOf("ppppppppppp-mp4-0.m4a"), cached())
         } finally {
             socket.close()
