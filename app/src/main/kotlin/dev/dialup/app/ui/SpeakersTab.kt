@@ -5,6 +5,7 @@ package dev.dialup.app.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -49,7 +50,7 @@ import kotlinx.coroutines.delay
  * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
  * ([rendererListing]): with the switch off only the renderers saved by address are listed, greyed, and the list says the bridge
  * is off. Each item is a [SpeakerCard]. The hidden renderers are managed in the Settings
- * tab (GUI-13, [HiddenSection]), not here. Rename on a card opens a dialog
+ * tab (GUI-13, [HiddenRenderersScreen]), not here. Rename on a card opens a dialog
  * for that renderer's name (matched by UDN). While the running bridge's list is not shown (switch off, or the
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
@@ -66,6 +67,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     var adding by rememberSaveable { mutableStateOf(false) }
     // the UDN of a playing speaker whose Hide is waiting for a yes; the dialog goes when that card is no longer playing
     var confirmingHide by rememberSaveable { mutableStateOf<String?>(null) }
+    val castingNow by model.casting.collectAsStateWithLifecycle()
+    var confirmingRefresh by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -106,8 +109,19 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "add-speaker") {
-            OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
-                Text("Add renderer by address")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
+                    Text("Add renderer by address")
+                }
+                // GUI-14: like the first discovery: with nothing cast to the list is emptied and rebuilt from a fresh search (the
+                // spinner shows); while casting only a plain search runs. Hidden while a search runs, so none starts on top of it.
+                if (!searching) {
+                    OutlinedButton(
+                        onClick = { if (castingNow > 0) confirmingRefresh = true else model.rediscoverRenderers() },
+                        enabled = bridgeUp,
+                        modifier = Modifier.testTag("btn-refresh-list"),
+                    ) { Text("Refresh") }
+                }
             }
         }
         listing.note?.let { note ->
@@ -172,6 +186,26 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.testTag("dialog-hide"),
             )
         }
+    }
+    if (confirmingRefresh) {
+        AlertDialog(
+            onDismissRequest = { confirmingRefresh = false },
+            title = { Text("Refresh renderers?") },
+            text = { Text("Current casts will disconnect.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmingRefresh = false
+                        model.rediscoverRenderers()
+                    },
+                    modifier = Modifier.testTag("btn-refresh-confirm"),
+                ) { Text("Refresh") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingRefresh = false }, modifier = Modifier.testTag("btn-refresh-cancel")) { Text("Cancel") }
+            },
+            modifier = Modifier.testTag("dialog-refresh"),
+        )
     }
     renaming?.let { udn ->
         // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
