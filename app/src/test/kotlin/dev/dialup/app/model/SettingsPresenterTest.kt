@@ -418,6 +418,15 @@ class SettingsPresenterTest {
         YtDlpCheck(current = "2026.08.19", latest = latest, channel = "stable", available = available)
 
     @Test
+    fun `the yt-dlp version shows without a running bridge`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(bridge = bridge)
+        p.refresh()
+        runCurrent()
+        assertEquals("2026.08.19", p.state.value.ytdlpVersion)
+    }
+
+    @Test
     fun `update now while casting asks first when a newer yt-dlp exists and installs nothing yet`() = runTest {
         val bridge = FakeBridgePort().also { it.outcome = outcome(); it.check = check(true); it.castingFlow.value = 1 }
         val p = presenter(bridge = bridge)

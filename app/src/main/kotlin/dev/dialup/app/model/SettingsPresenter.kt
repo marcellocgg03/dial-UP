@@ -157,7 +157,7 @@ data class SettingsUi(
     val cacheUsage: CacheInfo? = null,
     val outputFormat: String = "streaming",
     val bridgeRunning: Boolean = false,
-    /** The installed yt-dlp version; "-" while the bridge is off or the version cannot be read. */
+    /** The installed yt-dlp version; "-" only until it has been read, or when it cannot be read. */
     val ytdlpVersion: String = "-",
     val ytdlpChannel: String = "stable",
     val update: UpdateUi = UpdateUi.Idle,
@@ -296,7 +296,20 @@ class SettingsPresenter(
     /** Re-reads what the running bridge knows (cache usage); the tab calls it whenever it comes on screen. */
     fun refresh() {
         ui.update { it.copy(message = null, logMessage = null) }
+        scope.launch { readVersion() }
         scope.launch { if (bridge.running) refreshUsage() }
+    }
+
+    /** The installed yt-dlp version, which needs no bridge: it is shown from the first moment, not once the bridge is up. */
+    private suspend fun readVersion() {
+        val version = try {
+            bridge.ytdlpVersion()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (version != null) ui.update { it.copy(ytdlpVersion = version) }
     }
 
     /**
