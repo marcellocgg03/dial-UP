@@ -17,8 +17,8 @@ const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
  */
 const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
 
-/** Every value `outputFormat` may take (config.js): "auto" walks the learned chain, the rest force one format. */
-val OUTPUT_FORMATS = setOf("auto", "direct", "mp4", "adts", "mp3")
+/** Output modes accepted by config.json; streaming tries ADTS then MP3. */
+val OUTPUT_FORMATS = setOf("auto", "streaming", "direct", "mp4", "adts", "mp3")
 
 /** The ffmpeg `-loglevel` names a config may select (T-03-09: a whitelist, never free text in an argument list). */
 val FFMPEG_LOG_LEVELS = setOf("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug")
@@ -87,8 +87,8 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
  * @property logLevel "off", "info" (the default) or "debug" (SVC-06, D-11): what the app's event log file and logcat get;
  *   debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs. Applied at service start and at every bridge start.
- * @property outputFormat "auto" (the Node default) walks the format chain direct, adts, mp3 with the
- *   per-speaker learned format; any other value forces that one format and never falls back (plan 03-06).
+ * @property outputFormat "auto" walks the learned direct, adts, mp3 chain; "streaming" tries adts then mp3;
+ *   other values force that format. The Android app defaults to streaming.
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
  *   next track; tuning for tests, not readable from config.json (plan 03-09).
  * @property playRetryDelaysMs the waits before the retries of a track whose lookup or preparation failed for an unclear

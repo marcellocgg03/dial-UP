@@ -138,6 +138,32 @@ internal class GaplessTest {
     }
 
     @Test
+    fun offsetFallbackReturnsToDirectOnGaplessNextTrack() {
+        withFake { fake ->
+            val handler = NextHandler()
+            RendererHarness(
+                fake,
+                config = { cfg()(it).copy(outputFormat = "auto") },
+                playlistRequestHandlerFactory = { handler },
+            ).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 60.0))
+                waitUntil { fake.state.nextUri.isNotEmpty() }
+                assertEquals("mp3" to 60, h.registered.first().let { it.format to it.startAt })
+                assertEquals("direct" to 0, h.registered[1].let { it.format to it.startAt })
+                assertTrue(fake.state.nextUri.endsWith(".m4a"), fake.state.nextUri)
+
+                handler.nextOf = { null }
+                val loadsBefore = fake.count("SetAVTransportURI")
+                fake.advance()
+                waitUntil { r.nowPlaying?.videoId == B }
+                assertEquals("direct", r.nowPlaying?.format)
+                assertEquals(loadsBefore, fake.count("SetAVTransportURI"))
+            }
+        }
+    }
+
+    @Test
     @DisplayName("gapless: yt-cast-receiver stopping the player before play() does not cut off or reload the track")
     fun stoppingThePlayerBeforePlayDoesNotCutOffOrReload() {
         withFake { fake ->

@@ -162,6 +162,20 @@ class SettingsPresenterTest {
     }
 
     @Test
+    fun `audio format display is saved and needs no restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertFalse(p.state.value.showAudioFormat)
+        assertFalse(p.setShowAudioFormat(true))
+        runCurrent()
+        assertTrue(settings.data.value.showAudioFormat)
+        assertTrue(p.state.value.showAudioFormat)
+        assertFalse(p.setShowAudioFormat(false))
+        runCurrent()
+        assertFalse(p.state.value.showAudioFormat)
+    }
+
+    @Test
     fun `the cache steps are the stepped choice`() {
         assertEquals(listOf(0, 64, 128, 256, 512, 1024, 2048, 4096), CACHE_STEPS)
     }

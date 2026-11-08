@@ -79,6 +79,7 @@ class SettingsTest {
         assertTrue(d.bridgeEnabled)
         assertEquals(DialAccessMode.PHONE, d.dialAccess)
         assertFalse(d.clearOnCastEnd)
+        assertFalse(d.showAudioFormat)
         assertEquals(ThemeMode.SYSTEM, d.theme)
         assertEquals(null, d.logEnabled)
         assertEquals(null, d.gapless)
@@ -95,6 +96,7 @@ class SettingsTest {
             bridgeEnabled = false,
             dialAccess = DialAccessMode.LAN,
             clearOnCastEnd = true,
+            showAudioFormat = true,
             theme = ThemeMode.DARK,
             updateCheckEnabled = false,
             logEnabled = false,
@@ -109,6 +111,15 @@ class SettingsTest {
     }
 
     @Test
+    fun playbackModesRoundTripAndLegacyAutomaticRemainsReadable() {
+        val f = File(dir, SETTINGS_FILE)
+        for (format in listOf("streaming", "direct", "mp4", "auto")) {
+            settings(f).update { it.copy(outputFormat = format) }
+            assertEquals(format, settings(f).data.value.outputFormat)
+        }
+    }
+
+    @Test
     fun aBadValueFallsBackAloneAndReportsOneError() {
         val cases = listOf(
             """{"cacheMb":-1,"gapless":false}""",
@@ -118,6 +129,7 @@ class SettingsTest {
             """{"ytdlpChannel":"master","gapless":false}""",
             """{"logEnabled":"yes","gapless":false}""",
             """{"bridgeEnabled":"no","gapless":false}""",
+            """{"showAudioFormat":"yes","gapless":false}""",
             """{"cacheMb":12.5,"gapless":false}""",
         )
         for (content in cases) {
@@ -132,6 +144,18 @@ class SettingsTest {
             assertTrue(d.bridgeEnabled, content)
             assertEquals(listOf("settings:read"), errors, content)
         }
+    }
+
+    @Test
+    fun audioFormatSwitchIsStoredOnlyWhenEnabled() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        s.update { it.copy(showAudioFormat = true) }
+        assertTrue(settings(f).data.value.showAudioFormat)
+        assertTrue(f.readText().contains(""""showAudioFormat":true"""))
+        s.update { it.copy(showAudioFormat = false) }
+        assertFalse(settings(f).data.value.showAudioFormat)
+        assertFalse(f.readText().contains(""""showAudioFormat""""))
     }
 
     @Test

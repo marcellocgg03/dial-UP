@@ -5,6 +5,7 @@ package dev.dialup.app.model
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.NowPlaying
 import dev.t2u.renderer.SpeakerPosition
+import dev.t2u.renderer.SpeakerUi
 import java.util.Locale
 
 /** The word a speaker card shows for the speaker's state (GUI-01). An offline speaker reads Offline whatever it last did. */
@@ -24,6 +25,29 @@ fun trackLines(track: NowPlaying): Pair<String, String?> {
     val title = track.title.ifBlank { track.videoId }
     val artist = track.artist.takeIf { it.isNotBlank() }
     return title to artist
+}
+
+/** The loaded format, not a queued next track or the selected playback mode. */
+fun audioFormatLabel(speaker: SpeakerUi, enabled: Boolean): String? {
+    if (!enabled || !speaker.online) return null
+    if (speaker.status != PlayerStatus.PLAYING && speaker.status != PlayerStatus.PAUSED &&
+        !(speaker.status == PlayerStatus.STOPPED && speaker.queueHasCurrent)
+    ) return null
+    val track = speaker.track ?: return null
+    val format = when (track.format) {
+        "adts" -> "AAC (ADTS)"
+        "mp3" -> "MP3"
+        "mp4" -> "MP4 (cached)"
+        "direct" -> when (track.sourceMime?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)) {
+            "audio/mp4", "video/mp4" -> "Original audio (MP4)"
+            "audio/webm", "video/webm" -> "Original audio (WebM)"
+            "audio/ogg", "application/ogg" -> "Original audio (Ogg)"
+            "audio/mpeg" -> "Original audio (MP3)"
+            else -> "Original audio"
+        }
+        else -> return null
+    }
+    return "Audio: $format"
 }
 
 /**

@@ -45,15 +45,24 @@ import dev.dialup.app.model.UpdateUi
 import dev.dialup.app.model.updateMessage
 
 private val FORMATS = listOf(
-    "auto" to "Automatic",
-    "mp4" to "MP4",
+    "streaming" to "Streaming",
+    "direct" to "Direct",
+    "mp4" to "Cached",
 )
 
 /** What the menu shows for each of [FORMATS]; the button keeps the short label. */
 private val FORMAT_MENU_LABELS = mapOf(
-    "auto" to "Automatic Fallback (direct -> adts -> mp3)",
-    "mp4" to "mp4",
+    "streaming" to "Streaming (AAC, with MP3 fallback)",
+    "direct" to "Direct (renderer handles seeking)",
+    "mp4" to "Cached (MP4 file)",
 )
+
+internal fun playbackModeDescription(format: String): String? = when (format) {
+    "streaming" -> "Starts quickly and makes it easier to skip to another part of a track. Some tracks or speakers may use more battery."
+    "direct" -> "Plays the original audio with minimal processing. Some speakers may not support it, and skipping within long tracks can be very slow."
+    "mp4" -> "Prepares a file before playing, making it easier for your speaker to skip within a track. Starting can take longer and uses phone storage."
+    else -> null
+}
 
 private val THEMES = listOf(
     ThemeMode.SYSTEM to "System",
@@ -101,13 +110,21 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         )
         HorizontalDivider()
         ChoiceRow(
-            title = "Forced audio format",
-            support = "A renderer that cannot play a forced format shows an error on its card instead of trying another format.",
+            title = "Playback mode",
+            support = playbackModeDescription(ui.outputFormat),
             current = FORMATS.firstOrNull { it.first == ui.outputFormat }?.second ?: ui.outputFormat,
             options = FORMATS.map { FORMAT_MENU_LABELS[it.first] ?: it.second },
             onPick = { i -> presenter.setOutputFormat(FORMATS[i].first) },
             tag = "setting-format",
             optionTag = { "format-option-${FORMATS[it].first}" },
+        )
+        HorizontalDivider()
+        SwitchRow(
+            title = "Show audio format",
+            support = "Show the format in use on each renderer's card",
+            checked = ui.showAudioFormat,
+            onChange = { presenter.setShowAudioFormat(it) },
+            tag = "setting-show-audio-format",
         )
         HorizontalDivider()
         // Only mp4 builds and retains files; the other formats stream.
