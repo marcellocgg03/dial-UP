@@ -29,6 +29,30 @@ const val YTDLP_STATUS_CASTING: String = "CASTING"
 
 private const val ERROR_LIMIT = 300
 
+/**
+ * What a look-ahead found: the installed [current] version, the newest published [latest] on [channel], and whether [latest]
+ * is newer ([available]). [available] is null when [latest] could not be read.
+ */
+data class YtDlpCheck(val current: String?, val latest: String?, val channel: String, val available: Boolean?)
+
+/**
+ * Whether [latest] is a newer yt-dlp version than [current]. Versions are dotted numbers (2026.11.01, or 2026.11.07.021234
+ * for nightly builds) compared part by part; anything that does not parse counts as newer when it differs. An unknown
+ * [current] is older than any [latest].
+ */
+fun ytdlpNewer(latest: String, current: String?): Boolean {
+    if (current == null) return true
+    val a = latest.trim().split('.').map { it.toLongOrNull() }
+    val b = current.trim().split('.').map { it.toLongOrNull() }
+    if (a.any { it == null } || b.any { it == null }) return latest.trim() != current.trim()
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrElse(i) { 0L }!!
+        val y = b.getOrElse(i) { 0L }!!
+        if (x != y) return x > y
+    }
+    return false
+}
+
 /** What one update attempt did. [before] and [after] are yt-dlp versions (null when unreadable); [error] is redacted. */
 data class YtDlpUpdateOutcome(
     val ok: Boolean,
@@ -109,6 +133,24 @@ class YtDlpUpdater(
         }
         deliver(outcome.toEvent())
         return outcome
+    }
+
+    /**
+     * Asks whether a newer yt-dlp is published on the chosen channel, installing nothing. It is allowed while casting, and it
+     * never touches the record or [dueMutex]. Never throws except for cancellation; [YtDlpCheck.available] is null when the
+     * newest version could not be read.
+     */
+    suspend fun check(): YtDlpCheck = withContext(dispatcher) {
+        val chosen = chosenChannel()
+        val current = runCatching { gateway.version() }.getOrNull()
+        val latest = try {
+            gateway.latestVersion(chosen)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+        YtDlpCheck(current, latest, chosen, latest?.let { ytdlpNewer(it, current) })
     }
 
     /**

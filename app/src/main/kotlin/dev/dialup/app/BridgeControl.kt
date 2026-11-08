@@ -116,6 +116,33 @@ object BridgeControl {
             )
         }.await()
 
+    private val stoppedWorkFlight = SingleFlight<Boolean>()
+
+    /**
+     * Runs [block] with the bridge stopped, then starts it again: for work that cannot run while a renderer is being cast to (a
+     * yt-dlp update). Only a bridge that is running is stopped and started again; with the bridge off, or never started, [block]
+     * simply runs and the switch is left alone. The bridge comes back on in all cases once the stop was requested, also when
+     * [block] throws or is cancelled, and a stop that did not finish in time still gets its restart (the same guarantee as
+     * [restart]). It ends playback like a switch-off does (D-03), so call it only after the author agreed. The sequence runs on
+     * [BridgeLifecycle.scope]; [source] lands in the `settings` evidence events.
+     */
+    suspend fun <T> whileStopped(context: Context, source: String, block: suspend () -> T): T {
+        if (ServiceHub.service == null) return block()
+        var result: Result<T>? = null
+        stoppedWorkFlight.launch(BridgeLifecycle.scope) {
+            restartSequence(
+                setEnabled = { setEnabled(context, it, source) },
+                awaitStopped = {
+                    val stopped = awaitServiceGone()
+                    // a bridge that is still running keeps the work away: nothing changes under an active cast
+                    if (stopped) result = runCatching { block() }
+                    stopped
+                },
+            )
+        }.await()
+        return (result ?: Result.failure(IllegalStateException("the bridge did not stop"))).getOrThrow()
+    }
+
     /** True when the service is gone and no stop is in flight, each within [STOP_TIMEOUT_MS]. */
     private suspend fun awaitServiceGone(): Boolean =
         withTimeoutOrNull(STOP_TIMEOUT_MS) { ServiceHub.serviceFlow.first { it == null } } != null &&

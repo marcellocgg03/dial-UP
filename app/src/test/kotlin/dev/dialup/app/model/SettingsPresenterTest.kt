@@ -6,6 +6,7 @@ import dev.dialup.app.AppSettingsData
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
+import dev.t2u.media.YtDlpCheck
 import dev.t2u.media.YtDlpUpdateOutcome
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -109,6 +110,23 @@ class FakeBridgePort(
         gate?.await()
         failWith?.let { throw it }
         return outcome
+    }
+
+    /** What the look-ahead answers; null means "no updater" (the default port answer). */
+    var check: YtDlpCheck? = null
+    var checkCalls = 0
+    var stoppingCalls = 0
+    var stoppingOutcome: YtDlpUpdateOutcome? = null
+
+    override suspend fun checkYtdlpUpdate(): YtDlpCheck? {
+        checkCalls++
+        failWith?.let { throw it }
+        return check
+    }
+
+    override suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? {
+        stoppingCalls++
+        return stoppingOutcome
     }
 
     override suspend fun ytdlpVersion(): String? = version
@@ -396,37 +414,140 @@ class SettingsPresenterTest {
         assertTrue(p.state.value.update is UpdateUi.Done)
     }
 
+    private fun check(available: Boolean?, latest: String? = "2026.10.20") =
+        YtDlpCheck(current = "2026.08.19", latest = latest, channel = "stable", available = available)
+
     @Test
-    fun `update now is blocked while a renderer is being cast to`() = runTest {
-        val bridge = FakeBridgePort().also { it.outcome = outcome() }
+    fun `update now while casting asks first when a newer yt-dlp exists and installs nothing yet`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome(); it.check = check(true); it.castingFlow.value = 1 }
         val p = presenter(bridge = bridge)
-        assertFalse(p.state.value.updateBlockedByCast)
-
-        bridge.castingFlow.value = 1
         runCurrent()
-        assertTrue(p.state.value.updateBlockedByCast)
+        p.updateNow()
+        runCurrent()
+        assertEquals(1, bridge.checkCalls)
+        assertEquals(UpdatePrompt("2026.08.19", "2026.10.20"), p.state.value.updatePrompt)
+        assertEquals(UpdateUi.Idle, p.state.value.update)
+        assertEquals(0, bridge.updateCalls)
+        assertEquals(0, bridge.stoppingCalls)
+    }
 
+    @Test
+    fun `confirming stops the bridge for the update and says the cast was ended`() = runTest {
+        val bridge = FakeBridgePort().also {
+            it.check = check(true); it.castingFlow.value = 1; it.stoppingOutcome = outcome()
+        }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        p.confirmUpdate()
+        runCurrent()
+        assertEquals(1, bridge.stoppingCalls)
+        assertEquals(0, bridge.updateCalls)
+        assertNull(p.state.value.updatePrompt)
+        assertEquals(UpdateUi.Done(outcome(), restartedBridge = true), p.state.value.update)
+    }
+
+    @Test
+    fun `cancelling the prompt installs and stops nothing`() = runTest {
+        val bridge = FakeBridgePort().also { it.check = check(true); it.castingFlow.value = 2 }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        p.dismissUpdatePrompt()
+        runCurrent()
+        assertNull(p.state.value.updatePrompt)
+        assertEquals(UpdateUi.Idle, p.state.value.update)
+        assertEquals(0, bridge.stoppingCalls)
+        assertEquals(0, bridge.updateCalls)
+        p.confirmUpdate() // nothing is pending any more
+        runCurrent()
+        assertEquals(0, bridge.stoppingCalls)
+    }
+
+    @Test
+    fun `update now while casting says up to date and never asks when nothing newer exists`() = runTest {
+        val bridge = FakeBridgePort().also { it.check = check(false); it.castingFlow.value = 1 }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        assertNull(p.state.value.updatePrompt)
+        val done = p.state.value.update as UpdateUi.Done
+        assertTrue(done.outcome.ok)
+        assertEquals("Already up to date (2026.08.19)", updateMessage(done.outcome))
+        assertEquals(0, bridge.updateCalls)
+        assertEquals(0, bridge.stoppingCalls)
+    }
+
+    @Test
+    fun `update now while casting installs nothing when the newest version cannot be read`() = runTest {
+        val bridge = FakeBridgePort().also { it.check = check(null, latest = null); it.castingFlow.value = 1 }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        assertNull(p.state.value.updatePrompt)
+        val done = p.state.value.update as UpdateUi.Done
+        assertFalse(done.outcome.ok)
+        assertEquals("Could not check for a newer yt-dlp; try again in a moment", updateMessage(done.outcome))
+        assertEquals(0, bridge.updateCalls)
+        assertEquals(0, bridge.stoppingCalls)
+    }
+
+    @Test
+    fun `update now with nothing cast installs a newer yt-dlp straight away without a prompt`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome(); it.check = check(true) }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        assertNull(p.state.value.updatePrompt)
+        assertEquals(1, bridge.updateCalls)
+        assertEquals(0, bridge.stoppingCalls)
+        assertEquals(UpdateUi.Done(outcome()), p.state.value.update)
+    }
+
+    @Test
+    fun `update now with nothing cast skips the install when yt-dlp is current`() = runTest {
+        val bridge = FakeBridgePort().also { it.outcome = outcome(); it.check = check(false) }
+        val p = presenter(bridge = bridge)
+        runCurrent()
         p.updateNow()
         runCurrent()
         assertEquals(0, bridge.updateCalls)
-        val done = p.state.value.update as UpdateUi.Done
-        assertEquals("CASTING", done.outcome.status)
-        assertFalse(done.outcome.ok)
-        assertEquals("A renderer is being cast to; update yt-dlp when the cast ends", updateMessage(done.outcome))
+        assertEquals("ALREADY_UP_TO_DATE", (p.state.value.update as UpdateUi.Done).outcome.status)
+    }
 
-        bridge.castingFlow.value = 0
+    @Test
+    fun `a failing check ends as a failed result so the button is usable again`() = runTest {
+        val bridge = FakeBridgePort().also { it.failWith = IllegalStateException("x") }
+        val p = presenter(bridge = bridge)
         runCurrent()
-        assertFalse(p.state.value.updateBlockedByCast)
         p.updateNow()
         runCurrent()
-        assertEquals(1, bridge.updateCalls)
+        val done = p.state.value.update as UpdateUi.Done
+        assertFalse(done.outcome.ok)
+        assertEquals("ERROR", done.outcome.status)
+    }
+
+    @Test
+    fun `while the prompt is open a second press does nothing`() = runTest {
+        val bridge = FakeBridgePort().also { it.check = check(true); it.castingFlow.value = 1 }
+        val p = presenter(bridge = bridge)
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        p.updateNow()
+        runCurrent()
+        assertEquals(1, bridge.checkCalls)
     }
 
     @Test
     fun `a bridge port that does not report casting never blocks update now`() = runTest {
         val bridge = FakeBridgePort().also { it.outcome = outcome() }
         val p = presenter(bridge = bridge)
-        assertFalse(p.state.value.updateBlockedByCast)
         p.updateNow()
         runCurrent()
         assertEquals(1, bridge.updateCalls)

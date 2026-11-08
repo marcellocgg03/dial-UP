@@ -11,6 +11,7 @@ import dev.dialup.app.model.SettingsPresenter
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.FileCache
 import dev.t2u.media.YtDlpUpdater
+import dev.t2u.media.YtDlpCheck
 import dev.t2u.media.YtDlpUpdateOutcome
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -94,6 +95,12 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         override suspend fun cacheInfo(): CacheInfo? = withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
 
         override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offlineUpdater.updateNow()
+
+        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offlineUpdater.check()
+
+        // The offline updater has no cast to wait for; the bridge is stopped around it so nothing is cast to while yt-dlp changes.
+        override suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? =
+            BridgeControl.whileStopped(app, "ytdlp-update") { offlineUpdater.updateNow("ui") }
 
         override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offlineUpdater.version()
 

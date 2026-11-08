@@ -9,6 +9,7 @@ import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YTDLP_STATUS_CASTING
+import dev.t2u.media.YtDlpCheck
 import dev.t2u.media.YtDlpUpdateOutcome
 import dev.dialup.app.SETTINGS_OUTPUT_FORMATS
 import kotlinx.coroutines.CancellationException
@@ -63,6 +64,15 @@ interface BridgePort {
     suspend fun clearLog(): Boolean
     suspend fun cacheInfo(): CacheInfo?
     suspend fun updateNow(): YtDlpUpdateOutcome?
+
+    /** Asks whether a newer yt-dlp is published without installing it; allowed while casting. Null when there is no updater. */
+    suspend fun checkYtdlpUpdate(): YtDlpCheck? = null
+
+    /**
+     * Stops the bridge, installs the yt-dlp update and starts the bridge again, which ends every cast. Only call it once the
+     * author agreed. A bridge that is off simply updates. Null when there is no updater.
+     */
+    suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? = updateNow()
     suspend fun ytdlpVersion(): String?
 
     /** The restart-relevant settings the running bridge was started with; null while there is no bridge (PD-6). */
@@ -98,11 +108,14 @@ const val CACHE_ZERO_WARNING =
 sealed interface UpdateUi {
     data object Idle : UpdateUi
     data object Running : UpdateUi
-    data class Done(val outcome: YtDlpUpdateOutcome) : UpdateUi
+    data class Done(val outcome: YtDlpUpdateOutcome, val restartedBridge: Boolean = false) : UpdateUi
 
     /** The bridge is off, so there is no updater to ask. */
     data object Unavailable : UpdateUi
 }
+
+/** An update is available while a renderer is being cast to: the dialog asks before the cast is ended for it. */
+data class UpdatePrompt(val current: String?, val latest: String)
 
 /** Pause between two reads while the new bridge has not answered yet (CastFeature fills its updater and bridge after it is published). */
 internal const val USAGE_RETRY_MS = 2_000L
@@ -115,9 +128,12 @@ internal const val USAGE_POLL_MS = 5_000L
 
 private const val BUSY_STATUS = "BUSY"
 
+private const val CHECK_FAILED_STATUS = "CHECK_FAILED"
+
 /** The one line the result of an Update now press becomes. The arrow is U+2192. */
 fun updateMessage(o: YtDlpUpdateOutcome): String = when {
     o.status == YTDLP_STATUS_CASTING -> "A renderer is being cast to; update yt-dlp when the cast ends"
+    o.status == CHECK_FAILED_STATUS -> "Could not check for a newer yt-dlp; try again in a moment"
     o.status == BUSY_STATUS -> "An update or a lookup is running; try again in a minute"
     !o.ok -> "Update failed: ${o.error ?: o.status}"
     o.before != null && o.after != null && o.before != o.after -> "Updated ${o.before} \u2192 ${o.after}"
@@ -145,8 +161,8 @@ data class SettingsUi(
     val ytdlpVersion: String = "-",
     val ytdlpChannel: String = "stable",
     val update: UpdateUi = UpdateUi.Idle,
-    /** True while a renderer is being cast to: Update now is greyed out then (UPD-02). */
-    val updateBlockedByCast: Boolean = false,
+    /** Set when Update now found a newer yt-dlp while a renderer is being cast to; the tab asks whether to end the cast for it. */
+    val updatePrompt: UpdatePrompt? = null,
     /** A one-line result of the last action (cleared cache and so on); null when there is none. */
     val message: String? = null,
     /** The one-line result of the last Clear log, shown under the log buttons; null when there is none. */
@@ -203,9 +219,6 @@ class SettingsPresenter(
                     )
                 }
             }
-        }
-        scope.launch {
-            bridge.casting.collect { n -> ui.update { it.copy(updateBlockedByCast = n > 0) } }
         }
         scope.launch {
             bridge.instance.collectLatest { inst ->
@@ -411,21 +424,16 @@ class SettingsPresenter(
         return changed(SettingKey.CHANNEL)
     }
 
-    /** Runs one yt-dlp update now, with the bridge on or off. One at a time. */
+    /**
+     * Update now, with the bridge on or off, casting or not. It first asks whether a newer yt-dlp is published: when it is not,
+     * the result says so and nothing is installed. When it is and nothing is cast to, it installs it. When it is and a renderer
+     * is being cast to, [UpdatePrompt] is set and nothing happens until [confirmUpdate]: installing ends the cast. A check that
+     * could not read the newest version installs nothing while casting and lets the library decide otherwise. One at a time.
+     */
     fun updateNow() {
         var start = false
         ui.update {
-            if (it.updateBlockedByCast) {
-                // Refused here without asking the bridge; the updater refuses a press that races the cast start as well.
-                it.copy(
-                    update = UpdateUi.Done(
-                        YtDlpUpdateOutcome(
-                            ok = false, trigger = "ui", channel = it.ytdlpChannel, before = null, after = null,
-                            status = YTDLP_STATUS_CASTING, ms = 0,
-                        ),
-                    ),
-                )
-            } else if (it.update != UpdateUi.Running) {
+            if (it.update != UpdateUi.Running && it.updatePrompt == null) {
                 start = true
                 it.copy(update = UpdateUi.Running)
             } else {
@@ -434,22 +442,73 @@ class SettingsPresenter(
         }
         if (!start) return
         scope.launch {
-            val outcome = try {
-                bridge.updateNow() ?: YtDlpUpdateOutcome(
-                    ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
-                    status = "UNAVAILABLE", ms = 0, error = "yt-dlp is not available",
-                )
+            val outcome: YtDlpUpdateOutcome? = try {
+                val check = bridge.checkYtdlpUpdate()
+                val casting = bridge.casting.value > 0
+                val latest = check?.latest
+                when {
+                    check?.available == false -> upToDate(check)
+                    check?.available == true && latest != null && casting -> {
+                        ui.update { it.copy(update = UpdateUi.Idle, updatePrompt = UpdatePrompt(check.current, latest)) }
+                        null
+                    }
+                    casting -> failed("CHECK_FAILED", "could not check for a newer yt-dlp")
+                    else -> runUpdate { bridge.updateNow() }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // end as a failed outcome so the button is usable again instead of stuck on Running (review IN-04)
-                YtDlpUpdateOutcome(
-                    ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
-                    status = "ERROR", ms = 0, error = e.javaClass.simpleName,
-                )
+                failed("ERROR", e.javaClass.simpleName)
             }
-            ui.update { it.copy(update = UpdateUi.Done(outcome)) }
+            if (outcome != null) {
+                ui.update { it.copy(update = UpdateUi.Done(outcome)) }
+                refreshUsage()
+            }
+        }
+    }
+
+    /** The author agreed to end the cast: stop the bridge, install the update, start the bridge again. */
+    fun confirmUpdate() {
+        var start = false
+        ui.update {
+            if (it.updatePrompt != null && it.update != UpdateUi.Running) {
+                start = true
+                it.copy(updatePrompt = null, update = UpdateUi.Running)
+            } else {
+                it
+            }
+        }
+        if (!start) return
+        scope.launch {
+            val outcome = try {
+                runUpdate { bridge.updateStoppingBridge() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed("ERROR", e.javaClass.simpleName)
+            }
+            ui.update { it.copy(update = UpdateUi.Done(outcome, restartedBridge = true)) }
             refreshUsage()
         }
     }
+
+    /** The author said no: nothing is stopped or installed. */
+    fun dismissUpdatePrompt() {
+        ui.update { it.copy(updatePrompt = null) }
+    }
+
+    private suspend fun runUpdate(block: suspend () -> YtDlpUpdateOutcome?): YtDlpUpdateOutcome =
+        block() ?: YtDlpUpdateOutcome(
+            ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null,
+            status = "UNAVAILABLE", ms = 0, error = "yt-dlp is not available",
+        )
+
+    // end as a failed outcome so the button is usable again instead of stuck on Running (review IN-04)
+    private fun failed(status: String, error: String) = YtDlpUpdateOutcome(
+        ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null, status = status, ms = 0, error = error,
+    )
+
+    private fun upToDate(check: YtDlpCheck) = YtDlpUpdateOutcome(
+        ok = true, trigger = "ui", channel = check.channel, before = check.current, after = check.current, status = "ALREADY_UP_TO_DATE", ms = 0,
+    )
 }
