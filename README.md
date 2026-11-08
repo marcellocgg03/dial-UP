@@ -21,7 +21,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 - **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
 - **Caching** (Cached mode): renderer-ready audio files are cached locally so they aren't downloaded with yt-dlp again. Newly downloaded sources are temporary and removed when no longer in use; sources retained by older versions can be removed with "Clear cache". Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
-- **Playback mode**: Streaming (default) tries AAC/ADTS without re-encoding and falls back to MP3; seeking or resuming after a pause reloads the stream at the current position. Direct proxies the source without FFmpeg and relies on the renderer to seek, which can be very slow for long tracks. Cached builds a complete MP4 before playback and normally lets the renderer seek the file. Existing Automatic selections move to Streaming.
+- **Playback modes**: Streaming, Direct or Cached, chosen in Settings; see [Playback modes](#playback-modes) below.
 - **Audio format display**: Optionally show the format currently loaded on each renderer's card. It updates if playback falls back to another format.
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
@@ -29,6 +29,33 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 For volume requests that include a button direction, DialUP avoids applying a stale target in the opposite direction
 and reports the speaker's current volume back to the sender. Slider requests without a direction remain absolute.
+
+## Playback modes
+
+Settings → Playback → Playback mode decides how audio gets from YouTube to your speaker. All three play the same
+tracks; they differ in how quickly playback starts, how well skipping works and what the phone has to do.
+
+| | Streaming (default) | Direct | Cached |
+|---|---|---|---|
+| What the phone does | Fetches the audio and passes it on as a live stream (AAC copied as-is; re-encoded to MP3 only if the speaker rejects AAC) | Passes the original audio on unchanged, with no FFmpeg | Downloads the whole track, remuxes it to an MP4 file, then serves the file |
+| Start of playback | Fast | Fast | Slower: the whole track is fetched first |
+| Skipping within a track | Reloads the stream at the new position (a short pause) | Left to the speaker, which can be very slow on long tracks | The speaker seeks within the file, normally the smoothest |
+| Phone battery and CPU | Low with AAC; higher if it falls back to MP3 | Lowest | Busy while downloading, then low |
+| Phone storage | None | None | Uses the cache (256 MB by default, set in Settings) |
+| Speaker support | Falls back to MP3 if the speaker rejects AAC | Speaker must support the original audio format | Speaker plays a finished file, not a live stream |
+
+**Streaming** suits most people: it starts quickly and handles skipping by restarting the stream at the position you
+pick. Its downsides are a brief pause when you skip, and extra battery use on the tracks or speakers that need the
+MP3 fallback.
+
+**Direct** does the least work on the phone and keeps the original audio, but it depends on the speaker. Some speakers
+cannot play the original format, and a speaker that seeks by reading through the stream can take a long time to skip
+within a long track. Try it if Streaming drains your battery and your speaker handles it well.
+
+**Cached** prepares a complete file before playing, so the speaker can seek freely and a replayed track doesn't
+need to be fetched again. The cost is a longer start, especially for long tracks, and storage on the phone. A track too big for
+the cache is played from a temporary file and deleted afterwards. Old tracks are removed automatically, oldest
+first, to stay under the cache size.
 
 ## Privacy
 
