@@ -12,6 +12,14 @@ import kotlin.test.assertTrue
 
 /** GUI-08 / GUI-05: settings saved by the app overlay config.json at every bridge start. */
 class ConfigOverlayTest {
+    @Test
+    fun legacyAutomaticMigratesToStreamingAndExplicitModesRemain() {
+        val base = dev.t2u.renderer.Config(dataDir = File("cast"), outputFormat = "streaming")
+        assertEquals("streaming", applySettings(base, AppSettingsData(outputFormat = "auto")).outputFormat)
+        assertEquals("streaming", applySettings(base.copy(outputFormat = "auto"), AppSettingsData()).outputFormat)
+        assertEquals("direct", applySettings(base, AppSettingsData(outputFormat = "direct")).outputFormat)
+        assertEquals("mp4", applySettings(base, AppSettingsData(outputFormat = "mp4")).outputFormat)
+    }
     @TempDir
     lateinit var dir: File
 

@@ -78,6 +78,7 @@ private val NOT_CASTING: StateFlow<Int> = MutableStateFlow(0)
 enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
+    SHOW_AUDIO_FORMAT(false),
     LOG(false),
     GAPLESS(true),
     CACHE(false),
@@ -127,6 +128,7 @@ fun updateMessage(o: YtDlpUpdateOutcome): String = when {
 data class SettingsUi(
     val phoneOnly: Boolean = true,
     val clearOnCastEnd: Boolean = false,
+    val showAudioFormat: Boolean = false,
     /** The app's look, applied at once. */
     val theme: ThemeMode = DEFAULT_THEME,
     val logEnabled: Boolean = true,
@@ -137,7 +139,7 @@ data class SettingsUi(
     val cacheWarning: String? = null,
     /** Files, bytes and cap of the running bridge's cache; null while the bridge is off. */
     val cacheUsage: CacheInfo? = null,
-    val outputFormat: String = "auto",
+    val outputFormat: String = "streaming",
     val bridgeRunning: Boolean = false,
     /** The installed yt-dlp version; "-" while the bridge is off or the version cannot be read. */
     val ytdlpVersion: String = "-",
@@ -181,7 +183,12 @@ class SettingsPresenter(
         scope.launch {
             settings.data.collectLatest { d ->
                 ui.update {
-                    it.copy(phoneOnly = d.dialAccess == DialAccessMode.PHONE, clearOnCastEnd = d.clearOnCastEnd, theme = d.theme)
+                    it.copy(
+                        phoneOnly = d.dialAccess == DialAccessMode.PHONE,
+                        clearOnCastEnd = d.clearOnCastEnd,
+                        showAudioFormat = d.showAudioFormat,
+                        theme = d.theme,
+                    )
                 }
                 val e = settings.effective()
                 ui.update {
@@ -324,6 +331,11 @@ class SettingsPresenter(
     fun setClearOnCastEnd(on: Boolean): Boolean {
         settings.update { it.copy(clearOnCastEnd = on) }
         return changed(SettingKey.CLEAR_ON_CAST_END)
+    }
+
+    fun setShowAudioFormat(on: Boolean): Boolean {
+        settings.update { it.copy(showAudioFormat = on) }
+        return changed(SettingKey.SHOW_AUDIO_FORMAT)
     }
 
     /**

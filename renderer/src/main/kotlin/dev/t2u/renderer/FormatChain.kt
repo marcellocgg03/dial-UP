@@ -17,8 +17,11 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
-/** The per-speaker store key that remembers the format that worked (renderer.js `tube2upnp.format`). */
-const val LEARNED_FORMAT_KEY = "tube2upnp.format"
+/**
+ * Per-speaker format learned from a start at the beginning of a track. The old `tube2upnp.format`
+ * may have been learned from an offset-only fallback, so it must be re-evaluated.
+ */
+const val LEARNED_FORMAT_KEY = "tube2upnp.format.v2"
 
 /**
  * The per-speaker store key that remembers whether the speaker takes SetNextAVTransportURI (plan 04-06, D-08). Kotlin original:
@@ -74,12 +77,17 @@ fun formatAccepted(protocols: List<SinkProtocol>?, format: String, sourceMime: S
 
 private val NON_AAC_SOURCE = Regex("webm|opus|ogg|vorbis", RegexOption.IGNORE_CASE)
 
+/** Streaming mode tries AAC even when a renderer's advertised MIME list omits ADTS. */
+fun streamingFormat(sourceMime: String): String =
+    if (NON_AAC_SOURCE.containsMatchIn(sourceMime)) "mp3" else "adts"
+
 /**
  * The format for the next start: a forced [mode] (anything but "auto") wins; in auto mode the [learned]
  * format when it is a chain member, else the first chain entry the speaker accepts. A stored value outside
  * the chain is ignored (T-03-19).
  */
 fun chooseFormat(mode: String, learned: String?, protocols: List<SinkProtocol>?, sourceMime: String): String {
+    if (mode == "streaming") return streamingFormat(sourceMime)
     if (mode != "auto") return mode
     if (learned != null && learned in FALLBACK_CHAIN) return learned
     return FALLBACK_CHAIN.firstOrNull { formatAccepted(protocols, it, sourceMime) } ?: "mp3"

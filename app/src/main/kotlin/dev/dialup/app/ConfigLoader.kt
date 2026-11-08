@@ -37,7 +37,7 @@ fun applySettings(base: Config, s: AppSettingsData): Config =
         },
         gapless = s.gapless ?: base.gapless,
         cacheMb = s.cacheMb ?: base.cacheMb,
-        outputFormat = s.outputFormat ?: base.outputFormat,
+        outputFormat = (s.outputFormat ?: base.outputFormat).let { if (it == "auto") "streaming" else it },
         ytdlpChannel = s.ytdlpChannel ?: base.ytdlpChannel,
         clearOnCastEnd = s.clearOnCastEnd,
     )
@@ -58,7 +58,7 @@ fun loadAppConfig(filesDir: File): ConfigFileResult {
 }
 
 private fun loadConfigOnly(filesDir: File): ConfigFileResult {
-    val base = Config(dataDir = File(filesDir, "cast"))
+    val base = Config(dataDir = File(filesDir, "cast"), outputFormat = "streaming")
     val file = File(filesDir, CONFIG_FILE)
     return try {
         if (file.exists() && !file.isFile) {

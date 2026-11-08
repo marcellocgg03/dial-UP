@@ -134,6 +134,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 onHide = { model.hide(speaker) },
                 onRename = { renaming = speaker.udn },
                 onDelete = { model.deleteManual(speaker.udn) },
+                showAudioFormat = settings.showAudioFormat,
             )
         }
         // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)

@@ -118,8 +118,6 @@ class FileCache(
 
     fun isTransient(file: File): Boolean = synchronized(lock) { file.name in transient }
 
-    fun canEverFit(size: Long): Boolean = size <= 0L || size <= limitBytes()
-
     fun discardWhenUnused(file: File) = synchronized(lock) {
         require(file.absoluteFile.parentFile == dir)
         disposalRequested.add(file.name)

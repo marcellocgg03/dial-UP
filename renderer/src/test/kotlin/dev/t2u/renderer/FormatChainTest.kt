@@ -4,7 +4,7 @@ package dev.t2u.renderer
 // driven against the upnp FakeRenderer. GPL-3.0-only.
 //
 // Adaptations from the Node tests (plan 03-12 copies these into PARITY.md "Adaptations"):
-//  * Node's setup passes outputFormat "auto"; each test here sets it explicitly (the app default is auto too).
+//  * Node's setup passes outputFormat "auto"; tests here set the mode explicitly.
 //  * The media server is a recording stub with a prepare hook (Node's fake server had no prepare step).
 
 import dev.t2u.lounge.NoOpPlaylistRequestHandler
@@ -44,6 +44,148 @@ class FormatChainTest {
 
     private fun auto(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "auto")
 
+    private fun streaming(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "streaming", prefetch = false)
+
+    @Test
+    fun streamingTriesAdtsDespiteMissingAdvertisedMime() = withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*")) { fake ->
+        RendererHarness(fake, config = ::streaming).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+            assertEquals("adts", h.formats().first())
+            assertTrue(h.renderer.doSeek(100.0))
+            assertEquals("adts" to 100, h.registered.last().let { it.format to it.startAt })
+            assertTrue(fake.calls.none { it.action == "Seek" })
+        }
+    }
+
+    @Test
+    fun streamingFallsBackWhenAdtsDoesNotStart() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        RendererHarness(fake, config = ::streaming).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.formats().contains("mp3") && h.renderer.status == PlayerStatus.PLAYING }
+            waitUntil { h.renderer.nowPlaying?.format == "mp3" }
+            assertEquals(listOf("adts", "mp3"), h.formats())
+            assertEquals(PlayerStatus.PLAYING, h.renderer.status)
+        }
+    }
+
+    @Test
+    fun streamingFallbackAfterSeekKeepsTheRequestedOffset() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        val adtsPlays = AtomicInteger()
+        fake.onAction = { action ->
+            if (action == "Play" &&
+                (fake.state.currentMetaData.contains("audio/mpeg:") || adtsPlays.incrementAndGet() == 1)
+            ) {
+                fake.state.transport = "PLAYING"
+            }
+        }
+        RendererHarness(fake, config = ::streaming).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { fake.calls.any { it.action == "GetPositionInfo" } }
+            assertTrue(h.renderer.seek(100.0))
+            waitUntil { h.formats().contains("mp3") && fake.state.transport == "PLAYING" }
+            assertEquals(listOf("adts" to 0, "adts" to 100, "mp3" to 100), h.registered.map { it.format to it.startAt })
+        }
+    }
+
+    @Test
+    fun streamingResumeRestartsAtThePausedAbsolutePosition() = withFake { fake ->
+        RendererHarness(fake, config = ::streaming, duration = 36000.0).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(DQW), 0.0))
+            assertTrue(r.seek(22913.0))
+            fake.state.relTime = "0:00:04"
+            assertTrue(r.pause())
+            assertTrue(r.resume())
+            assertEquals(
+                listOf("adts" to 0, "adts" to 22913, "adts" to 22917),
+                h.registered.map { it.format to it.startAt },
+            )
+            assertEquals(PlayerStatus.PLAYING, r.status)
+        }
+    }
+
+    @Test
+    fun streamingResumeAfterPausedSeekPlaysThePreparedStreamOnce() = withFake { fake ->
+        RendererHarness(fake, config = ::streaming).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(DQW), 0.0))
+            assertTrue(r.pause())
+            assertTrue(r.seek(100.0))
+            assertTrue(r.resume())
+            assertEquals(listOf("adts" to 0, "adts" to 100), h.registered.map { it.format to it.startAt })
+            assertEquals(2, fake.calls.count { it.action == "Play" })
+        }
+    }
+
+    @Test
+    fun streamingMp3ResumeAlsoKeepsThePausedPosition() = withFake { fake ->
+        RendererHarness(fake, config = ::streaming, prepareFailure = {
+            if (it.format == "adts") IllegalStateException("test") else null
+        }).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(DQW), 0.0))
+            fake.state.relTime = "0:01:05"
+            assertTrue(r.pause())
+            assertTrue(r.resume())
+            assertEquals(listOf("mp3" to 0, "mp3" to 65), h.registered.map { it.format to it.startAt })
+        }
+    }
+
+    @Test
+    fun streamingResumeUsesLastPolledPositionWhenSpeakerCannotReportOne() = withFake { fake ->
+        RendererHarness(fake, config = ::streaming).use { h ->
+            val r = h.renderer
+            r.init()
+            fake.state.relTime = "0:01:05"
+            assertTrue(r.play(Video(DQW), 0.0))
+            assertTrue(r.pause())
+            val pollsBefore = fake.calls.count { it.action == "GetTransportInfo" }
+            waitUntil { fake.calls.count { it.action == "GetTransportInfo" } > pollsBefore }
+            delay(100)
+            fake.state.relTime = "NOT_IMPLEMENTED"
+            assertTrue(r.resume())
+            assertEquals("adts" to 65, h.registered.last().let { it.format to it.startAt })
+            assertTrue(h.notes("Could not read the paused position").isNotEmpty())
+        }
+    }
+
+    @Test
+    fun streamingFallsBackWhenAdtsPreparationFails() = withFake { fake ->
+        RendererHarness(fake, config = ::streaming, prepareFailure = { if (it.format == "adts") IllegalStateException("test") else null }).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+            assertEquals(listOf("adts", "mp3"), h.prepared.map { it.format })
+        }
+    }
+
+    @Test
+    fun streamingFallsBackWhenRendererRejectsAdtsUri() = withFake { fake ->
+        fake.bareFaultOn = setOf("SetAVTransportURI")
+        var calls = 0
+        fake.beforeAction = { action ->
+            if (action == "SetAVTransportURI" && ++calls == 2) fake.bareFaultOn = emptySet()
+        }
+        RendererHarness(fake, config = ::streaming).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+            assertEquals(listOf("adts", "mp3"), h.formats())
+            assertTrue(fake.state.currentMetaData.contains("audio/mpeg"))
+            assertTrue(h.released.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun streamingSkipsAdtsForNonAacSources() {
+        assertEquals("mp3", chooseFormat("streaming", null, emptyList(), "audio/webm"))
+        assertEquals("adts", chooseFormat("streaming", "mp3", emptyList(), "audio/mp4"))
+    }
+
     @Test
     @DisplayName("picks the first format the renderer advertises (lossless ADTS before MP3)")
     fun picksTheFirstFormatTheRendererAdvertises() = withFake(FakeRenderer(sink = "http-get:*:audio/vnd.dlna.adts:*")) { fake ->
@@ -74,6 +216,7 @@ class FormatChainTest {
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
             val entry = h.registered.first()
             assertEquals("direct", entry.format)
+            assertEquals("audio/mp4", h.renderer.nowPlaying?.sourceMime)
             assertEquals("m4a", entry.ext)
             assertEquals("audio/mp4", entry.sourceMime)
             val set = fake.calls.first { it.action == "SetAVTransportURI" }
@@ -139,6 +282,115 @@ class FormatChainTest {
             h.renderer.init()
             assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
             assertEquals("mp3", h.formats().first())
+        }
+    }
+
+    @Test
+    fun offsetFormatsDoNotReplaceTheNormalPreference() {
+        for ((sink, offsetFormat) in listOf(
+            "http-get:*:audio/mp4:*,http-get:*:audio/aac:*,http-get:*:audio/mpeg:*" to "adts",
+            "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*" to "mp3",
+        )) {
+            withFake(FakeRenderer(sink = sink)) { fake ->
+                val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
+                seedFormat(dir, "direct")
+                RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+                    h.renderer.init()
+                    assertTrue(h.renderer.play(Video(DQW), 100.0))
+                    waitUntil { fake.calls.any { it.action == "GetPositionInfo" } }
+                    delay(150)
+                    assertEquals(offsetFormat, h.formats().first())
+                    assertEquals("direct", storedFormat(dir))
+                    assertTrue(h.renderer.play(Video("AAAAAAAAAAA"), 0.0))
+                    assertEquals("direct", h.formats().last())
+                }
+                RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+                    h.renderer.init()
+                    assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+                    assertEquals("direct", h.formats().first())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun offsetStartWithoutPreferenceDoesNotLearnTheFallback() = withFake { fake ->
+        RendererHarness(fake, config = ::auto).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 100.0))
+            waitUntil { fake.calls.any { it.action == "GetPositionInfo" } }
+            delay(150)
+            assertEquals("mp3", h.formats().first())
+            assertNull(storedFormat(h.dataDir))
+            assertTrue(h.renderer.play(Video("AAAAAAAAAAA"), 0.0))
+            assertEquals("direct", h.formats().last())
+        }
+    }
+
+    @Test
+    fun seekingDoesNotReplaceTheNormalPreference() = withFake { fake ->
+        RendererHarness(fake, config = ::auto).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { storedFormat(h.dataDir) == "direct" }
+            assertEquals("direct", storedFormat(h.dataDir))
+            assertTrue(h.renderer.seek(100.0))
+            val pollsBefore = fake.calls.count { it.action == "GetPositionInfo" }
+            waitUntil { fake.calls.count { it.action == "GetPositionInfo" } > pollsBefore }
+            delay(150)
+            assertEquals(listOf("direct", "mp3"), h.formats())
+            assertEquals("direct", storedFormat(h.dataDir))
+            assertTrue(h.renderer.seek(0.0))
+            val pollsAfterSeek = fake.calls.count { it.action == "GetPositionInfo" }
+            waitUntil { fake.calls.count { it.action == "GetPositionInfo" } > pollsAfterSeek }
+            delay(150)
+            assertEquals("direct", storedFormat(h.dataDir), "seeking back to the start must not make MP3 the preference")
+            assertTrue(h.renderer.play(Video("AAAAAAAAAAA"), 0.0))
+            assertEquals("direct", h.formats().last())
+        }
+    }
+
+    @Test
+    fun clampedOffsetDoesNotLearnTheFallback() = withFake { fake ->
+        RendererHarness(fake, config = ::auto, duration = 1.5).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 10.0))
+            waitUntil { fake.calls.any { it.action == "GetPositionInfo" } }
+            delay(150)
+            assertEquals("mp3" to 0, h.registered.first().let { it.format to it.startAt })
+            assertNull(storedFormat(h.dataDir))
+        }
+    }
+
+    @Test
+    fun legacyFormatsAreReevaluatedAndNewFallbacksAreRemembered() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
+        RendererDataStore(dir, "fake-renderer").set("tube2upnp.format", JsonPrimitive("mp3"))
+        RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { storedFormat(dir) == "mp3" }
+            assertEquals(listOf("direct", "mp3"), h.formats())
+            assertEquals("mp3", storedFormat(dir))
+        }
+        RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.doPlay(Video(DQW), 0.0))
+            assertEquals("mp3", h.formats().first())
+        }
+    }
+
+    @Test
+    fun offsetStartFailureDoesNotForgetNormalPreference() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        val dir = java.nio.file.Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
+        seedFormat(dir, "direct")
+        RendererHarness(fake, config = ::auto, dataDir = dir).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 100.0))
+            waitUntil { h.renderer.status == PlayerStatus.STOPPED }
+            assertEquals(PlayerStatus.STOPPED, h.renderer.status)
+            assertEquals(listOf("mp3"), h.formats())
+            assertEquals("direct", storedFormat(dir))
         }
     }
 
