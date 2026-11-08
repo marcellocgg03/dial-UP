@@ -53,6 +53,25 @@ fun ytdlpNewer(latest: String, current: String?): Boolean {
     return false
 }
 
+/**
+ * Whether [version] is a nightly build: nightly tags carry a six-digit time part after the date (`2026.11.07.021234`), stable
+ * tags are the plain date (`2026.11.01`). An unreadable or missing version is not taken for a nightly.
+ */
+fun isNightlyVersion(version: String?): Boolean {
+    val parts = version?.trim()?.split('.') ?: return false
+    return parts.size >= 4 && parts[3].length == 6 && parts.all { p -> p.isNotEmpty() && p.all { it.isDigit() } }
+}
+
+/**
+ * Whether installing [latest] from [channel] changes anything: it does when it is newer ([ytdlpNewer]), and also when the
+ * channel is not the one the installed [current] build came from. Leaving nightly for stable looks like a downgrade by
+ * number, but it is the author's choice of channel, so it counts as available.
+ */
+fun ytdlpAvailable(latest: String, current: String?, channel: String): Boolean {
+    if (ytdlpNewer(latest, current)) return true
+    return current != null && latest.trim() != current.trim() && isNightlyVersion(current) != (channel == "nightly")
+}
+
 /** What one update attempt did. [before] and [after] are yt-dlp versions (null when unreadable); [error] is redacted. */
 data class YtDlpUpdateOutcome(
     val ok: Boolean,
@@ -150,7 +169,7 @@ class YtDlpUpdater(
         } catch (_: Throwable) {
             null
         }
-        YtDlpCheck(current, latest, chosen, latest?.let { ytdlpNewer(it, current) })
+        YtDlpCheck(current, latest, chosen, latest?.let { ytdlpAvailable(it, current, chosen) })
     }
 
     /**

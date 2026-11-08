@@ -526,6 +526,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     suspend fun rediscover(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
+        // Nothing is forgotten unless a search can follow: with the network down or no bound client the list would be left
+        // empty with nothing to refill it, so the skipped search is logged and the speakers stay as they are.
+        val client = ssdp
+        if (networkDown || client == null || !client.isBound()) return searchNow(trigger)
         registry?.removeAll(clearSpeakers = clearOnCastEndNow(), stopSpeakers = true)
         return searchNow(trigger)
     }

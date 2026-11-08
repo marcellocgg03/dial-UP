@@ -503,6 +503,35 @@ class YtDlpUpdaterTest {
     }
 
     @Test
+    fun checkOffersStableWhenTheInstalledBuildIsANewerNightly() {
+        val g = FakeGateway().also {
+            it.current = "2026.11.07.021234"
+            it.latest = "2026.11.01"
+        }
+        val c = runBlocking { updater(g, Pauses(1), channel = { "stable" }).check() }
+        assertEquals(true, c.available, "switching from nightly to stable is an update even though stable is numerically older")
+        val same = FakeGateway().also {
+            it.current = "2026.11.01"
+            it.latest = "2026.11.01"
+        }
+        assertEquals(false, runBlocking { updater(same, Pauses(1), channel = { "stable" }).check() }.available)
+        val nightly = FakeGateway().also {
+            it.current = "2026.11.07.021234"
+            it.latest = "2026.11.06.010101"
+        }
+        assertEquals(false, runBlocking { updater(nightly, Pauses(1), channel = { "nightly" }).check() }.available, "an older nightly is still no update on nightly")
+    }
+
+    @Test
+    fun nightlyVersionsAreTheOnesWithASixDigitTimePart() {
+        assertTrue(isNightlyVersion("2026.11.07.021234"))
+        assertFalse(isNightlyVersion("2026.11.01"))
+        assertFalse(isNightlyVersion("2026.11.01.1"))
+        assertFalse(isNightlyVersion(null))
+        assertFalse(isNightlyVersion("2026.11.07.02123x"))
+    }
+
+    @Test
     fun checkIsUnknownWhenTheLatestCannotBeRead() {
         val g = FakeGateway()
         assertNull(runBlocking { updater(g, Pauses(1)).check() }.available)

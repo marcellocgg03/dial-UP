@@ -66,6 +66,21 @@ class BridgeSearchNowTest {
     }
 
     @Test
+    fun refreshWithTheNetworkDownKeepsTheListedSpeakers() = h.run {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.awaitUntil("one speaker listed") { bridge.speakers.value.size == 1 && bridge.castCount.value.total == 1 }
+        bridge.networkLost()
+        val before = h.searchesSeen.get()
+
+        assertFalse(bridge.rediscover("ui"))
+
+        assertEquals(before, h.searchesSeen.get(), "no M-SEARCH while the network is down")
+        assertEquals(1, bridge.speakers.value.size, "a refresh that cannot search must not empty the list")
+        assertEquals("network-down", searchEvents("ui").single()["skipped"])
+    }
+
+    @Test
     fun aBridgeThatWasNeverStartedSendsNothing() = h.run {
         val bridge = h.newBridge()
         val before = h.searchesSeen.get()

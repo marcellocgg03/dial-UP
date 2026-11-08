@@ -113,8 +113,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
                     Text("Add renderer by address")
                 }
-                // GUI-14: like the first discovery: with nothing cast to the list is emptied and rebuilt from a fresh search (the
-                // spinner shows); while casting only a plain search runs. Hidden while a search runs, so none starts on top of it.
+                // GUI-14: the list is emptied and rebuilt from a fresh search, as at the first discovery (the spinner shows). Every
+                // listed speaker is stopped, so while casting the button asks first. Hidden while a search runs, so none starts on top of it.
                 if (!searching) {
                     OutlinedButton(
                         onClick = { if (castingNow > 0) confirmingRefresh = true else model.rediscoverRenderers() },
