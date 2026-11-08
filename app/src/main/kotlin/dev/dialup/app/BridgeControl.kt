@@ -7,6 +7,7 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.dialup.app.model.SingleFlight
+import dev.dialup.app.model.awaitNull
 import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.restartSequence
 import dev.dialup.app.model.startDecision
@@ -145,7 +146,7 @@ object BridgeControl {
 
     /** True when the service is gone and no stop is in flight, each within [STOP_TIMEOUT_MS]. */
     private suspend fun awaitServiceGone(): Boolean =
-        withTimeoutOrNull(STOP_TIMEOUT_MS) { ServiceHub.serviceFlow.first { it == null } } != null &&
+        awaitNull(ServiceHub.serviceFlow, STOP_TIMEOUT_MS) &&
             BridgeLifecycle.awaitIdle(STOP_TIMEOUT_MS)
 
     private const val STOP_TIMEOUT_MS = 15_000L

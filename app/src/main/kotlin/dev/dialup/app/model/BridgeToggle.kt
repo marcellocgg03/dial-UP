@@ -6,6 +6,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 /** What the header switch does when the author flips it. */
@@ -106,6 +109,15 @@ class SingleFlight<T> {
             ?: scope.async { block() }.also { current = it }
     }
 }
+
+/**
+ * Suspends until [flow] holds null, which is the thing being waited for: true as soon as it does, false when [timeoutMs] ran
+ * out first. (`first { it == null }` itself returns null, so its result cannot tell success from a timeout.)
+ */
+suspend fun <T : Any> awaitNull(flow: StateFlow<T?>, timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) {
+    flow.first { it == null }
+    true
+} == true
 
 /**
  * The deferred start behind a quick off-then-on flip (review WR-01): waits for the old service to be gone ([awaitGone], which
