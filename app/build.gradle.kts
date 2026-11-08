@@ -34,8 +34,8 @@ android {
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37
         // versionCode is a plain integer raised by one for every build that is published (D-01); versionName
         // follows the git tag v<versionName>.
-        versionCode = 2
-        versionName = "0.9.0-beta.2"
+        versionCode = 3
+        versionName = "1.0.0"
 
         ndk {
             abiFilters += "arm64-v8a"
