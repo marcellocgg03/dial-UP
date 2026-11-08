@@ -211,4 +211,29 @@ class BridgeToggleTest {
         assertFalse(started)
         assertEquals(0, starts)
     }
+
+    @Test
+    fun `awaitNull is true once the flow holds null, also when it already does`() = runTest {
+        val gone = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        assertTrue(awaitNull(gone, 1_000))
+
+        val running = kotlinx.coroutines.flow.MutableStateFlow<String?>("service")
+        val result = CompletableDeferred<Boolean>()
+        launch { result.complete(awaitNull(running, 1_000)) }
+        runCurrent()
+        assertFalse(result.isCompleted, "still waiting while the service runs")
+        running.value = null
+        runCurrent()
+        assertTrue(result.await())
+    }
+
+    @Test
+    fun `awaitNull is false when the flow never holds null in time`() = runTest {
+        val running = kotlinx.coroutines.flow.MutableStateFlow<String?>("service")
+        val result = CompletableDeferred<Boolean>()
+        launch { result.complete(awaitNull(running, 1_000)) }
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertFalse(result.await())
+    }
 }

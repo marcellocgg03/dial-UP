@@ -11,6 +11,7 @@ import dev.dialup.app.model.SettingsPresenter
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.FileCache
 import dev.t2u.media.YtDlpUpdater
+import dev.t2u.media.YtDlpCheck
 import dev.t2u.media.YtDlpUpdateOutcome
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -59,11 +60,12 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
 
     /** One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping. */
     private val offlineUpdater: YtDlpUpdater by lazy {
-        val log = evidence() ?: EvidenceLog.shared(eventLogDir(app.filesDir))
+        // Looked up for every event: a bridge restart (an update that stops the bridge) closes the log this was first built with.
+        fun log(): EvidenceLog = EvidenceLog.shared(eventLogDir(app.filesDir))
         YtDlpUpdater(
-            gateway = AndroidYtDlpGateway(app, log),
+            gateway = AndroidYtDlpGateway(app, log()),
             channel = { settings.data.value.ytdlpChannel ?: loadAppConfig(app.filesDir).config.ytdlpChannel },
-            onEvent = { log.event("ytdlp-update", it) },
+            onEvent = { log().event("ytdlp-update", it) },
             record = YtDlpRecords.of(app),
         )
     }
@@ -94,6 +96,12 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         override suspend fun cacheInfo(): CacheInfo? = withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
 
         override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offlineUpdater.updateNow()
+
+        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offlineUpdater.check()
+
+        // The offline updater has no cast to wait for; the bridge is stopped around it so nothing is cast to while yt-dlp changes.
+        override suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? =
+            BridgeControl.whileStopped(app, "ytdlp-update") { offlineUpdater.updateNow("ui") }
 
         override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offlineUpdater.version()
 

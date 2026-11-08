@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -21,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -162,6 +164,25 @@ private val CHANNELS = listOf("stable", "nightly")
 @Composable
 private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
     val running = ui.update == UpdateUi.Running
+    ui.updatePrompt?.let { prompt ->
+        AlertDialog(
+            onDismissRequest = presenter::dismissUpdatePrompt,
+            title = { Text("Update yt-dlp?") },
+            text = {
+                Text(
+                    "yt-dlp ${prompt.latest} is available" + (prompt.current?.let { " (you have $it)" } ?: "") + ". " +
+                        "The bridge will restart and current casts will disconnect.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = presenter::confirmUpdate, modifier = Modifier.testTag("btn-update-confirm")) { Text("Update") }
+            },
+            dismissButton = {
+                TextButton(onClick = presenter::dismissUpdatePrompt, modifier = Modifier.testTag("btn-update-cancel")) { Text("Cancel") }
+            },
+            modifier = Modifier.testTag("dialog-update-ytdlp"),
+        )
+    }
     ListItem(
         headlineContent = { Text("yt-dlp") },
         supportingContent = {
@@ -169,15 +190,13 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
                 OutlinedButton(
                     onClick = presenter::updateNow,
-                    enabled = !running && !ui.updateBlockedByCast,
+                    enabled = !running && ui.updatePrompt == null,
                     modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
                 ) { Text("Update now") }
-                if (ui.updateBlockedByCast) {
-                    Text("Not while a renderer is being cast to", modifier = Modifier.padding(top = 8.dp).testTag("update-blocked"))
-                }
                 if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 (ui.update as? UpdateUi.Done)?.let {
-                    Text(updateMessage(it.outcome), modifier = Modifier.padding(top = 8.dp).testTag("update-result"))
+                    val restarted = if (it.restartedBridge && it.outcome.ok) ". The bridge was restarted; cast again to continue" else ""
+                    Text(updateMessage(it.outcome) + restarted, modifier = Modifier.padding(top = 8.dp).testTag("update-result"))
                 }
             }
         },
