@@ -3,6 +3,7 @@
 package dev.dialup.app.ui
 
 import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,10 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +40,7 @@ import dev.dialup.app.AppModel
 import dev.dialup.app.AppSettings
 import dev.dialup.app.AppUpdates
 import dev.dialup.app.BuildConfigFacts
+import dev.dialup.app.HiddenRenderersActivity
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
@@ -71,8 +76,9 @@ private val THEMES = listOf(
 )
 
 /**
- * The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed. The log switch with its
- * Share log and Clear log buttons comes last.
+ * The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed, grouped as Playback, Renderers,
+ * Maintenance, Appearance and Diagnostics. The Hidden renderers row opens its own screen ([HiddenRenderersActivity]). The log switch
+ * with its Share log and Clear log buttons comes last.
  */
 @Composable
 fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifier = Modifier) {
@@ -84,7 +90,32 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         presenter.onVisible()
         onPauseOrDispose { presenter.onHidden() }
     }
+    val hidden by model.hidden.collectAsStateWithLifecycle()
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        SectionHeader("Playback")
+        ChoiceRow(
+            title = "Playback mode",
+            support = playbackModeDescription(ui.outputFormat),
+            current = FORMATS.firstOrNull { it.first == ui.outputFormat }?.second ?: ui.outputFormat,
+            options = FORMATS.map { FORMAT_MENU_LABELS[it.first] ?: it.second },
+            onPick = { i -> presenter.setOutputFormat(FORMATS[i].first) },
+            tag = "setting-format",
+            optionTag = { "format-option-${FORMATS[it].first}" },
+        )
+        // Only mp4 builds and retains files; the other formats stream.
+        if (ui.outputFormat == "mp4") {
+            HorizontalDivider()
+            CacheSection(ui, presenter)
+        }
+        HorizontalDivider()
+        SwitchRow(
+            title = "Gapless track changes on renderers that support it",
+            support = null,
+            checked = ui.gapless,
+            onChange = { presenter.setGapless(it) },
+            tag = "setting-gapless",
+        )
+        SectionHeader("Renderers")
         SwitchRow(
             title = "LAN access",
             support = "Any device on the LAN can access the bridge running through this app and cast to the speakers",
@@ -102,24 +133,6 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         )
         HorizontalDivider()
         SwitchRow(
-            title = "Gapless track changes on renderers that support it",
-            support = null,
-            checked = ui.gapless,
-            onChange = { presenter.setGapless(it) },
-            tag = "setting-gapless",
-        )
-        HorizontalDivider()
-        ChoiceRow(
-            title = "Playback mode",
-            support = playbackModeDescription(ui.outputFormat),
-            current = FORMATS.firstOrNull { it.first == ui.outputFormat }?.second ?: ui.outputFormat,
-            options = FORMATS.map { FORMAT_MENU_LABELS[it.first] ?: it.second },
-            onPick = { i -> presenter.setOutputFormat(FORMATS[i].first) },
-            tag = "setting-format",
-            optionTag = { "format-option-${FORMATS[it].first}" },
-        )
-        HorizontalDivider()
-        SwitchRow(
             title = "Show audio format",
             support = "Show the format in use on each renderer's card",
             checked = ui.showAudioFormat,
@@ -127,13 +140,20 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             tag = "setting-show-audio-format",
         )
         HorizontalDivider()
-        // Only mp4 builds and retains files; the other formats stream.
-        if (ui.outputFormat == "mp4") {
-            CacheSection(ui, presenter)
-            HorizontalDivider()
-        }
-        HiddenSection(model)
-        HorizontalDivider()
+        ListItem(
+            headlineContent = { Text("Hidden renderers") },
+            supportingContent = {
+                Text(
+                    if (hidden.isEmpty()) "No renderer is hidden" else "${hidden.size} hidden",
+                    modifier = Modifier.testTag("hidden-count"),
+                )
+            },
+            trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+            modifier = Modifier
+                .clickable { context.startActivity(Intent(context, HiddenRenderersActivity::class.java)) }
+                .testTag("section-hidden"),
+        )
+        SectionHeader("Maintenance")
         YtDlpSection(ui, presenter)
         HorizontalDivider()
         AppUpdatesSection(
@@ -142,7 +162,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             currentVersion = BuildConfigFacts.versionName(context) ?: "0",
             onAutoChange = { on -> AppSettings.of(context).update { it.copy(updateCheckEnabled = on) } },
         )
-        HorizontalDivider()
+        SectionHeader("Appearance")
         ChoiceRow(
             title = "Theme",
             support = "System follows the phone's light or dark setting",
@@ -152,9 +172,19 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             tag = "setting-theme",
             optionTag = { "theme-option-${THEMES[it].first.wire}" },
         )
-        HorizontalDivider()
+        SectionHeader("Diagnostics")
         LogSection(ui, presenter)
     }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
+    )
 }
 
 private val CHANNELS = listOf("stable", "nightly")
