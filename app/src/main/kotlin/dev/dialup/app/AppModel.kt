@@ -150,6 +150,21 @@ class AppModel private constructor(context: Context) {
         }
     }
 
+    /**
+     * The Refresh button: forget the listed renderers and search from scratch like the first discovery (the empty list shows the
+     * search spinner). Forgetting a renderer ends its cast, so the screen asks first while anything is cast to. Fire-and-forget
+     * like [refreshRenderers].
+     */
+    fun rediscoverRenderers(): Job = scope.launch {
+        try {
+            cast.value?.currentBridge()?.rediscover("ui")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the list simply waits for the next periodic search
+        }
+    }
+
     private val foregroundThrottle = SearchThrottle({ SystemClock.elapsedRealtime() }, FOREGROUND_SEARCH_GAP_MS)
 
     /**

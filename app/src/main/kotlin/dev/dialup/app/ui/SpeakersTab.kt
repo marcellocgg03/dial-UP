@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,6 +64,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     // the UDN being renamed; the dialog goes when no card with that UDN is on the list any more
     var renaming by rememberSaveable { mutableStateOf<String?>(null) }
     var adding by rememberSaveable { mutableStateOf(false) }
+    val castingNow by model.casting.collectAsStateWithLifecycle()
+    var confirmingRefresh by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -106,11 +110,11 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
                     Text("Add renderer by address")
                 }
-                // GUI-14: one multicast SSDP search at once; the cards follow as the renderers answer. Shown only once the search
-                // that is running has ended, so it can never start a second one on top of it.
+                // GUI-14: like the first discovery: with nothing cast to the list is emptied and rebuilt from a fresh search (the
+                // spinner shows); while casting only a plain search runs. Hidden while a search runs, so none starts on top of it.
                 if (!searching) {
                     OutlinedButton(
-                        onClick = { model.refreshRenderers("ui") },
+                        onClick = { if (castingNow > 0) confirmingRefresh = true else model.rediscoverRenderers() },
                         enabled = bridgeUp,
                         modifier = Modifier.testTag("btn-refresh-list"),
                     ) { Text("Refresh") }
@@ -155,6 +159,26 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         }
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
+    if (confirmingRefresh) {
+        AlertDialog(
+            onDismissRequest = { confirmingRefresh = false },
+            title = { Text("Refresh renderers?") },
+            text = { Text("Refreshing searches for renderers from scratch and disconnects the current cast. You will need to cast again afterwards.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmingRefresh = false
+                        model.rediscoverRenderers()
+                    },
+                    modifier = Modifier.testTag("btn-refresh-confirm"),
+                ) { Text("Refresh") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingRefresh = false }, modifier = Modifier.testTag("btn-refresh-cancel")) { Text("Cancel") }
+            },
+            modifier = Modifier.testTag("dialog-refresh"),
+        )
+    }
     renaming?.let { udn ->
         // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
         val card = (listing.live + listing.saved).firstOrNull { it.udn == udn }

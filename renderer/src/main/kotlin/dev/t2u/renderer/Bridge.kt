@@ -518,6 +518,18 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
+     * The Refresh button when nothing is cast to: forgets every listed renderer (stopping nothing, clearing nothing) and then
+     * searches from scratch, as at the first discovery, so the list is rebuilt from what answers now. Removing a renderer ends
+     * its cast, so callers ask the author first while anything is cast to. Hidden renderers stay hidden. True when the search
+     * was sent.
+     */
+    suspend fun rediscover(trigger: String): Boolean {
+        if (!started.get() || stopped.get()) return false
+        registry?.removeAll()
+        return searchNow(trigger)
+    }
+
+    /**
      * GUI-04, D-06: adds the speaker at [ip] by asking it directly. One unicast M-SEARCH goes to [ip] on
      * [BridgeDeps.manualSsdpPort]; the reply reaches the registry like any search reply (so its guards apply: the LOCATION host
      * must equal the sender and be private LAN, excluded servers and hidden speakers are refused), and the card exists only
