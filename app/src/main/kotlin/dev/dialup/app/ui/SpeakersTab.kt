@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +39,7 @@ import dev.dialup.app.model.SEARCH_IDLE_GRACE_MS
 import dev.dialup.app.model.SpeakersPresenter
 import dev.dialup.app.model.emptyPhase
 import dev.dialup.app.model.buttonsFor
+import dev.dialup.app.model.hideEndsCast
 import dev.dialup.app.model.ListNote
 import dev.dialup.app.model.rendererListing
 import dev.dialup.app.model.waitingForWifi
@@ -61,6 +64,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
     // the UDN being renamed; the dialog goes when no card with that UDN is on the list any more
     var renaming by rememberSaveable { mutableStateOf<String?>(null) }
     var adding by rememberSaveable { mutableStateOf(false) }
+    // the UDN of a playing speaker whose Hide is waiting for a yes; the dialog goes when that card is no longer playing
+    var confirmingHide by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -131,7 +136,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 speaker,
                 buttons = buttonsFor(speaker, speaker.udn in busy),
                 onAction = { presenter.press(speaker.udn, it) },
-                onHide = { model.hide(speaker) },
+                onHide = { if (hideEndsCast(speaker)) confirmingHide = speaker.udn else model.hide(speaker) },
                 onRename = { renaming = speaker.udn },
                 onDelete = { model.deleteManual(speaker.udn) },
                 showAudioFormat = settings.showAudioFormat,
@@ -143,6 +148,31 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         }
     }
     if (adding) AddSpeakerDialog(model, onDismiss = { adding = false })
+    confirmingHide?.let { udn ->
+        val card = listing.live.firstOrNull { it.udn == udn }
+        if (card == null || !hideEndsCast(card)) {
+            confirmingHide = null
+        } else {
+            AlertDialog(
+                onDismissRequest = { confirmingHide = null },
+                title = { Text("Hide renderer?") },
+                text = { Text("${card.name} is casting. The current cast will disconnect.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmingHide = null
+                            model.hide(card)
+                        },
+                        modifier = Modifier.testTag("btn-hide-confirm"),
+                    ) { Text("Hide") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmingHide = null }, modifier = Modifier.testTag("btn-hide-cancel")) { Text("Cancel") }
+                },
+                modifier = Modifier.testTag("dialog-hide"),
+            )
+        }
+    }
     renaming?.let { udn ->
         // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
         val card = (listing.live + listing.saved).firstOrNull { it.udn == udn }

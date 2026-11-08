@@ -267,6 +267,16 @@ class SpeakersPresenterTest {
     }
 
     @Test
+    fun `hide asks first only when it would end a cast`() {
+        assertTrue(hideEndsCast(speaker(PlayerStatus.PLAYING)))
+        assertTrue(hideEndsCast(speaker(PlayerStatus.PAUSED)))
+        assertTrue(hideEndsCast(speaker(PlayerStatus.LOADING)))
+        assertEquals(false, hideEndsCast(speaker(PlayerStatus.IDLE)))
+        assertEquals(false, hideEndsCast(speaker(PlayerStatus.STOPPED)))
+        assertEquals(false, hideEndsCast(speaker(PlayerStatus.PLAYING, online = false).copy(manual = true)))
+    }
+
+    @Test
     fun `delete is offered only on renderers saved by address, answering or not`() {
         assertTrue(deleteOffered(speaker(PlayerStatus.IDLE).copy(manual = true)))
         assertTrue(deleteOffered(speaker(PlayerStatus.IDLE, online = false).copy(manual = true)))
