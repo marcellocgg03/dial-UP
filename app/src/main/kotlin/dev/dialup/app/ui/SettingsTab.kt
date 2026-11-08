@@ -171,7 +171,7 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
             text = {
                 Text(
                     "yt-dlp ${prompt.latest} is available" + (prompt.current?.let { " (you have $it)" } ?: "") + ". " +
-                        "Updating ends the current cast and restarts the bridge, so you will need to cast again afterwards.",
+                        "The bridge will restart and current casts will disconnect.",
                 )
             },
             confirmButton = {
