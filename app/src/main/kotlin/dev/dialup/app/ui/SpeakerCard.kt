@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.dialup.app.model.CardButtons
 import dev.dialup.app.model.PlayPause
+import dev.dialup.app.model.audioFormatLabel
 import dev.dialup.app.model.buttonsFor
 import dev.dialup.app.model.deleteOffered
 import dev.dialup.app.model.hideOffered
@@ -64,6 +65,7 @@ fun SpeakerCard(
     onHide: () -> Unit = {},
     onRename: () -> Unit = {},
     onDelete: () -> Unit = {},
+    showAudioFormat: Boolean = false,
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
@@ -99,6 +101,9 @@ fun SpeakerCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                audioFormatLabel(speaker, showAudioFormat)?.let { label ->
+                    Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("audio-format-$udn"))
                 }
             }
             // GUI-03: the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one (PD-3); Delete only on a renderer saved by address (quick 261101-oib).

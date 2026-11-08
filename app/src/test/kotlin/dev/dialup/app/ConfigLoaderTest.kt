@@ -24,7 +24,7 @@ class ConfigLoaderTest {
 
     private fun write(text: String): File = File(dir, CONFIG_FILE).apply { writeText(text) }
 
-    private val defaults get() = Config(dataDir = File(dir, "cast"))
+    private val defaults get() = Config(dataDir = File(dir, "cast"), outputFormat = "streaming")
 
     @Test
     fun validKeysChangeTheEffectiveConfig() {
@@ -44,7 +44,7 @@ class ConfigLoaderTest {
         val r = loadAppConfig(dir)
         assertFalse(r.found)
         assertTrue(r.warnings.isEmpty())
-        assertEquals("auto", r.config.outputFormat)
+        assertEquals("streaming", r.config.outputFormat)
         assertTrue(r.config.nameFilter.include.isEmpty())
         assertTrue(r.config.nameFilter.exclude.isEmpty())
         assertTrue(r.config.ytdlpVerbose)
@@ -121,7 +121,7 @@ class ConfigLoaderTest {
     @Test
     fun summaryOfTheDefaultsWhenThereIsNoFile() {
         val s = configSummary(loadAppConfig(dir))
-        assertEquals("auto", s["format"]!!.jsonPrimitive.content)
+        assertEquals("streaming", s["format"]!!.jsonPrimitive.content)
         assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
         assertTrue(s["gapless"]!!.jsonPrimitive.boolean)
         assertEquals(256, s["cacheMb"]!!.jsonPrimitive.int)

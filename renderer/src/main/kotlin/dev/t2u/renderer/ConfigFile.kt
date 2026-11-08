@@ -62,7 +62,7 @@ private val KNOWN_KEYS = setOf(
  *   "include": "living|kitchen",        // string or array of strings: case-insensitive regexes on the speaker's
  *   "exclude": ["lamp", "^bath"],       //   friendly name; a speaker appears if it matches an include (or none is
  *                                       //   set) and matches no exclude
- *   "outputFormat": "auto",             // auto | direct | mp4 | adts | mp3
+ *   "outputFormat": "streaming",        // streaming | auto | direct | mp4 | adts | mp3
  *   "startTimeoutMs": 12000,            // integer 1000..120000
  *   "pollIntervalMs": 2000,             // integer 200..30000
  *   "mp3Bitrate": "192k",               // "64k" .. "320k"

@@ -248,10 +248,20 @@ data class NowPlaying(
     val duration: Double,
     val format: String,
     val thumbnail: String,
+    val sourceMime: String? = null,
 )
 
-/** The track the speaker was last told to play. [startAt] is the offset the stream itself starts at. */
-private class Current(val video: Video, val format: String, val startAt: Int, val sourceMime: String) {
+/**
+ * The track the speaker was last told to play. [startAt] is the stream's offset; [offsetOnly] keeps
+ * the temporary format's origin across seeks and network recovery, even when reloaded at zero.
+ */
+private class Current(
+    val video: Video,
+    val format: String,
+    val startAt: Int,
+    val sourceMime: String,
+    val offsetOnly: Boolean,
+) {
     @Volatile var loadedAt: Long = 0
 
     @Volatile var fetched: Boolean = false
@@ -344,8 +354,8 @@ private class PendingSeek(val id: Int, val target: Double, val startedMs: Long, 
     @Volatile var sawTransitioning: Boolean = false
 }
 
-/** Result of the last poll: [rel] is already shifted by the stream offset. */
-private data class PollPosition(val rel: Double, val dur: Double, val uri: String?, val at: Long)
+/** Result of the last poll: [rel] is already shifted by the stream offset. [reported] is false when the speaker gave no readable position and [rel] is carried over. */
+private data class PollPosition(val rel: Double, val dur: Double, val uri: String?, val at: Long, val reported: Boolean = true)
 
 /**
  * One speaker as one cast target (renderer.js `Renderer`). Concurrency: `loadSeq` invalidates a load a
@@ -898,7 +908,8 @@ class Renderer(
         format: String? = null,
         startPlaying: Boolean = true,
         forceOffset: Boolean = false,
-    ): Boolean = loadResult(video, position, format, startPlaying, forceOffset) is LoadResult.Started
+        offsetOnly: Boolean = false,
+    ): Boolean = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly) is LoadResult.Started
 
     /**
      * [load] with the reason it did not start (plan 04-07, D-11): [LoadResult.PrepareFailed] when taking or preparing the item
@@ -912,6 +923,7 @@ class Renderer(
         format: String? = null,
         startPlaying: Boolean = true,
         forceOffset: Boolean = false,
+        offsetOnly: Boolean = false,
     ): LoadResult {
         val seq = loadSeq.incrementAndGet()
         // Taken after the bump: a prefetch that finishes later sees the new loadSeq and releases its item itself. Node re-sends
@@ -924,13 +936,14 @@ class Renderer(
         var prepared: PreparedItem? = null
         var adopted = false
         var preparing = true
+        var startingSpeaker = false
         try {
-            if (taken != null && format == null && !forceOffset && position < 2 && taken.video.id == video.id) {
+            if (taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id) {
                 prepared = taken.item
                 note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
             } else {
                 releaseStream(taken?.item?.current)
-                prepared = prepareItem(video, position, format, forceOffset)
+                prepared = prepareItem(video, position, format, forceOffset, offsetOnly)
             }
             val item = prepared
             preparing = false
@@ -947,6 +960,7 @@ class Renderer(
             // finds the entry and the flag after its own bump and waits for the call, so no ordering lets the song land (plan 03-22).
             beforeUri = false
             loadsBeforeUri.decrementAndGet()
+            startingSpeaker = true
             try {
                 if (superseded(seq)) return LoadResult.Superseded
                 call(
@@ -965,6 +979,7 @@ class Renderer(
                 call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
                 item.current.playSent = true
                 if (superseded(seq)) return LoadResult.Superseded
+                startingSpeaker = false
 
                 if (position > 1 && item.current.startAt == 0) {
                     waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
@@ -981,6 +996,7 @@ class Renderer(
                 }
             }
 
+            startingSpeaker = false
             adopt(item)
             adopted = true
             // Evidence for the missing-artist question (G3): what we sent, as lengths and flags only.
@@ -999,6 +1015,12 @@ class Renderer(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (startingSpeaker && !superseded(seq) && config.outputFormat == "streaming" && prepared?.format == "adts") {
+                note("warn", "Renderer rejected adts (${e.message}) - trying mp3")
+                releaseStream(prepared.current)
+                prepared = null
+                return loadResult(video, position, "mp3", startPlaying, forceOffset, offsetOnly)
+            }
             lastError = e.message ?: e::class.java.simpleName
             note("error", "Play ${video.id} failed: $lastError")
             expectStop = false
@@ -1186,7 +1208,13 @@ class Renderer(
      * registered (a failed download, say) hands over to the next accepted format within the same load; with
      * a forced format, or when the chain is used up, the failure goes to the caller.
      */
-    private suspend fun prepareItem(video: Video, position: Double, format: String?, forceOffset: Boolean = false): PreparedItem {
+    private suspend fun prepareItem(
+        video: Video,
+        position: Double,
+        format: String?,
+        forceOffset: Boolean = false,
+        offsetOnly: Boolean = false,
+    ): PreparedItem {
         val info = deps.resolver.resolve(video.id)
         val address = checkNotNull(ip) { "renderer was not initialised" }
         var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
@@ -1199,11 +1227,15 @@ class Renderer(
         }
         while (true) {
             try {
-                return buildItem(video, position, info, fmt, address, forceOffset)
+                return buildItem(video, position, info, fmt, address, forceOffset, offsetOnly)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val next = if (config.outputFormat == "auto") nextFormat(fmt, protocols, info.mime) else null
+                val next = when (config.outputFormat) {
+                    "auto" -> nextFormat(fmt, protocols, info.mime)
+                    "streaming" -> if (fmt == "adts") "mp3" else null
+                    else -> null
+                }
                 if (next == null) throw e
                 note("warn", "Preparing $fmt failed (${e.message}) - trying $next")
                 fmt = next
@@ -1222,13 +1254,15 @@ class Renderer(
         fmt: String,
         address: String,
         forceOffset: Boolean,
+        offsetOnly: Boolean,
     ): PreparedItem {
         val mime = mimeOf(fmt, info.mime)
         // Seekable formats start at 0 and use AVTransport Seek, unless the speaker rejected it ([forceOffset]);
         // streams start ffmpeg at the offset.
         val seekable = FORMATS[fmt]?.seekable ?: false
-        val startAt = restartOffset(position, info.duration, !seekable || forceOffset)
-        val cur = Current(video, fmt, startAt, info.mime)
+        val offsetStart = position > 1 && (!seekable || forceOffset)
+        val startAt = restartOffset(position, info.duration, offsetStart)
+        val cur = Current(video, fmt, startAt, info.mime, offsetOnly || offsetStart)
         cur.wantedAt = position
         val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
             if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
@@ -1284,7 +1318,7 @@ class Renderer(
         item.current.startedAt = item.current.loadedAt
         if (current !== item.current) releaseStream(current) // the stream this one replaces
         current = item.current
-        nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail)
+        nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail, item.current.sourceMime)
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
         lastError = null
         sawPlaying = alreadyPlaying
@@ -1360,6 +1394,18 @@ class Renderer(
             if (played) c.playSent = true
             if (played) holdForPlayAfterPausedSeek(c)
             return played
+        }
+        if (c != null && config.outputFormat == "streaming" && FORMATS[c.format]?.seekable == false) {
+            val seq = loadSeq.get()
+            val at = speakerPosition() ?: position?.rel?.also {
+                note("warn", "Could not read the paused position - resuming from the last known position")
+            } ?: run {
+                note("error", "Could not determine the paused position - cannot resume the stream")
+                return false
+            }
+            if (superseded(seq) || current !== c || status != PlayerStatus.PAUSED) return false
+            note("info", "Resuming ${c.format} by restarting the stream at ${Math.floor(at).toInt()}s")
+            return load(c.video, at, c.format, offsetOnly = c.offsetOnly)
         }
         if (c != null && !sawPlaying) {
             c.loadedAt = deps.clock()
@@ -1647,7 +1693,7 @@ class Renderer(
         val paused = status == PlayerStatus.PAUSED
         if (c.format == "direct" && startsMidTrack(position)) {
             // prepareItem swaps direct for a format that can start at the position
-            return load(c.video, position, "direct", startPlaying = !paused)
+            return load(c.video, position, "direct", startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
@@ -1657,7 +1703,7 @@ class Renderer(
                 "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream" +
                     if (paused) ", Play deferred until resume" else "",
             )
-            return load(c.video, position, c.format, startPlaying = !paused)
+            return load(c.video, position, c.format, startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         val base = c.startAt
         val before = position < base
@@ -1682,7 +1728,7 @@ class Renderer(
         val at = Math.floor(position).toInt()
         val why = if (before) "Seek to ${at}s is before the start of the ${c.format} file (${base}s)" else "Renderer rejected Seek"
         note("info", "$why - restarting ${c.format} at ${at}s" + if (paused) ", Play deferred until resume" else "")
-        return load(c.video, position, c.format, startPlaying = !paused, forceOffset = true)
+        return load(c.video, position, c.format, startPlaying = !paused, forceOffset = true, offsetOnly = c.offsetOnly)
     }
 
     /**
@@ -1744,7 +1790,7 @@ class Renderer(
         // speaker names a different stream than ours, its numbers are not ours.
         if (r == null || isOnOtherStream(r["TrackURI"])) return null
         // The speaker counts from the start of the stream it got; add the offset our ffmpeg started at.
-        return parseHms(r["RelTime"]) + offset
+        return parseHmsOrNull(r["RelTime"])?.plus(offset)
     }
 
     /**
@@ -2083,7 +2129,9 @@ class Renderer(
         val now = status
         if (destroyed || current !== c || now !in RESET_STATUSES) return
         val paused = now == PlayerStatus.PAUSED
-        val started = load(c.video, pos, c.format, startPlaying = !paused, forceOffset = paused && c.format in FILE_FORMATS)
+        val started = load(
+            c.video, pos, c.format, startPlaying = !paused, forceOffset = paused && c.format in FILE_FORMATS, offsetOnly = c.offsetOnly,
+        )
         if (!started) {
             note("warn", "Re-setting \"${c.video.id}\" after the address change failed")
             if (!destroyed && current != null) startPolling() // the load stopped the polls; the mirror needs them
@@ -2129,12 +2177,13 @@ class Renderer(
                 }
                 // Do not take position or duration from a speaker still on the previous track, or on another source.
                 val stale = isOnOtherStream(uri) || foreign
-                if (!stale) polledRaw = parseHms(r["RelTime"]) + startAt
+                if (!stale) polledRaw = parseHmsOrNull(r["RelTime"])?.plus(startAt)
                 position = PollPosition(
-                    rel = if (stale) position?.rel ?: startAt.toDouble() else parseHms(r["RelTime"]) + startAt,
+                    rel = polledRaw ?: position?.rel ?: startAt.toDouble(),
                     dur = nowPlaying?.duration?.takeIf { it != 0.0 } ?: if (stale) 0.0 else parseHms(r["TrackDuration"]),
                     uri = uri,
                     at = deps.clock(),
+                    reported = if (stale) position?.reported ?: true else polledRaw != null,
                 )
                 if (!stale && !metaReported) {
                     metaReported = true
@@ -2304,7 +2353,7 @@ class Renderer(
      * behaviour applies) or when the last polled position is within [TRACK_END_TOLERANCE_S] of the length.
      */
     private fun trackEnded(p: PollPosition?, startAt: Int): Boolean =
-        p == null || p.dur <= 1 || p.rel - startAt < 1 || p.rel >= p.dur - TRACK_END_TOLERANCE_S
+        p == null || !p.reported || p.dur <= 1 || p.rel - startAt < 1 || p.rel >= p.dur - TRACK_END_TOLERANCE_S
 
     /**
      * Moves the queue on after a track end. A playlist refresh in flight makes [next] a no-op, so the move waits
@@ -2426,11 +2475,11 @@ class Renderer(
     }
 
     /**
-     * The first PLAYING of a load proves [c]'s format works on this speaker: in auto mode remember it, in the
-     * speaker's store, so the next start (and the next run of the app) begins with it. A forced format is
-     * the user's choice and is never written.
+     * A normal start proves the format works for future tracks. An offset stream may have been chosen
+     * only to seek, so it must not replace the speaker's ordinary format preference.
      */
     private suspend fun confirmFormat(c: Current) {
+        if (c.offsetOnly) return
         playedFormats.add(c.format)
         if (config.outputFormat != "auto" || learnedFormat == c.format) return
         learnedFormat = c.format
@@ -2447,11 +2496,15 @@ class Renderer(
      */
     private suspend fun handleStartFailure(c: Current) {
         val auto = config.outputFormat == "auto"
-        val next = if (auto) nextFormat(c.format, protocols, c.sourceMime) else null
+        val next = when (config.outputFormat) {
+            "auto" -> nextFormat(c.format, protocols, c.sourceMime)
+            "streaming" -> if (c.format == "adts") "mp3" else null
+            else -> null
+        }
         // A remembered format that has played on this speaker in this session is working: a start failure of one track
         // (or of another format) does not make the app forget it (plan 03-17, T-03-48). One that never played is cleared.
         val remembered = learnedFormat
-        if (auto && remembered != null && remembered !in playedFormats) {
+        if (auto && !c.offsetOnly && remembered == c.format && remembered !in playedFormats) {
             learnedFormat = null
             store?.set(LEARNED_FORMAT_KEY, null)
         }
@@ -2464,7 +2517,7 @@ class Renderer(
             val resumeAt = polled ?: maxOf(c.wantedAt, c.startAt.toDouble())
             val before = loadSeq.get()
             scope.launch {
-                val started = load(c.video, resumeAt, next, startPlaying = true)
+                val started = load(c.video, resumeAt, next, startPlaying = true, offsetOnly = c.offsetOnly)
                 // Only a failure of this reload counts; a newer play, a stop or removal has moved loadSeq on.
                 if (!started && !destroyed && loadSeq.get() == before + 1) reportPlaybackFailure("no format could be loaded on the speaker")
             }
@@ -2499,13 +2552,17 @@ class Renderer(
 
 /** Parses a UPnP H:MM:SS(.fff) time; 0 for anything else, including NOT_IMPLEMENTED (renderer.js `parseHms`). */
 fun parseHms(t: String?): Double {
-    if (t.isNullOrEmpty() || t.contains("NOT_IMPLEMENTED", ignoreCase = true)) return 0.0
+    return parseHmsOrNull(t) ?: 0.0
+}
+
+private fun parseHmsOrNull(t: String?): Double? {
+    if (t.isNullOrEmpty() || t.contains("NOT_IMPLEMENTED", ignoreCase = true)) return null
     var total = 0.0
     for (part in t.split(':')) {
-        val v = part.trim().toDoubleOrNull()?.takeIf { it.isFinite() } ?: return 0.0
+        val v = part.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return null
         total = total * 60 + v
     }
-    return total
+    return total.takeIf { it.isFinite() }
 }
 
 /** HH:MM:SS with zero-padded hours, floored, never negative: the REL_TIME form of Seek (renderer.js `hms`). */

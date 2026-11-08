@@ -5,6 +5,7 @@ package dev.dialup.app.model
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.NowPlaying
 import dev.t2u.renderer.SpeakerPosition
+import dev.t2u.renderer.SpeakerUi
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -45,6 +46,33 @@ class CardTextTest {
     @Test
     fun `a blank title falls back to the video id`() {
         assertEquals("vid123" to "Daryl Hall & John Oates", trackLines(track(title = "")))
+    }
+
+    @Test
+    fun `format label reflects the loaded format and original container`() {
+        val speaker = SpeakerUi("u", "n", "address", PlayerStatus.PLAYING, track(), null, false, false, true, null)
+        fun label(format: String, mime: String? = null) =
+            audioFormatLabel(speaker.copy(track = track().copy(format = format, sourceMime = mime)), true)
+        assertEquals("Audio: AAC (ADTS)", label("adts"))
+        assertEquals("Audio: MP3", label("mp3"))
+        assertEquals("Audio: MP4 (cached)", label("mp4"))
+        assertEquals("Audio: Original audio (MP4)", label("direct", "audio/mp4"))
+        assertEquals("Audio: Original audio (WebM)", label("direct", "audio/webm"))
+        assertEquals("Audio: Original audio", label("direct"))
+        assertNull(label("unknown"))
+    }
+
+    @Test
+    fun `format label needs the switch and a loaded track`() {
+        val speaker = SpeakerUi("u", "n", "address", PlayerStatus.PLAYING, track(), null, false, false, false, null)
+        assertNull(audioFormatLabel(speaker, false))
+        assertNull(audioFormatLabel(speaker.copy(track = null), true))
+        assertNull(audioFormatLabel(speaker.copy(online = false), true))
+        assertNull(audioFormatLabel(speaker.copy(status = PlayerStatus.IDLE), true))
+        assertNull(audioFormatLabel(speaker.copy(status = PlayerStatus.LOADING), true))
+        assertNull(audioFormatLabel(speaker.copy(status = PlayerStatus.STOPPED), true))
+        assertEquals("Audio: AAC (ADTS)", audioFormatLabel(speaker.copy(status = PlayerStatus.PAUSED), true))
+        assertEquals("Audio: AAC (ADTS)", audioFormatLabel(speaker.copy(status = PlayerStatus.STOPPED, queueHasCurrent = true), true))
     }
 
     private val pos = SpeakerPosition(10.0, 200.0, atMs = 1_000)
