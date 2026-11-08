@@ -5,6 +5,7 @@ package dev.dialup.app.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -101,8 +102,16 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "add-speaker") {
-            OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
-                Text("Add renderer by address")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
+                    Text("Add renderer by address")
+                }
+                // GUI-14: one multicast SSDP search at once; the cards follow as the renderers answer. Off while a search runs.
+                OutlinedButton(
+                    onClick = { model.refreshRenderers("ui") },
+                    enabled = bridgeUp && !searching,
+                    modifier = Modifier.testTag("btn-refresh-list"),
+                ) { Text(if (searching) "Searching" else "Refresh") }
             }
         }
         listing.note?.let { note ->
