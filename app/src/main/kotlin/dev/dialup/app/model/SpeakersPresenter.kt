@@ -57,6 +57,13 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
 
 /**
+ * Whether hiding this card ends a cast: an answering speaker that is playing, paused or loading is stopped by Hide, so the card
+ * asks first. An idle or stopped speaker, or a saved renderer that does not answer, is hidden at once.
+ */
+fun hideEndsCast(s: SpeakerUi): Boolean =
+    s.online && (s.status == PlayerStatus.PLAYING || s.status == PlayerStatus.PAUSED || s.status == PlayerStatus.LOADING)
+
+/**
  * Whether a card offers Delete (quick 261101-oib): only for a renderer added by address (saved in manual.json), whether it answers
  * or not. A discovered-only renderer comes back at the next search, so there is nothing to delete; Hide is what keeps it away.
  */
