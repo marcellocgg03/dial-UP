@@ -32,6 +32,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Hidden renderers: opened from the Hidden renderers row on the Settings tab. -->
+        <activity
+            android:name=".HiddenRenderersActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <!-- Share log: started only by the Share log button on the Settings tab; hands the current log file to the
              system share sheet (D-11). -->
         <activity
