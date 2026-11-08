@@ -152,7 +152,7 @@ data class SettingsUi(
     /** The one-line result of the last Clear log, shown under the log buttons; null when there is none. */
     val logMessage: String? = null,
 ) {
-    /** The LAN access switch: on when any device on the LAN may cast; the inverse of [phoneOnly]. */
+    /** The LAN server mode switch: on when any device on the LAN may cast; the inverse of [phoneOnly]. */
     val lanAccess: Boolean get() = !phoneOnly
 }
 

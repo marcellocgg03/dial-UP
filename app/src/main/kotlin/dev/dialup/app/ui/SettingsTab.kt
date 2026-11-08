@@ -117,7 +117,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         )
         SectionHeader("Renderers")
         SwitchRow(
-            title = "LAN access",
+            title = "LAN server mode",
             support = "Any device on the LAN can access the bridge running through this app and cast to the speakers",
             checked = ui.lanAccess,
             onChange = { presenter.setLanAccess(it) },
