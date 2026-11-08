@@ -163,7 +163,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = { confirmingRefresh = false },
             title = { Text("Refresh renderers?") },
-            text = { Text("Refreshing searches for renderers from scratch and disconnects the current cast. You will need to cast again afterwards.") },
+            text = { Text("Current casts will disconnect.") },
             confirmButton = {
                 TextButton(
                     onClick = {
