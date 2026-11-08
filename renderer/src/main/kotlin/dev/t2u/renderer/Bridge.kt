@@ -518,14 +518,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * The Refresh button when nothing is cast to: forgets every listed renderer (stopping nothing, clearing nothing) and then
+     * The Refresh button when nothing is cast to: forgets every listed renderer and then
      * searches from scratch, as at the first discovery, so the list is rebuilt from what answers now. Removing a renderer ends
-     * its cast, so callers ask the author first while anything is cast to. Hidden renderers stay hidden. True when the search
+     * its cast like a service stop does: playing speakers are stopped, and emptied when clear-when-cast-ends is on. Callers ask
+     * the author first while anything is cast to. Hidden renderers stay hidden. True when the search
      * was sent.
      */
     suspend fun rediscover(trigger: String): Boolean {
         if (!started.get() || stopped.get()) return false
-        registry?.removeAll()
+        registry?.removeAll(clearSpeakers = clearOnCastEndNow(), stopSpeakers = true)
         return searchNow(trigger)
     }
 
