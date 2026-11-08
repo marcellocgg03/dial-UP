@@ -49,7 +49,7 @@ import kotlinx.coroutines.delay
  * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
  * ([rendererListing]): with the switch off only the renderers saved by address are listed, greyed, and the list says the bridge
  * is off. Each item is a [SpeakerCard]. The hidden renderers are managed in the Settings
- * tab (GUI-13, [HiddenSection]), not here. Rename on a card opens a dialog
+ * tab (GUI-13, [HiddenRenderersScreen]), not here. Rename on a card opens a dialog
  * for that renderer's name (matched by UDN). While the running bridge's list is not shown (switch off, or the
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
  */
