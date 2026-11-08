@@ -126,6 +126,12 @@ interface YtDlpGateway {
 
     /** [channel] is "stable" or "nightly"; returns a short status string such as DONE or ALREADY_UP_TO_DATE. */
     fun update(channel: String): String
+
+    /**
+     * The newest yt-dlp version published on [channel], without installing it; null when it cannot be told (offline, rate
+     * limited, no support). Default null so a gateway that cannot look ahead still compiles.
+     */
+    fun latestVersion(channel: String): String? = null
 }
 
 data class ResolvedInfo(

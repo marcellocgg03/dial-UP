@@ -24,6 +24,15 @@ class YtDlpUpdaterTest {
         @Volatile var failure: ((Int) -> Throwable?) = { null }
         @Volatile var versionFailure: Throwable? = null
         @Volatile var current = "2026.01.01"
+        @Volatile var latest: String? = null
+        @Volatile var latestFailure: Throwable? = null
+        val latestChannels = CopyOnWriteArrayList<String>()
+
+        override fun latestVersion(channel: String): String? {
+            latestChannels += channel
+            latestFailure?.let { throw it }
+            return latest
+        }
 
         override fun run(call: YtDlpCall): GatewayResult = error("not used")
 
@@ -457,6 +466,52 @@ class YtDlpUpdaterTest {
         val clock = Clock(stopAfter = 2)
         runLoop(clocked(g, clock, store = store))
         assertEquals(1, g.updates.size)
+    }
+
+    // ----- look-ahead: is a newer yt-dlp published? (installs nothing, allowed while casting) ---------------
+
+    @Test
+    fun ytdlpNewerComparesDottedVersionsPartByPart() {
+        assertTrue(ytdlpNewer("2026.11.01", "2026.10.15"))
+        assertTrue(ytdlpNewer("2026.11.07.021234", "2026.11.07"))
+        assertTrue(ytdlpNewer("2026.11.07.021300", "2026.11.07.021234"))
+        assertFalse(ytdlpNewer("2026.11.01", "2026.11.01"))
+        assertFalse(ytdlpNewer("2026.10.15", "2026.11.01"), "an older release is not an update")
+        assertFalse(ytdlpNewer("2026.11.07", "2026.11.07.021234"), "stable older than the installed nightly")
+        assertTrue(ytdlpNewer("2026.11.01", null), "an unreadable installed version is older than anything")
+        assertTrue(ytdlpNewer("2026.11.01rc", "2026.11.01"), "an unparsable version that differs counts as newer")
+        assertFalse(ytdlpNewer("2026.11.01rc", "2026.11.01rc"))
+    }
+
+    @Test
+    fun checkReportsANewerVersionAndInstallsNothingEvenWhileCasting() {
+        val g = FakeGateway().also { it.latest = "2026.03.03" }
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val u = YtDlpUpdater(g, { "nightly" }, { events += it }, dispatcher = dispatcher, casting = { true })
+        val c = runBlocking { u.check() }
+        assertEquals(YtDlpCheck("2026.01.01", "2026.03.03", "nightly", true), c)
+        assertEquals(listOf("nightly"), g.latestChannels)
+        assertTrue(g.updates.isEmpty())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun checkSaysUpToDateWhenTheLatestIsNotNewer() {
+        val g = FakeGateway().also { it.latest = "2026.01.01" }
+        val c = runBlocking { updater(g, Pauses(1)).check() }
+        assertEquals(false, c.available)
+    }
+
+    @Test
+    fun checkIsUnknownWhenTheLatestCannotBeRead() {
+        val g = FakeGateway()
+        assertNull(runBlocking { updater(g, Pauses(1)).check() }.available)
+        g.latestFailure = java.io.IOException("offline")
+        val c = runBlocking { updater(g, Pauses(1)).check() }
+        assertNull(c.available)
+        assertNull(c.latest)
+        g.versionFailure = IllegalStateException("no yt-dlp")
+        assertNull(runBlocking { updater(g, Pauses(1)).check() }.current)
     }
 
     // ----- plan 07.1-04: Update now during a cast, and updateIfDue ------------------------------------------

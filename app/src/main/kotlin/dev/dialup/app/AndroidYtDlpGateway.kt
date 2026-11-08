@@ -5,9 +5,14 @@ import android.os.Looper
 import android.os.SystemClock
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import dev.dialup.app.model.FetchResult
 import dev.t2u.media.GatewayResult
 import dev.t2u.media.YtDlpCall
 import dev.t2u.media.YtDlpGateway
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * youtubedl-android 0.18.1 behind [YtDlpGateway] (the swap-out seam: the library stays
@@ -86,6 +91,26 @@ class AndroidYtDlpGateway(
         val updateChannel = if (channel == "nightly") YoutubeDL.UpdateChannel.NIGHTLY else YoutubeDL.UpdateChannel.STABLE
         val status = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, updateChannel)
         return status?.name ?: "UNKNOWN"
+    }
+
+    /**
+     * The newest release tag of yt-dlp on [channel] from GitHub (the same source the library updates from), or null when it cannot
+     * be read: offline, rate limited or an unexpected answer. Nothing is installed.
+     */
+    override fun latestVersion(channel: String): String? {
+        checkOffMain()
+        val repo = if (channel == "nightly") "yt-dlp/yt-dlp-nightly-builds" else "yt-dlp/yt-dlp"
+        val result = fetchReleases(
+            githubReleasesClient(),
+            "https://api.github.com/repos/$repo/releases/latest",
+            userAgentFor(BuildConfigFacts.versionName(context)),
+        )
+        val body = (result as? FetchResult.Body)?.text ?: return null
+        return try {
+            (Json.parseToJsonElement(body) as? JsonObject)?.get("tag_name")?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun checkOffMain() {
