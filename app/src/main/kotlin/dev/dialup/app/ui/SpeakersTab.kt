@@ -106,12 +106,15 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
                     Text("Add renderer by address")
                 }
-                // GUI-14: one multicast SSDP search at once; the cards follow as the renderers answer. Off while a search runs.
-                OutlinedButton(
-                    onClick = { model.refreshRenderers("ui") },
-                    enabled = bridgeUp && !searching,
-                    modifier = Modifier.testTag("btn-refresh-list"),
-                ) { Text(if (searching) "Searching" else "Refresh") }
+                // GUI-14: one multicast SSDP search at once; the cards follow as the renderers answer. Shown only once the search
+                // that is running has ended, so it can never start a second one on top of it.
+                if (!searching) {
+                    OutlinedButton(
+                        onClick = { model.refreshRenderers("ui") },
+                        enabled = bridgeUp,
+                        modifier = Modifier.testTag("btn-refresh-list"),
+                    ) { Text("Refresh") }
+                }
             }
         }
         listing.note?.let { note ->
