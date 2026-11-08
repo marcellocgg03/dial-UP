@@ -20,7 +20,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 ## Features
 
 - **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
-- **Caching** (MP4 only): with MP4 forced, audio files are cached locally so they aren't downloaded with yt-dlp again. Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
+- **Caching** (MP4 only): with MP4 forced, renderer-ready audio files are cached locally so they aren't downloaded with yt-dlp again. Newly downloaded sources are temporary and removed when no longer in use; sources retained by older versions can be removed with "Clear cache". Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
 - **Forced audio format**: Automatic (direct -> adts -> mp3) by default, or force MP4. Automatic plays the first format the renderer supports natively and starts right away without caching
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata

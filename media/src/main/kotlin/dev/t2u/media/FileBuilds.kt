@@ -233,7 +233,7 @@ class FileBuilder(
     // ------------------------------------------------------------------------------------ source
 
     /**
-     * The downloaded source of [videoId]: reused when present, otherwise one shared download with the retries of
+     * The downloaded source of [videoId]: shared while in use, otherwise one download with the retries of
      * [downloadSource]. The pipe formats use it as the last rung when YouTube keeps refusing ffmpeg (Node
      * `#existingSourceFile`). Throws [FileBuildException] when every attempt failed.
      */
@@ -269,10 +269,9 @@ class FileBuilder(
                     part.delete()
                 }
                 val info = resolver.resolve(videoId)
-                val eligible = cache.canEverFit(info.filesize)
                 downloader.download(videoId, info, part)
                 check(isFinished(part)) { "the download left no file" }
-                withContext(Dispatchers.IO) { cache.publish(part, dest, eligible) }
+                withContext(Dispatchers.IO) { cache.publish(part, dest, eligible = false) }
                 emit("downloaded", videoId, "source", 0)
                 return dest
             } catch (e: CancellationException) {

@@ -210,14 +210,15 @@ class MediaServerRemuxTest {
     }
 
     @Test
-    @DisplayName("mp4 at offset (renderer cannot Seek) reuses the downloaded source")
-    fun mp4AtOffsetReusesTheDownloadedSource() = runBlocking {
+    @DisplayName("mp4 at offset (renderer cannot Seek) downloads a fresh temporary source")
+    fun mp4AtOffsetDownloadsAFreshTemporarySource() = runBlocking {
         val downloader = FakeSourceDownloader(source)
         val ms = serve(downloader)
         ms.prepare(VideoEntry("bbbbbbbbbbb", "mp4"))
         val entry30 = VideoEntry("bbbbbbbbbbb", "mp4", startAt = 30)
         ms.prepare(entry30)
-        assertEquals(1, downloader.calls.get(), "source downloaded once")
+        assertEquals(2, downloader.calls.get(), "the first build's source was discarded")
+        assertFalse(File(buildDir, "bbbbbbbbbbb.source").exists())
         val cut = File(buildDir, "bbbbbbbbbbb-mp4-30.m4a")
         assertTrue(kotlin.math.abs(duration(cut) - 30.0) < 1.0, "duration ${duration(cut)}")
         val p0 = ms.registerVideo(VideoEntry("bbbbbbbbbbb", "mp4"))
@@ -246,6 +247,7 @@ class MediaServerRemuxTest {
         listOf(async { ms.prepare(VideoEntry("hhhhhhhhhhh", "mp4")) }, async { ms.prepare(VideoEntry("hhhhhhhhhhh", "mp4", startAt = 30)) }).awaitAll()
         assertEquals(1, downloader.calls.get(), "one download for both offsets")
         assertEquals(2, launcher.starts.get())
+        assertFalse(File(buildDir, "hhhhhhhhhhh.source").exists())
         Unit
     }
 
@@ -322,6 +324,7 @@ class MediaServerRemuxTest {
         assertTrue(Regex("exited -?\\d+").containsMatchIn(e.message!!), e.message)
         assertFalse(Regex("https?://\\S*\\?").containsMatchIn(e.message!!), "no URL with a query string")
         assertEquals(emptyList(), buildDir.listFiles()!!.map { it.name }.filter { it.endsWith(".part") })
+        assertFalse(File(buildDir, "lllllllllll.source").exists())
         // D-14: registering never fails for a missing file; the token's first request would try the build again.
         ms.registerVideo(VideoEntry("lllllllllll", "mp4"))
         Unit
@@ -367,7 +370,7 @@ class MediaServerRemuxTest {
         assertEquals(built.length(), res.header("Content-Length")!!.toLong())
         val copy = File(dir, "rebuilt.m4a").also { it.writeBytes(res.body) }
         assertTrue(duration(copy) > 59, "the complete file")
-        assertEquals(1, downloader.calls.get(), "the source was still there: not downloaded again")
+        assertEquals(3, downloader.calls.get(), "each rebuild downloads a new temporary source")
         assertTrue(seen.none { it.status >= 400 }, "the sender sees no error: $seen")
         assertTrue(seen.any { it.note == "rebuilt" }, seen.toString())
         assertEquals(tokens, ms.tokenCount(), "the token table is unchanged")
