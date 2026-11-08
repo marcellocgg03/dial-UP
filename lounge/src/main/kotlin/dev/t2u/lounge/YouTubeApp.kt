@@ -52,6 +52,7 @@ enum class AppState { STOPPED, STARTING, RUNNING, STOPPING }
 
 private val SAFE_PID = Regex("^[A-Za-z0-9-]{1,64}$")
 internal const val NETWORK_SENDER_RECOVERY_MS = 30_000L
+private const val VOLUME_SEND_KEY = "onVolumeChanged"
 
 /**
  * One cast target's lounge app. [player] is what the sender controls; [scope] runs the sessions and the fire-and-forget
@@ -327,6 +328,7 @@ class YouTubeApp(
             if (active == null) {
                 activeSession = target
             } else {
+                active.cancelDeferredSend(VOLUME_SEND_KEY)
                 // Only one client can be connected at a time: the senders of the old session are dropped.
                 note("switching", "from" to active.client.displayName, "to" to target.client.displayName)
                 // The new session starts playing at once, so the speaker is reset but not cleared.
@@ -488,7 +490,10 @@ class YouTubeApp(
                 player.seek(target.toDouble())
             }
 
-            "getVolume" -> send.add(OutgoingMessage.onVolumeChanged(aid, player.getVolume()))
+            "getVolume" -> {
+                session.cancelDeferredSend(VOLUME_SEND_KEY)
+                postVolume(session, aid, player.getVolume(), defer = false)
+            }
 
             "setVolume" -> {
                 if (!isActive) return
@@ -497,13 +502,37 @@ class YouTubeApp(
                     note("malformed", "name" to message.name, "reason" to "volume is not a number")
                     return
                 }
+                val delta = if (payload?.containsKey("delta") == true) {
+                    jsParseInt(payload.text("delta")) ?: run {
+                        note("malformed", "name" to message.name, "reason" to "delta is not a number")
+                        return
+                    }
+                } else {
+                    null
+                }
                 val muted = when (val m = payload?.get("muted")) {
                     is JsonPrimitive -> if (m.isString) m.content.lowercase().trim() == "true" else m.booleanOrNull == true
                     else -> false
                 }
-                val wanted = Volume(level, muted)
+                session.cancelDeferredSend(VOLUME_SEND_KEY)
                 val current = player.getVolume()
-                if (wanted != current) player.setVolume(wanted, aid)
+                // Button requests carry an absolute target and a directional delta. The target can be based on
+                // an older sender state; never let a volume-down request raise the speaker, or vice versa.
+                val directedLevel = when {
+                    delta != null && delta < 0 -> minOf(level, current.level)
+                    delta != null && delta > 0 -> maxOf(level, current.level)
+                    else -> level
+                }
+                if (directedLevel != level) {
+                    note("volumeDirectionConflict", "requested" to level, "current" to current.level, "delta" to delta)
+                }
+                val wanted = Volume(directedLevel, muted)
+                if (wanted == current) {
+                    postVolume(session, aid, current, defer = false)
+                } else {
+                    player.applyVolume(wanted)
+                    postVolume(session, aid, player.getVolume(), defer = false)
+                }
             }
 
             "play" -> {
@@ -682,6 +711,7 @@ class YouTubeApp(
         if (implicit && implicitlyDisconnected.none { it.id == sender.id }) implicitlyDisconnected.add(sender)
 
         if (connected.isEmpty()) {
+            session.cancelDeferredSend(VOLUME_SEND_KEY)
             val preserveNetworkPlayback = implicit && networkInterrupted(sender)
             val reset = !preserveNetworkPlayback && when (resetPolicy) {
                 ResetPlayerOnDisconnectPolicy.ALL_DISCONNECTED -> true
@@ -732,7 +762,9 @@ class YouTubeApp(
             messages.add(OutgoingMessage.nowPlaying(aid, current))
             messages.add(navMessage(aid))
         }
-        if (volumeChanged) messages.add(OutgoingMessage.onVolumeChanged(aid, current.volume))
+        if (volumeChanged || event.fromVolumeChange) {
+            postVolume(session, aid, current.volume, defer = event.fromVolumeChange && aid != null)
+        }
         if (autoplayChanged) messages.add(OutgoingMessage.autoplayUpNext(aid, current.queue.autoplay?.id))
         // Previous/next can change without a now-playing change (the refresh after an autoplay hop): tell the sender.
         if (messages.none { it.name == "onHasPreviousNextChanged" }) {
@@ -743,12 +775,7 @@ class YouTubeApp(
             }
         }
         if (messages.isEmpty()) return
-        if (messages.all { it.name == "onVolumeChanged" && it.aid != null }) {
-            // a slider drag sends many setVolume messages: only the latest volume goes out, after a short quiet interval
-            post(session, messages, "onVolumeChanged")
-        } else {
-            post(session, messages)
-        }
+        post(session, messages)
     }
 
     // ---- helpers
@@ -759,14 +786,18 @@ class YouTubeApp(
         return OutgoingMessage.onHasPreviousNextChanged(aid, nav)
     }
 
+    private fun postVolume(session: Session, aid: Int?, volume: Volume, defer: Boolean = true) {
+        post(session, listOf(OutgoingMessage.onVolumeChanged(aid, volume)), VOLUME_SEND_KEY, if (defer) LoungeConstants.VOLUME_DEFER_MS else 0)
+    }
+
     /**
      * Sends without waiting for the lounge. The send is queued before this returns (the coroutine starts undispatched
      * and Session.sendMessage queues before it suspends), so messages leave in the order they were posted.
      */
-    private fun post(session: Session, messages: List<OutgoingMessage>, deferKey: String? = null) {
+    private fun post(session: Session, messages: List<OutgoingMessage>, deferKey: String? = null, deferMs: Long = LoungeConstants.VOLUME_DEFER_MS) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                session.sendMessage(messages, deferKey)
+                session.sendMessage(messages, deferKey, deferMs)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

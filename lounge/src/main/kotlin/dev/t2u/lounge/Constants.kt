@@ -98,7 +98,7 @@ object LoungeConstants {
     /** The working Node server's User-Agent; the lounge endpoints are known to accept it (Pitfall 8). */
     const val USER_AGENT = "node"
 
-    /** Volume changes from the sender are deferred this long so a slider drag does not flood the speaker. */
+    /** Sender-initiated volume reports are coalesced over this interval. */
     const val VOLUME_DEFER_MS = 200L
 }
 

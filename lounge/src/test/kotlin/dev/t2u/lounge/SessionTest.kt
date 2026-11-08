@@ -5,7 +5,9 @@ package dev.t2u.lounge
 
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.lanHttpClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -172,6 +174,58 @@ class SessionTest {
     }
 
     @Test
+    fun cancelledDeferredMessageIsNotSentAfterItsTimerExpiresWhileQueueIsBlocked() = run {
+        val s = session()
+        s.begin()
+        val gate = CompletableDeferred<Unit>()
+        fake.sendGate = gate
+        try {
+            kotlinx.coroutines.coroutineScope {
+                val first = async { s.sendMessage(listOf(volume(10))) }
+                awaitUntil { fake.sent["cl"]?.size == 1 }
+                val stale = async(start = CoroutineStart.UNDISPATCHED) { s.sendMessage(listOf(volume(20)), deferKey = "volume", deferMs = 30) }
+                delay(100)
+                s.cancelDeferredSend("volume")
+                assertFalse(stale.await())
+                fake.sendGate = null
+                gate.complete(Unit)
+                assertTrue(first.await())
+                assertTrue(s.sendMessage(listOf(volume(30))))
+                assertEquals(listOf("10", "30"), fake.sent.getValue("cl").map { it["req0_volume"] })
+            }
+        } finally {
+            gate.complete(Unit)
+            fake.sendGate = null
+        }
+    }
+
+    @Test
+    fun immediateKeyedMessageCanAlsoBeSupersededWhileQueueIsBlocked() = run {
+        val s = session()
+        s.begin()
+        val gate = CompletableDeferred<Unit>()
+        fake.sendGate = gate
+        try {
+            kotlinx.coroutines.coroutineScope {
+                val first = async { s.sendMessage(listOf(volume(10))) }
+                awaitUntil { fake.sent["cl"]?.size == 1 }
+                val stale = async(start = CoroutineStart.UNDISPATCHED) { s.sendMessage(listOf(volume(20)), deferKey = "volume", deferMs = 0) }
+                delay(50)
+                s.cancelDeferredSend("volume")
+                assertFalse(stale.await())
+                fake.sendGate = null
+                gate.complete(Unit)
+                assertTrue(first.await())
+                assertTrue(s.sendMessage(listOf(volume(30))))
+                assertEquals(listOf("10", "30"), fake.sent.getValue("cl").map { it["req0_volume"] })
+            }
+        } finally {
+            gate.complete(Unit)
+            fake.sendGate = null
+        }
+    }
+
+    @Test
     fun aFailedPostIsRetriedOnceAfterRefreshingTheToken() = run {
         val s = session()
         s.begin()
@@ -182,6 +236,16 @@ class SessionTest {
         val sent = fake.sent.getValue("cl")
         assertEquals(1, sent.size)
         assertEquals("0", sent[0]["ofs"], "a refreshed session counts from zero again")
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun aDeferredPostIsRetriedOnceAfterRefreshingTheToken() = run {
+        val s = session()
+        s.begin()
+        fake.failNextSends.set(1)
+        assertTrue(s.sendMessage(listOf(volume(12)), deferKey = "volume", deferMs = 1))
+        assertEquals("12", fake.sent.getValue("cl").single()["req0_volume"])
         assertEquals(SessionStatus.RUNNING, s.status)
     }
 

@@ -25,11 +25,13 @@ class FakePlayer : Player() {
     var stopResult = true
     var seekResult = true
     var volumeResult = true
-    var volume = Volume(50, false)
+    @Volatile var volume = Volume(50, false)
     var position = 0.0
     var duration = 200.0
     var lastPlayedPosition: Double? = null
     var lastVolumeSet: Volume? = null
+    @Volatile var beforeGetVolume: suspend () -> Unit = {}
+    @Volatile var beforeGetPosition: suspend () -> Unit = {}
 
     /** The player's clock (epoch ms); a test moves it by hand. */
     var nowMs: Long = 1_700_000_000_000
@@ -74,9 +76,15 @@ class FakePlayer : Player() {
         return volumeResult
     }
 
-    override suspend fun doGetVolume(): Volume = volume
+    override suspend fun doGetVolume(): Volume {
+        beforeGetVolume()
+        return volume
+    }
 
-    override suspend fun doGetPosition(): Double = position
+    override suspend fun doGetPosition(): Double {
+        beforeGetPosition()
+        return position
+    }
 
     override suspend fun doGetDuration(): Double = duration
 

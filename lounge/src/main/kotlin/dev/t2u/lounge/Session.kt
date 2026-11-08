@@ -303,9 +303,14 @@ class Session(
 
     // ---- sending
 
-    private class SendTask(val messages: List<OutgoingMessage>, val epoch: Int, val result: CompletableDeferred<Boolean>)
+    private class SendTask(
+        val messages: List<OutgoingMessage>,
+        val epoch: Int,
+        val result: CompletableDeferred<Boolean>,
+        val deferKey: String? = null,
+    )
 
-    private class DeferredSend(val job: Job, val task: SendTask)
+    private class DeferredSend(val task: SendTask, var job: Job? = null)
 
     private val sendChannel = Channel<SendTask>(Channel.UNLIMITED)
     private val sendLock = Mutex()
@@ -325,7 +330,8 @@ class Session(
 
     /**
      * Sends [messages] in queue order. With [deferKey], the send waits [deferMs]; a later call with the same key
-     * replaces it and the replaced call returns false. Returns true when the lounge accepted the POST.
+     * replaces it and the replaced call returns false. A zero interval queues it immediately but still permits
+     * replacement before it is sent. Returns true when the POST was accepted without being superseded.
      */
     suspend fun sendMessage(
         messages: List<OutgoingMessage>,
@@ -334,38 +340,59 @@ class Session(
     ): Boolean {
         if (status != SessionStatus.RUNNING && status != SessionStatus.REFRESHING) return false
         sendConsumer.isActive // starts the consumer
-        val task = SendTask(messages, epoch, CompletableDeferred())
+        val task = SendTask(messages, epoch, CompletableDeferred(), deferKey)
         if (deferKey == null) {
             sendChannel.trySend(task)
         } else {
             synchronized(deferred) {
-                deferred.remove(deferKey)?.let {
-                    it.job.cancel()
-                    it.task.result.complete(false)
-                }
-                val job = scope.launch {
-                    delay(deferMs)
-                    val mine = synchronized(deferred) {
-                        if (deferred[deferKey]?.task === task) {
-                            deferred.remove(deferKey)
-                            true
-                        } else {
-                            false
+                cancelDeferredSendLocked(deferKey)
+                val pending = DeferredSend(task)
+                deferred[deferKey] = pending
+                if (deferMs <= 0) {
+                    sendChannel.trySend(task)
+                } else {
+                    pending.job = scope.launch {
+                        delay(deferMs)
+                        synchronized(deferred) {
+                            if (deferred[deferKey]?.task === task) sendChannel.trySend(task)
                         }
                     }
-                    if (mine) sendChannel.trySend(task)
                 }
-                deferred[deferKey] = DeferredSend(job, task)
             }
         }
         return task.result.await()
+    }
+
+    /** Discards a deferred send or its retry; an HTTP request already in flight cannot be recalled. */
+    fun cancelDeferredSend(key: String) {
+        synchronized(deferred) { cancelDeferredSendLocked(key) }
+    }
+
+    private fun cancelDeferredSendLocked(key: String) {
+        deferred.remove(key)?.let {
+            it.job?.cancel()
+            it.task.result.complete(false)
+        }
     }
 
     private suspend fun process(task: SendTask) {
         var attempt = 0
         while (true) {
             try {
-                sendLock.withLock { postMessages(task) }
+                sendLock.withLock {
+                    if (task.deferKey != null) {
+                        val current = synchronized(deferred) {
+                            deferred[task.deferKey]?.task === task
+                        }
+                        if (!current) return
+                    }
+                    postMessages(task)
+                }
+                if (task.deferKey != null) {
+                    synchronized(deferred) {
+                        if (deferred[task.deferKey]?.task === task) deferred.remove(task.deferKey)
+                    }
+                }
                 task.result.complete(true)
                 return
             } catch (e: CancellationException) {
@@ -405,7 +432,7 @@ class Session(
     private fun clearQueuedSends() {
         synchronized(deferred) {
             deferred.values.forEach {
-                it.job.cancel()
+                it.job?.cancel()
                 it.task.result.complete(false)
             }
             deferred.clear()
