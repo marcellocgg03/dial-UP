@@ -4,6 +4,8 @@ import dev.t2u.dial.DialAccessMode
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -70,6 +72,57 @@ class SettingsTest {
         assertTrue(text.contains(""""future":42"""), text)
         assertEquals(false, s.data.value.gapless)
         assertEquals(DialAccessMode.LAN, s.dialAccess.value)
+    }
+
+    /** A writer that goes through the strict atomic write and fails on the writes listed in [failOn] (1-based). */
+    private fun flakyWriter(failOn: Set<Int>): (File, String) -> Unit {
+        var calls = 0
+        return { target, text ->
+            calls++
+            val dir = target.absoluteFile.parentFile
+            if (calls in failOn) {
+                writeTextAtomic(dir, target.name, text, atomicOnly = true) { from, to, _ ->
+                    throw AtomicMoveNotSupportedException(from.toString(), to.toString(), "refused")
+                }
+            } else {
+                writeTextAtomic(dir, target.name, text, atomicOnly = true)
+            }
+        }
+    }
+
+    @Test
+    fun aFailedReplacementKeepsThePreviousFileAndIsReportedOnce() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = Settings(f, flakyWriter(setOf(2))) { where, _ -> errors.add(where) }
+        s.update { it.copy(gapless = false) }
+        val afterFirst = f.readBytes()
+        s.update { it.copy(cacheMb = 512) }
+        assertTrue(afterFirst.contentEquals(f.readBytes()), "the file from the first update is untouched")
+        assertEquals(listOf("settings:write"), errors)
+        assertFalse(File(dir, "settings.json.tmp").exists())
+        assertEquals(512, s.data.value.cacheMb, "the in-memory value still shows the change")
+    }
+
+    @Test
+    fun theNextUpdateAfterAFailureWritesTheFullCurrentSettings() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = Settings(f, flakyWriter(setOf(2))) { where, _ -> errors.add(where) }
+        s.update { it.copy(gapless = false) }
+        s.update { it.copy(cacheMb = 512) }
+        s.update { it.copy(outputFormat = "mp4") }
+        val text = f.readText()
+        assertTrue(text.contains(""""gapless":false"""), text)
+        assertTrue(text.contains(""""cacheMb":512"""), text)
+        assertTrue(text.contains(""""outputFormat":"mp4""""), text)
+        assertEquals(listOf("settings:write"), errors)
+        assertFalse(File(dir, "settings.json.tmp").exists())
+    }
+
+    @Test
+    fun aWriterThatThrowsAnIoExceptionIsReportedNotThrown() {
+        val s = Settings(File(dir, SETTINGS_FILE), { _, _ -> throw IOException("disk full") }) { where, _ -> errors.add(where) }
+        s.update { it.copy(gapless = false) }
+        assertEquals(listOf("settings:write"), errors)
     }
 
     @Test
