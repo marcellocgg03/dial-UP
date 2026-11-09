@@ -14,7 +14,7 @@ import java.io.IOException
 
 /**
  * The persisted yt-dlp update record (`<dir>/ytdlp-update.json`): last success and last attempt on the wall clock. One
- * file shared by the in-bridge updater, the offline Update now and the daily job (plan 07.1-07). A missing or unreadable
+ * file shared by the in-bridge updater, the offline Update now and the daily job. A missing or unreadable
  * file loads as an empty record, which means "due"; a failed save is swallowed because it must not stop an update.
  */
 class YtDlpRecordFile(private val dir: File) : YtDlpRecordStore {
