@@ -20,6 +20,8 @@ import androidx.core.app.ServiceCompat
 import dev.dialup.app.model.NetworkLossWatcher
 import dev.dialup.app.model.WIFI_REBIND_WINDOW_MS
 import dev.dialup.app.shouldShowCastNotification
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -438,7 +440,7 @@ class BridgeService : Service(), SpikeHost {
     private fun writeStateFile(state: JsonObject) {
         // temp file then atomic replace, so a reader never sees a half-written state.json; a failure is thrown to the
         // heartbeat loop, which logs it as a feature-error (WR-09)
-        writeTextAtomic(evidenceDir, "state.json", state.toString())
+        writeTextAtomic(File(evidenceDir, "state.json"), state.toString(), AtomicWriteOptions.APP)
     }
 
     // ----- exit info and notification ------------------------------------------------------------

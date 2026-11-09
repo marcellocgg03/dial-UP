@@ -3,6 +3,8 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerializationException
@@ -199,7 +201,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
 class Settings(
     private val file: File,
     private val writer: (File, String) -> Unit = { target, text ->
-        writeTextAtomic(target.absoluteFile.parentFile, target.name, text, atomicOnly = true)
+        writeTextAtomic(target, text, AtomicWriteOptions.APP.copy(atomicOnly = true))
     },
     private val onError: (String, Throwable) -> Unit = { _, _ -> },
 ) {
