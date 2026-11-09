@@ -15,7 +15,7 @@ import kotlinx.coroutines.withContext
 enum class ToggleAction { START, STOP, CONFIRM_STOP, NOTHING }
 
 /**
- * The answer to a flip of the switch (D-02, D-03). Turning on starts; turning off stops at once when
+ * The answer to a flip of the switch. Turning on starts; turning off stops at once when
  * nothing is loading, playing or paused ([casting] is 0) and asks first otherwise. A flip to the state
  * the switch already holds does nothing.
  */
@@ -39,7 +39,7 @@ fun toggleUi(enabled: Boolean, exempt: Boolean): ToggleUi = ToggleUi(checked = e
 /**
  * The confirmation shown before the bridge is switched off while [casting] speakers are loading, playing
  * or paused. It says what happens to them: cleared when the clear-on-cast-end setting is on, otherwise they
- * keep their track loaded (D-03).
+ * keep their track loaded.
  */
 fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
     val one = casting == 1
@@ -55,7 +55,7 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
 
 /**
  * Whether a start of the service may be issued now: the switch is on, the battery exemption is held and the
- * service is not already running (D-04, T-07-09, T-07-11).
+ * service is not already running, so a stale or repeated request never starts a second service.
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
 
@@ -64,8 +64,8 @@ enum class StartDecision { START, WAIT_FOR_WIFI, NONE }
 
 /**
  * What a start path (app open, boot, the switch, the deferred start) does. A start without a network would be stopped at
- * once by the idle rule (plan 07.1-01), so the caller arms NetworkResume instead and the bridge starts when Wi-Fi comes
- * (RESEARCH Pitfall 3). [bindable] is whether the bridge can bind: a Wi-Fi client address or the phone's own hotspot.
+ * once by the idle rule, so the caller arms NetworkResume instead and the bridge starts when Wi-Fi comes.
+ * [bindable] is whether the bridge can bind: a Wi-Fi client address or the phone's own hotspot.
  */
 fun startDecision(enabled: Boolean, exempt: Boolean, running: Boolean, bindable: Boolean): StartDecision = when {
     !shouldStartService(enabled, exempt, running) -> StartDecision.NONE
@@ -76,13 +76,13 @@ fun startDecision(enabled: Boolean, exempt: Boolean, running: Boolean, bindable:
 /** What an in-app restart of the bridge does first. */
 enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }
 
-/** A restart cuts playback like a switch-off does, so it asks first while anything is loading, playing or paused (D-03, T-07-42). */
+/** A restart cuts playback like a switch-off does, so it asks first while anything is loading, playing or paused. */
 fun restartStep(casting: Int): RestartStep = if (casting > 0) RestartStep.CONFIRM_FIRST else RestartStep.RESTART_NOW
 
 /**
  * Off, wait for the service to be gone, then on. Switching on is guaranteed: it runs when the wait timed out and also when
  * the caller is cancelled during the wait (the screen closed mid-restart), under [NonCancellable], so a restart never leaves
- * the bridge off by its own doing (review CR-03). Returns whether the old service stopped in time; a cancellation during the
+ * the bridge off by its own doing. Returns whether the old service stopped in time; a cancellation during the
  * wait is rethrown after the switch-on.
  */
 suspend fun restartSequence(setEnabled: (Boolean) -> Unit, awaitStopped: suspend () -> Boolean): Boolean {
@@ -120,9 +120,9 @@ suspend fun <T : Any> awaitNull(flow: StateFlow<T?>, timeoutMs: Long): Boolean =
 } == true
 
 /**
- * The deferred start behind a quick off-then-on flip (review WR-01): waits for the old service to be gone ([awaitGone], which
+ * The deferred start behind a quick off-then-on flip: waits for the old service to be gone ([awaitGone], which
  * also covers the process-wide stop), then starts only when the switch is still wanted ([stillWanted] re-reads the persisted
- * switch, the battery gate and that no service runs, D-04). Returns whether [start] ran; false when the old service never went
+ * switch, the battery gate and that no service runs). Returns whether [start] ran; false when the old service never went
  * away or the switch was turned off again meanwhile.
  */
 suspend fun startWhenStopped(awaitGone: suspend () -> Boolean, stillWanted: () -> Boolean, start: () -> Unit): Boolean {

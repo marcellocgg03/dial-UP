@@ -9,7 +9,7 @@ package dev.dialup.app.model
  */
 const val SEARCH_IDLE_GRACE_MS = 2_500L
 
-/** GUI-14: the least time between two searches that the app coming to the foreground starts, in milliseconds. */
+/** The least time between two searches that the app coming to the foreground starts, in milliseconds. */
 const val FOREGROUND_SEARCH_GAP_MS = 10_000L
 
 /** What the empty Renderers list shows under a switched-on bridge. */
