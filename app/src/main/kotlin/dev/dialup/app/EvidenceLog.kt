@@ -262,6 +262,9 @@ class EvidenceLog(
         private val lock = Any()
         private var instance: EvidenceLog? = null
 
+        /** The live process-wide log, for reporters that have no directory at hand; null when none is open. */
+        fun current(): EvidenceLog? = synchronized(lock) { instance?.takeIf { !it.isClosed } }
+
         /**
          * The process-wide log (CR-01): the same directory returns the existing live instance, a different directory closes the
          * previous one and opens a new one, so a service restart or the Settings tab never starts a second writer.

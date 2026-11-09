@@ -131,7 +131,8 @@ class AppModel private constructor(context: Context) {
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:hide", e)
             // the speaker simply stays where it is
         }
     }
