@@ -47,12 +47,12 @@ import dev.dialup.app.model.waitingForWifi
 import kotlinx.coroutines.delay
 
 /**
- * The Renderers list (GUI-01): one card per renderer the running bridge can cast to. It follows the Bridge enable switch
+ * The Renderers list: one card per renderer the running bridge can cast to. It follows the Bridge enable switch
  * ([rendererListing]): with the switch off only the renderers saved by address are listed, greyed, and the list says the bridge
  * is off. Each item is a [SpeakerCard]. The hidden renderers are managed in the Settings
- * tab (GUI-13, [HiddenRenderersScreen]), not here. Rename on a card opens a dialog
+ * tab ([HiddenRenderersScreen]), not here. Rename on a card opens a dialog
  * for that renderer's name (matched by UDN). While the running bridge's list is not shown (switch off, or the
- * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden (D-07, PD-3).
+ * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden.
  */
 @Composable
 fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
@@ -90,7 +90,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         hidden = hidden.mapTo(HashSet()) { it.udn },
         names = names,
     )
-    // GUI-14: the spinner shows while the bridge is inside a multicast search window (Bridge.searching) and, at the start, until
+    // the spinner shows while the bridge is inside a multicast search window (Bridge.searching) and, at the start, until
     // the search is first seen; once it has been idle for SEARCH_IDLE_GRACE_MS with nothing found, the Refresh button shows instead
     val looking = listing.note == ListNote.LOOKING
     val searching by model.searching.collectAsStateWithLifecycle()
@@ -113,7 +113,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 OutlinedButton(onClick = { adding = true }, enabled = bridgeUp, modifier = Modifier.testTag("btn-add-speaker")) {
                     Text("Add renderer by address")
                 }
-                // GUI-14: the list is emptied and rebuilt from a fresh search, as at the first discovery (the spinner shows). Every
+                // the list is emptied and rebuilt from a fresh search, as at the first discovery (the spinner shows). Every
                 // listed speaker is stopped, so while casting the button asks first. Hidden while a search runs, so none starts on top of it.
                 if (!searching) {
                     OutlinedButton(
@@ -156,7 +156,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 showAudioFormat = settings.showAudioFormat,
             )
         }
-        // D-07: the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)
+        // the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)
         items(listing.saved, key = { "manual-${it.udn}" }) { card ->
             SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { renaming = card.udn }, onDelete = { model.deleteManual(card.udn) })
         }

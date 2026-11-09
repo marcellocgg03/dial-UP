@@ -27,8 +27,8 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Album art for the speaker cards (plan 07-06, backlog 999.5). The URL comes from track metadata, i.e. from the network
- * (T-07-07), so only https addresses are fetched, the client derives from [lanHttpClient] (guard on, redirects off, SVC-05),
+ * Album art for the speaker cards. The URL comes from track metadata, i.e. from the network
+ * (untrusted), so only https addresses are fetched, the client derives from [lanHttpClient] (guard on, redirects off),
  * the body is capped at [MAX_BYTES] and decoded downsampled. Every failure is a null, never an exception into the UI.
  * No image library is added; Coil would replace this object behind [TrackArt].
  */
