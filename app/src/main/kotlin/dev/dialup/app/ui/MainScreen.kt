@@ -41,10 +41,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * The Compose root. testTagsAsResourceId lets uiautomator see the test tags (plan 07-16). The permission
- * banners sit above both tabs (D-01); their Grant buttons call back into the Activity, which owns the
- * result launchers. A bottom bar switches between Speakers and Settings (plan 07-10). The theme comes from the Activity.
- * Every app open ([opens] going up) lets the settings presenter apply a bridge restart that is still owed (quick 261101-dcg).
+ * The Compose root. testTagsAsResourceId lets uiautomator see the test tags. The permission
+ * banners sit above both tabs; their Grant buttons call back into the Activity, which owns the
+ * result launchers. A bottom bar switches between Speakers and Settings. The theme comes from the Activity.
+ * Every app open ([opens] going up) lets the settings presenter apply a bridge restart that is still owed.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -68,10 +68,10 @@ fun MainScreen(
     val version = remember { BuildConfigFacts.versionName(context) ?: "0" }
     LaunchedEffect(openCount) {
         if (openCount > 0) {
-            // UPD-01: the automatic release check runs beside the other calls and never delays them (throttled, off when switched off)
+            // the automatic release check runs beside the other calls and never delays them (throttled, off when switched off)
             launch { appUpdates.autoCheck(updateCheckEnabled) }
             settings.onAppOpened { model.casting.value }
-            // GUI-14: one extra search when the app comes to the foreground (throttled; nothing without a bridge)
+            // one extra search when the app comes to the foreground (throttled; nothing without a bridge)
             model.searchOnForeground()
         }
     }

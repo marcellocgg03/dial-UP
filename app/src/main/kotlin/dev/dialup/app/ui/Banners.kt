@@ -21,7 +21,7 @@ import dev.dialup.app.model.BATTERY_BANNER_TEXT
 import dev.dialup.app.model.Banner
 
 /**
- * One card per missing permission, each with a sentence and a Grant button (D-01). Nothing is requested
+ * One card per missing permission, each with a sentence and a Grant button. Nothing is requested
  * automatically: the author taps Grant and the Activity launches the request.
  */
 @Composable

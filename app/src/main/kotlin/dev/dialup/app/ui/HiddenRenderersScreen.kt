@@ -38,8 +38,8 @@ import dev.dialup.app.ThemeMode
 import dev.t2u.renderer.HiddenSpeaker
 
 /**
- * GUI-13: the hidden renderers, on their own screen (opened from the Hidden renderers row in Settings). One card per renderer the
- * author hid, laid out like the cards on the Renderers tab, with Restore (GUI-03) and, for a renderer saved by address, Delete. It
+ * The hidden renderers, on their own screen (opened from the Hidden renderers row in Settings). One card per renderer the
+ * author hid, laid out like the cards on the Renderers tab, with Restore and, for a renderer saved by address, Delete. It
  * reads the process-level stores, so it is right while the bridge is off too.
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -78,7 +78,7 @@ fun HiddenRenderersScreen(model: AppModel, theme: ThemeMode, onBack: () -> Unit)
                             speaker,
                             shownName = names[speaker.udn] ?: speaker.name,
                             onRestore = { model.unhide(speaker.udn) },
-                            // a hidden renderer saved by address can be deleted from here too (quick 261101-oib)
+                            // a hidden renderer saved by address can be deleted from here too
                             onDelete = if (manual.any { it.udn == speaker.udn }) ({ model.deleteManual(speaker.udn) }) else null,
                         )
                     }
@@ -88,7 +88,7 @@ fun HiddenRenderersScreen(model: AppModel, theme: ThemeMode, onBack: () -> Unit)
     }
 }
 
-/** One hidden renderer as a card: art square, name and address, Restore and (for a saved-by-address one) Delete (GUI-03). */
+/** One hidden renderer as a card: art square, name and address, Restore and (for a saved-by-address one) Delete. */
 @Composable
 private fun HiddenCard(speaker: HiddenSpeaker, shownName: String, onRestore: () -> Unit, onDelete: (() -> Unit)?) {
     ElevatedCard(Modifier.fillMaxWidth().testTag("hidden-row-${speaker.udn}")) {

@@ -33,8 +33,8 @@ import dev.t2u.renderer.ManualAddResult
 import kotlinx.coroutines.launch
 
 /**
- * What the dialog says about the outcome of an add (GUI-04, D-06). [typed] is the address as the author typed it; a null
- * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere (T-07-29).
+ * What the dialog says about the outcome of an add. [typed] is the address as the author typed it; a null
+ * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere.
  */
 internal fun manualResultText(result: ManualAddResult?, typed: String): String = when (result) {
     null -> "Enter the renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40"
@@ -47,8 +47,8 @@ internal fun manualResultText(result: ManualAddResult?, typed: String): String =
 }
 
 /**
- * GUI-04, D-06: type a speaker's IPv4 address; the speaker is probed and gets a card only if it answers. Nothing is saved
- * from here (plan 07-13). The content sets [testTagsAsResourceId] itself because a dialog is its own window.
+ * Type a speaker's IPv4 address; the speaker is probed and gets a card only if it answers. Nothing is saved
+ * from here. The content sets [testTagsAsResourceId] itself because a dialog is its own window.
  */
 @Composable
 fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
