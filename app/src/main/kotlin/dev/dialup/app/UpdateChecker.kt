@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 /** The most of a releases list the check reads (30 releases are far below this). */
 const val MAX_RELEASES_BODY: Long = 1_048_576L
 
-/** The client of the update check: derived from [lanHttpClient] (SVC-05), so no redirect is followed. */
+/** The client of the update check: derived from [lanHttpClient], so no redirect is followed. */
 fun githubReleasesClient(): OkHttpClient = lanHttpClient().newBuilder()
     .readTimeout(10, TimeUnit.SECONDS)
     .callTimeout(20, TimeUnit.SECONDS)

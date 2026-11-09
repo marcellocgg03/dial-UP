@@ -30,7 +30,7 @@ private const val JOB_RUN_LIMIT_MS = 9L * 60_000L
 
 private const val TAG = "YtDlpJob"
 
-/** Schedules the daily yt-dlp update job (plan 07.1-07, UPD-02). */
+/** Schedules the daily yt-dlp update job. */
 object YtDlpJob {
     /**
      * Schedules a periodic job (24 h, flex 6 h, any network, persisted across reboots) unless one with [YTDLP_JOB_ID] is
@@ -54,7 +54,7 @@ object YtDlpJob {
 }
 
 /**
- * The daily yt-dlp update (plan 07.1-07). The system binds it, also with no bridge service running. [onStartJob] only
+ * The daily yt-dlp update. The system binds it, also with no bridge service running. [onStartJob] only
  * launches the work off the main thread and returns true; a finally always calls jobFinished, and on a periodic job the
  * next period is the retry. Never exported, bound only with BIND_JOB_SERVICE.
  */
