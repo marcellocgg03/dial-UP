@@ -23,6 +23,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     // The SOAP API takes an OkHttpClient (every client in the app derives from lanHttpClient(), SVC-05).
     api(libs.okhttp)
+    // JsonObject is the receiver type of the JsonFields helpers, so it is part of the public signature.
+    api(libs.kotlinx.serialization.json)
     implementation(libs.jsoup)
 
     // FakeRenderer (port of test/fakeRenderer.js), shared with :lounge and :renderer tests
