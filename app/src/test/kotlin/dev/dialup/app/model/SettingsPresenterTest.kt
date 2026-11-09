@@ -290,6 +290,38 @@ class SettingsPresenterTest {
     }
 
     @Test
+    fun `the update check switch saves through the port and leaves the restart card alone`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertTrue(settings.data.value.updateCheckEnabled)
+        val before = p.restart.visible.value to p.restart.confirmPending.value
+        p.setUpdateCheckEnabled(false)
+        runCurrent()
+        assertFalse(settings.data.value.updateCheckEnabled)
+        assertEquals(1, settings.updates)
+        assertEquals(before, p.restart.visible.value to p.restart.confirmPending.value)
+        p.setUpdateCheckEnabled(true)
+        runCurrent()
+        assertTrue(settings.data.value.updateCheckEnabled)
+        assertEquals(2, settings.updates)
+        assertEquals(before, p.restart.visible.value to p.restart.confirmPending.value)
+    }
+
+    @Test
+    fun `the update check switch does not touch a restart card that is already showing`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertTrue(p.setGapless(false))
+        runCurrent()
+        assertTrue(p.restart.visible.value)
+        val before = p.restart.visible.value to p.restart.confirmPending.value
+        p.setUpdateCheckEnabled(false)
+        runCurrent()
+        assertEquals(before, p.restart.visible.value to p.restart.confirmPending.value)
+        assertFalse(settings.data.value.updateCheckEnabled)
+    }
+
+    @Test
     fun `a saved theme shows as the current choice`() = runTest {
         val settings = FakeSettingsPort().also { it.update { d -> d.copy(theme = ThemeMode.LIGHT) } }
         val p = presenter(settings)
