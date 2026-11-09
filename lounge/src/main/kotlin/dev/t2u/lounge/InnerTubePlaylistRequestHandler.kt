@@ -3,7 +3,7 @@ package dev.t2u.lounge
 // Derived from yt-cast-receiver 2.1.0 lib/app/DefaultPlaylistRequestHandler.js (MIT, Copyright (c) Patrick Kan);
 // protocol reference: youtubei.js.
 //
-// CAST-04 / CAST-05: answers "what comes before and after this video, and what is the autoplay video" with one
+// Answers "what comes before and after this video, and what is the autoplay video" with one
 // TVHTML5 /youtubei/v1/next call. The InnerTube protocol is undocumented, so everything it needs lives in
 // Constants.kt (InnerTubeEndpoints, InnerTubeConstants) and the response is read with tolerant JsonElement helpers.
 
@@ -40,7 +40,7 @@ import kotlin.coroutines.resumeWithException
  * Every failure (HTTP error, malformed JSON, no network, oversized body, nothing found) gives
  * `PreviousNextVideos(null, null)` and never throws, except CancellationException, which propagates so a stale
  * refresh ends the call. Events carry only the video id, status, byte length and the top-level response keys: never a
- * body, a ctt or a visitorData (T-03-01).
+ * body, a ctt or a visitorData, which could identify the user.
  *
  * The recently-asked guard replaces markWatched (a /player call plus a stats ping, not reproducible anonymously) only
  * as far as stopping a two-video Mix loop: at the last queue item an autoplay candidate that

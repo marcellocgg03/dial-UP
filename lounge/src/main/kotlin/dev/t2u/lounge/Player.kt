@@ -62,9 +62,9 @@ fun interface PlaybackFailureListener {
 /**
  * The player state machine the lounge session drives. It leaves the actual playback to the do*
  * hooks (the renderer implements them against the UPnP speaker) and tells the sender about every
- * state change through [PlayerStateListener]s, and through [statusFlow] for the notification (D-06).
+ * state change through [PlayerStateListener]s, and through [statusFlow] for the notification.
  *
- * Semantics are those of yt-cast-receiver's Player (PLAY-05): pause acts only while PLAYING, resume
+ * Semantics are those of yt-cast-receiver's Player: pause acts only while PLAYING, resume
  * only while PAUSED (or replays the current video when stopped), stop is a no-op returning true
  * when already STOPPED or IDLE, play on a PLAYING player stops it first. One deliberate difference:
  * a seek on a PAUSED player leaves it paused (yt-cast-receiver resumes it). A second one: [getNavInfo]
@@ -105,14 +105,14 @@ abstract class Player {
     /**
      * True while the speaker has accepted a seek (or a Play after a paused seek) but has not started playing yet. A PLAYING
      * player is then reported to the sender as loading ([PlayerState.buffering]) instead of playing, so the sender's bar does
-     * not run ahead of a silent speaker (plan 03-20, PLAY-06). The renderer overrides it with its pending-seek hold; the
+     * not run ahead of a silent speaker. The renderer overrides it with its pending-seek hold; the
      * default is false, which keeps yt-cast-receiver's behaviour.
      */
     protected open fun seekHoldActive(): Boolean = false
 
     /**
      * Where the sender's seekbar should be now: the position of the last state emitted plus the time elapsed since, while
-     * that state was PLAYING. Null before the first state. Plan 03-18.
+     * that state was PLAYING. Null before the first state.
      */
     fun senderPosition(): Double? {
         val t = told ?: return null
@@ -155,7 +155,7 @@ abstract class Player {
 
     /**
      * Empties the speaker's current track. [reset] calls it unconditionally (also when the player is
-     * already STOPPED or IDLE, where [stop] never reaches doStop) when asked to clear: this is the CAST-06
+     * already STOPPED or IDLE, where [stop] never reaches doStop) when asked to clear: this is the
      * hook for "disconnect clears the speaker". renderer.js has no equivalent. The default does nothing.
      */
     open suspend fun doClear() {}
@@ -232,7 +232,7 @@ abstract class Player {
     /**
      * Seeks while playing or paused: reports LOADING at the target first, then PLAYING. A paused player
      * stays paused (LOADING, then PAUSED at the new position, no resume): a deliberate deviation from
-     * yt-cast-receiver 2.1.0, which resumes; the sender presses Play when it wants sound (plan 02-15, G1).
+     * yt-cast-receiver 2.1.0, which resumes; the sender presses Play when it wants sound.
      */
     suspend fun seek(position: Double, aid: Int? = null): Boolean {
         if (status != PlayerStatus.PLAYING && status != PlayerStatus.PAUSED) return false
@@ -417,7 +417,7 @@ abstract class Player {
      * Tells the senders the position again, even when it equals the last one sent. A sender counts on from the last
      * state it got, so the same number can still be wrong (a seek the speaker took seconds to finish): the event
      * carries a previous state whose position is -1, which never equals a real position, so the session sends the
-     * state. Plan 03-15 (renderer.js has no counterpart).
+     * state. renderer.js has no counterpart.
      */
     suspend fun notifyPositionCorrection() {
         val previous = previousState?.copy(position = -1.0)
