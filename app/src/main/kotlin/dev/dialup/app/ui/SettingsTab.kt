@@ -162,7 +162,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             model = AppUpdates.of(context),
             autoEnabled = appData.updateCheckEnabled,
             currentVersion = BuildConfigFacts.versionName(context) ?: "0",
-            onAutoChange = { on -> AppSettings.of(context).update { it.copy(updateCheckEnabled = on) } },
+            onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
         )
         SectionHeader("Appearance")
         ChoiceRow(

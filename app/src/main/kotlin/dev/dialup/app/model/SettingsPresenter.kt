@@ -375,6 +375,14 @@ class SettingsPresenter(
         return changed(SettingKey.THEME)
     }
 
+    /**
+     * The automatic app-update check. App-only: the bridge never reads it, so there is no [SettingKey] and the restart card is
+     * never informed (as when the tab wrote the setting itself).
+     */
+    fun setUpdateCheckEnabled(on: Boolean) {
+        settings.update { it.copy(updateCheckEnabled = on) }
+    }
+
     /** The one global log switch; applies to the running bridge at once. Returns whether a restart is needed. */
     fun setLogEnabled(on: Boolean): Boolean {
         settings.update { it.copy(logEnabled = on) }
