@@ -29,11 +29,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The app's screen (phase 7, D-01): opening the app always shows the Compose UI, never closes it and never
+ * The app's screen: opening the app always shows the Compose UI, never closes it and never
  * pops a system dialog by itself. Missing permissions show as inline banners whose Grant button launches the
  * request. The exemption and notification state is read again from the platform on every resume (the system
- * screens return no reliable result, T-07-44), and onResume starts the bridge when the switch is on and the
- * exemption is held (D-01); a switched-off or non-exempt bridge is never started from here (D-04, D-12).
+ * screens return no reliable result), and onResume starts the bridge when the switch is on and the
+ * exemption is held; a switched-off or non-exempt bridge is never started from here.
  * The Theme setting is collected here so a change recolours the screen and the system bars at once.
  */
 class MainActivity : ComponentActivity() {
@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * How many times the app was opened in this Activity instance (quick 261101-dcg, PD-7). An open is every start except the
+     * How many times the app was opened in this Activity instance. An open is every start except the
      * first one after a recreation (rotation, dark-mode change, process restore), so turning the phone never restarts the
      * bridge. MainScreen applies a restart that is still owed on every increase.
      */
@@ -150,9 +150,9 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Opening the app never turns a switched-off bridge on (D-04): the start goes through [startDecision]. Without a
+     * Opening the app never turns a switched-off bridge on: the start goes through [startDecision]. Without a
      * bindable network (no Wi-Fi client address and no hotspot) nothing starts, because the service would stop at once; the
-     * resume callback is armed instead and the bridge starts when the phone connects (RESEARCH Pitfall 3).
+     * resume callback is armed instead and the bridge starts when the phone connects.
      */
     private fun startServiceIfNeeded() {
         val enabled = AppSettings.of(this).data.value.bridgeEnabled

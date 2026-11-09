@@ -14,7 +14,7 @@ import android.util.Log
 import java.net.Inet4Address
 
 /**
- * The service stops itself after Wi-Fi has been absent beyond the short rebind window (plan 07.1-01); the switch in
+ * The service stops itself after Wi-Fi has been absent beyond the short rebind window; the switch in
  * the app stays on. This object is what brings it back. [arm] registers a Wi-Fi network callback with a PendingIntent, which
  * the system keeps delivering even after the app process was killed; [NetworkResumeReceiver] then starts the service once a
  * Wi-Fi client address exists, the switch is on and the battery exemption is held. The start paths that find no network
@@ -77,6 +77,8 @@ object NetworkResume {
     /** True when a Wi-Fi client network with an IPv4 address exists now. */
     fun hasWifiAddress(context: Context): Boolean {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        // allNetworks is deprecated from API 31 but is the only synchronous way to list networks at minSdk 26; the
+        // replacement is a NetworkCallback (registerNetworkCallback, API 24), which suits watching, not a one-shot check.
         @Suppress("DEPRECATION")
         for (network in cm.allNetworks) {
             val caps = cm.getNetworkCapabilities(network) ?: continue

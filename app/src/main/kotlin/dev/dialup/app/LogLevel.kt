@@ -3,7 +3,7 @@
 package dev.dialup.app
 
 /**
- * Event log level (decisions D-08, D-09). Pure JVM so the classifier runs in a unit test.
+ * Event log level. Pure JVM so the classifier runs in a unit test.
  *
  * INFO is the default: discovery, DIAL launches, lounge messages, playback, net and retry events.
  * DEBUG adds the per-packet noise. Measured volumes: about 0.15 MB/h idle at

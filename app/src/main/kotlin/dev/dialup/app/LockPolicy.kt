@@ -2,14 +2,14 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app
 
-/** How long the Wi-Fi and wake locks stay held after the last speaker stops casting (D-16). */
+/** How long the Wi-Fi and wake locks stay held after the last speaker stops casting. */
 const val PLAY_LOCK_GRACE_MS = 60_000L
 
 /** Every wake lock acquire carries this timeout, re-armed by the heartbeat. */
 const val WAKE_LOCK_TIMEOUT_MS = 600_000L
 
 /**
- * Decides whether the Wi-Fi lock and the partial wake lock should be held (D-16, SVC-03). Pure JVM.
+ * Decides whether the Wi-Fi lock and the partial wake lock should be held. Pure JVM.
  *
  * Held while at least one speaker is casting and for [graceMs] after the count drops to 0, so a
  * track change or a queue advance that passes through a non-casting state does not drop them. The
