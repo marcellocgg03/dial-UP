@@ -6,7 +6,7 @@ import android.content.Context
 
 /**
  * Debug-build side of the diagnostics seam. The release source set has an object of the same name whose functions
- * return nothing, so a release APK carries no adb diagnostics (CR-02, D-06).
+ * return nothing, so a release APK carries no adb diagnostics.
  */
 object DebugFeatures {
     /** Debug-only features started next to the cast feature. */
