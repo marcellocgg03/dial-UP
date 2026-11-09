@@ -349,7 +349,7 @@ class YouTubeApp(
 
     /**
      * The speaker cannot play what the sender cast (the player already told the senders state 4): tells the sender the
-     * screen is gone, drops the senders and resets the player, which also clears the speaker (CAST-06). The reset policy is
+     * screen is gone, drops the senders and resets the player, which also clears the speaker. The reset policy is
      * not consulted: no sender of this receiver can be served by this speaker now. Protocol-risk: every sender-facing
      * message name stays in this file.
      */
@@ -719,7 +719,7 @@ class YouTubeApp(
             }
             note("noSendersLeft", "policy" to resetPolicy.wire, "resetPlayer" to reset, "networkRecovery" to preserveNetworkPlayback)
             if (reset) {
-                // CAST-06: reset() also clears the speaker (Player.doClear), even when playback had already stopped.
+                // reset() also clears the speaker (Player.doClear), even when playback had already stopped.
                 player.reset()
             }
         } else if (player.autoplayMode == AutoplayMode.UNSUPPORTED) {

@@ -20,7 +20,7 @@ interface PlaylistRequestHandler {
 }
 
 /**
- * Phase 2 seam: the InnerTube /next (TVHTML5) client replaces this in Phase 3 (CAST-05).
+ * The seam for the playlist source: the app replaces this with the InnerTube /next (TVHTML5) client.
  *
  * Returns nothing, so with this handler hasPrevious and hasNext are false, next() stops the player
  * and there is no autoplay video; single-song casts (setPlaylist, pause, seek, volume) work fully.

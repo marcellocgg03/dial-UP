@@ -2,7 +2,7 @@ package dev.t2u.lounge
 
 // Port of yt-cast-receiver 2.1.0 lib/YouTubeCastReceiver.js and its DIAL glue lib/dial/DialServer.js
 // (MIT, Copyright (c) Patrick Kan). One cast target per speaker: a DIAL server, the two lounge sessions and one SSDP
-// advertisement, with an identity (DIAL uuid, app pid, lounge screen and device IDs) that survives restarts (CAST-03).
+// advertisement, with an identity (DIAL uuid, app pid, lounge screen and device IDs) that survives restarts.
 //
 // Kotlin addition: yt-cast-receiver picks a random uuid per start, which would make the phone see a
 // second cast target after every restart; the uuid is stored next to app.pid and mdxContext.
@@ -27,8 +27,8 @@ import okhttp3.OkHttpClient
 import java.util.UUID
 
 /**
- * Announces a receiver's DIAL device on the network. One shared SSDP responder serves every receiver (Phase 1 design),
- * so the receiver only hands its device over; the real implementation lives with the responder (plan 02-13).
+ * Announces a receiver's DIAL device on the network. One shared SSDP responder serves every receiver (one per app),
+ * so the receiver only hands its device over; the real implementation lives with the responder.
  */
 interface DialAdvertiser {
     fun advertise(device: SsdpDevice)
@@ -39,7 +39,7 @@ interface DialAdvertiser {
 
 /**
  * Everything a receiver needs from the app around it. [bindHost] is the address the DIAL server listens on and the host
- * in the SSDP LOCATION. [accessPolicy] (SVC-09) is handed to the DIAL server, which refuses other callers with 403.
+ * in the SSDP LOCATION. [accessPolicy] is handed to the DIAL server, which refuses other callers with 403.
  */
 data class ReceiverDeps(
     val bindHost: String,
@@ -79,7 +79,7 @@ class YouTubeCastReceiver(
     private var dial: DialServer? = null
     private var uuid: String? = null
 
-    /** The address the DIAL server listens on and the LOCATION names; [rebindDial] moves it (plan 05-07). */
+    /** The address the DIAL server listens on and the LOCATION names; [rebindDial] moves it. */
     @Volatile private var bindHost: String = deps.bindHost
 
     /** The DIAL friendly name: [ReceiverOptions.name] until [rename] changes it; read at start and at a rebind. */
@@ -244,7 +244,7 @@ class YouTubeCastReceiver(
     fun dialMissing(): Boolean = status == "running" && dial == null
 
     /**
-     * Moves the DIAL server to [newHost] on the port it already has (plan 05-07, SVC-04) and advertises the new LOCATION.
+     * Moves the DIAL server to [newHost] on the port it already has and advertises the new LOCATION.
      * Only the HTTP listener is replaced: the uuid, the app pid and the lounge sessions are untouched, so the sender stays
      * connected and the phone's cast menu keeps the same entry. A receiver that is not running only remembers [newHost]
      * for its next start. A failure leaves no DIAL server, is noted as rebindFailed and rethrown.
@@ -283,7 +283,7 @@ class YouTubeCastReceiver(
     }
 
     /**
-     * GUI rename (261101-dcg, PD-5): [name] becomes the DIAL friendly name from the next device-desc.xml answer, and the device is
+     * Renaming from the settings screen: [name] becomes the DIAL friendly name from the next device-desc.xml answer, and the device is
      * advertised again with it (the bridge's advertiser decides whether a NOTIFY goes out: phone-only mode sends none). No byebye
      * is sent, so a sender that is casting keeps its entry. The lounge screen name keeps its start-time value until the next
      * start. A receiver that is not running only remembers the name for its next start.

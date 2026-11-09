@@ -25,7 +25,7 @@ data class VideoContext(
     val params: String? = null,
 )
 
-/** A video the sender asked for. [id] is data only: it is validated before any process or URL uses it (T-02-28). */
+/** A video the sender asked for. [id] is data only: it is validated before any process or URL uses it. */
 data class Video(
     val id: String,
     val client: Client? = null,
@@ -53,7 +53,7 @@ data class PlaylistState(
 class Playlist {
     var events: EventSink = NoEvents
 
-    /** Phase 2 uses the NoOp handler; Phase 3 sets the InnerTube one (CAST-05). */
+    /** Starts as the no-op handler; the app sets the InnerTube one. */
     @Volatile
     var requestHandler: PlaylistRequestHandler = NoOpPlaylistRequestHandler
 

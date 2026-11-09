@@ -10,7 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 /** The signed-in user behind a sender, when the sender reports one. */
 data class SenderUser(val name: String, val thumbnail: String?)
 
-/** Thrown by [Sender.parse] for a payload that is not a valid sender; callers log it and carry on (T-02-29). */
+/** Thrown by [Sender.parse] for a payload that is not a valid sender; callers log it and carry on. */
 class SenderParseException(message: String) : Exception(message)
 
 /** A phone or browser connected to this receiver (the payload of a `remoteConnected` message). */

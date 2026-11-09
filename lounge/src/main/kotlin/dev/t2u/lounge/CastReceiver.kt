@@ -1,7 +1,7 @@
 package dev.t2u.lounge
 
 // Port of yt-cast-receiver 2.1.0 lib/YouTubeCastReceiver.js (MIT, Copyright (c) Patrick Kan).
-// Contracts only: the renderer (02-10) depends on these, the lounge app implements them (02-12).
+// Contracts only: the renderer depends on these, the lounge app implements them.
 
 /**
  * One cast target: a DIAL server plus a lounge session pair (YouTube and YouTube Music) for one
@@ -49,7 +49,7 @@ data class ReceiverOptions(
     val dataStore: DataStore,
 )
 
-/** Builds a [CastReceiver] for one speaker; tests substitute a fake, 02-12 provides the real one. */
+/** Builds a [CastReceiver] for one speaker; tests substitute a fake, the lounge app provides the real one. */
 fun interface ReceiverFactory {
     fun create(player: Player, options: ReceiverOptions): CastReceiver
 }
