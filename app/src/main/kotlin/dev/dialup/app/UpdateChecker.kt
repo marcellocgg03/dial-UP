@@ -6,7 +6,9 @@ import dev.dialup.app.model.FetchResult
 import dev.dialup.app.model.UpdateRecord
 import dev.dialup.app.model.parseUpdateRecord
 import dev.dialup.app.model.updateRecordJson
+import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.lanHttpClient
+import dev.t2u.upnp.writeTextAtomic
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -71,5 +73,5 @@ class UpdateRecordFile(private val dir: File, private val name: String = "update
             UpdateRecord()
         }
 
-    fun save(r: UpdateRecord) = writeTextAtomic(dir, name, updateRecordJson(r))
+    fun save(r: UpdateRecord) = writeTextAtomic(File(dir, name), updateRecordJson(r), AtomicWriteOptions.APP)
 }

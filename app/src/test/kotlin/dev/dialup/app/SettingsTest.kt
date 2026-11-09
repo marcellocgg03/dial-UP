@@ -1,6 +1,8 @@
 package dev.dialup.app
 
 import dev.t2u.dial.DialAccessMode
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -79,13 +81,13 @@ class SettingsTest {
         var calls = 0
         return { target, text ->
             calls++
-            val dir = target.absoluteFile.parentFile
+            val options = AtomicWriteOptions.APP.copy(atomicOnly = true)
             if (calls in failOn) {
-                writeTextAtomic(dir, target.name, text, atomicOnly = true) { from, to, _ ->
+                writeTextAtomic(target, text, options) { from, to, _ ->
                     throw AtomicMoveNotSupportedException(from.toString(), to.toString(), "refused")
                 }
             } else {
-                writeTextAtomic(dir, target.name, text, atomicOnly = true)
+                writeTextAtomic(target, text, options)
             }
         }
     }

@@ -7,6 +7,8 @@ import dev.t2u.media.YtDlpRecord
 import dev.t2u.media.YtDlpRecordStore
 import dev.t2u.media.parseYtDlpRecord
 import dev.t2u.media.ytDlpRecordJson
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import java.io.File
 import java.io.IOException
 
@@ -28,7 +30,7 @@ class YtDlpRecordFile(private val dir: File) : YtDlpRecordStore {
     @Synchronized
     override fun save(record: YtDlpRecord) {
         try {
-            writeTextAtomic(dir, YTDLP_RECORD_FILE, ytDlpRecordJson(record))
+            writeTextAtomic(File(dir, YTDLP_RECORD_FILE), ytDlpRecordJson(record), AtomicWriteOptions.APP)
         } catch (_: IOException) {
         } catch (_: SecurityException) {
         }
