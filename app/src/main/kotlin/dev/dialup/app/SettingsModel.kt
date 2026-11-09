@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 
 /**
- * The Android side of the Settings tab (plan 07-10): [SettingsPort] over [AppSettings] and config.json, and [BridgePort] over the
+ * The Android side of the Settings tab: [SettingsPort] over [AppSettings] and config.json, and [BridgePort] over the
  * running [CastFeature] and [BridgeControl]. The presenter stays free of Android types.
  */
 class SettingsModel(context: Context, private val scope: CoroutineScope) {

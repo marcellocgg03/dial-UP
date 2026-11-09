@@ -7,7 +7,7 @@ import java.io.FileOutputStream
 
 /**
  * Append-only file with size-based rotation: current -> name.1 -> ... -> name.<keep>, the oldest
- * file is deleted on a rotation (decision D-10: 3 files of 8 MB). Pure JVM (no android.*).
+ * file is deleted on a rotation (3 files of 8 MB). Pure JVM (no android.*).
  *
  * Not thread-safe: the owner calls it from one thread (EvidenceLog uses its single writer thread).
  */
@@ -89,7 +89,7 @@ class RotatingFile(
 }
 
 /**
- * Where the rotating event log lives: the app-private files directory (RS-04). Nothing else on the device can read it; the shell
+ * Where the rotating event log lives: the app-private files directory. Nothing else on the device can read it; the shell
  * reads it with run-as on debug builds and users hand it over with Share log.
  */
 fun eventLogDir(filesDir: File): File = File(filesDir, "evidence")
