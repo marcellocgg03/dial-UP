@@ -1,6 +1,6 @@
 package dev.t2u.media
 
-// Kotlin original, GPL-3.0-only (plan 03-20). The Node proxy opens one upstream request per speaker request and keeps
+// Kotlin original, GPL-3.0-only. The Node proxy opens one upstream request per speaker request and keeps
 // nothing (PARITY.md adaptation 28).
 
 import kotlinx.coroutines.sync.Mutex
@@ -56,7 +56,7 @@ internal class DirectScan {
 
 /**
  * The windows held for read-ahead: at most one per token, at most [totalBytes] together with the windows being fetched
- * (threat T-03-51). Least recently used first when something must go.
+ * (memory stays bounded). Least recently used first when something must go.
  */
 internal class ReadAheadStore(private val totalBytes: Long) {
     private val lock = Any()
@@ -100,7 +100,7 @@ internal class ReadAheadStore(private val totalBytes: Long) {
 
 /**
  * One upstream call of the direct proxy as it goes into the request log: what kind, the status, how long until the first
- * byte and until the end. Never the URL or a header (threat T-03-52).
+ * byte and until the end. Never the URL or a header (the upstream URL is never logged).
  */
 internal class UpstreamTiming(val kind: String, val status: Int = 0, val ttfbMs: Long = -1) {
     @Volatile var totalMs: Long = -1

@@ -3,14 +3,14 @@ package dev.t2u.media
 // Kotlin-only, no Node counterpart (Node's `#pipe` ignores Range), GPL-3.0-only.
 //
 // A bounded per-token store of finished ffmpeg pipe runs, so a ranged GET on a live video pipe token (what the
-// SYMFONISK Lamp sends after an early Pause: `Range: bytes=N-`, plan 02-16 G4) can be answered with a correct
+// SYMFONISK Lamp sends after an early Pause: `Range: bytes=N-`) can be answered with a correct
 // 206 from the bytes the speaker already received, without a new ffmpeg run. Every method here is best effort:
 // a cache problem returns null/false and must never throw into the live stream.
 //
-// Bounds (threat T-02-56): [PipeRangeConfig.maxBytesPerToken] per run (a longer run is never kept and its token is
-// remembered as too big), [PipeRangeConfig.maxBytesTotal] over all finished runs (least recently used removed
-// first), and at most [PipeRangeConfig.maxConcurrentParts] part files being written at a time (a live tee or a
-// cold fill each hold one), so the disk in use never exceeds total + parts x per-token.
+// Bounds (a long or repeated run must not fill the phone): [PipeRangeConfig.maxBytesPerToken] per run (a longer
+// run is never kept and its token is remembered as too big), [PipeRangeConfig.maxBytesTotal] over all finished
+// runs (least recently used removed first), and at most [PipeRangeConfig.maxConcurrentParts] part files being
+// written at a time (a live tee or a cold fill each hold one), so the disk in use never exceeds total + parts x per-token.
 
 import java.io.File
 import java.io.FileOutputStream
@@ -19,8 +19,8 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * The one switch for answering `Range` on live video pipe tokens from the bytes of the first run (plan 02-16).
- * A FAIL of the 02-16 Lamp retest sets this to false (range answering off, today's behaviour).
+ * The one switch for answering `Range` on live video pipe tokens from the bytes of the first run.
+ * A failed Lamp retest sets this to false (range answering off, today's behaviour).
  */
 const val PIPE_RANGE_ANSWERING_DEFAULT = true
 

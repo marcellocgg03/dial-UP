@@ -21,18 +21,19 @@ import java.util.concurrent.TimeUnit
 /**
  * Fetches a track's audio into a file. It must leave a complete audio file at exactly [target] and throw on failure.
  * It makes ONE attempt: the retry loop (fresh extraction after a failure) belongs to [FileBuilder], as in Node
- * `#download`. The yt-dlp implementation is plan 03-07.
+ * `#download`. The yt-dlp implementation is `YtDlpSourceDownloader`.
  */
 fun interface SourceDownloader {
     suspend fun download(videoId: String, info: ResolvedInfo, target: File)
 }
 
-/** A download or an ffmpeg build did not produce a file. The message is free of signed URLs (T-03-18). */
+/** A download or an ffmpeg build did not produce a file. The message is free of signed URLs. */
 class FileBuildException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * The ffmpeg argument list that builds one file: a pure function of validated values, so a test can assert it
- * (threat T-03-15). Nothing from a speaker's request reaches it; [source] and [output] are paths the builder made.
+ * (no request text can inject an argument). Nothing from a speaker's request reaches it; [source] and [output] are
+ * paths the builder made.
  *
  * mp4 is a lossless remux to a non-fragmented MP4 with `moov` first. The output name always ends in `.part`, so
  * `-f` names the container explicitly.
@@ -94,7 +95,7 @@ class FileBuilder(
     /**
      * The validated path of the final file for the key, whether or not it exists yet: a token registered before its build
      * (or after Android deleted the file) names this path, and [ensure] builds it there. Same validation as every
-     * builder path (T-03-17).
+     * builder path: no part of a request becomes a file name.
      */
     fun pathFor(videoId: String, format: String, startAt: Int): File = finalFile(videoId, format, startAt)
 
@@ -115,16 +116,16 @@ class FileBuilder(
 
     /**
      * How many builds and source downloads run now. The yt-dlp updater waits while this is above 0, so it cannot swap yt-dlp
-     * under a running download (WR-03).
+     * under a running download.
      */
     fun activeCount(): Int = synchronized(lock) { buildJobs.size + sourceJobs.size }
 
-    /** Scans the directory for the cache of an earlier run (D-12): finished files stay, half-written ones go. */
+    /** Scans the directory for the cache of an earlier run: finished files stay, half-written ones go. */
     fun start(): CacheInfo = cache.scan()
 
     /**
      * Cancels running builds and downloads (their ffmpeg processes are destroyed) and deletes their temp files.
-     * Finished cache files stay: a service stop does not empty the cache (D-12).
+     * Finished cache files stay: a service stop does not empty the cache.
      */
     fun close() {
         scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
@@ -151,7 +152,7 @@ class FileBuilder(
 
     private fun keyOf(videoId: String, format: String, startAt: Int): String = "$videoId-$format-$startAt"
 
-    /** `<validated id>-<format>-<int>.<ext>` inside [dir]: no part of a request becomes a file name (T-03-17). */
+    /** `<validated id>-<format>-<int>.<ext>` inside [dir]: no part of a request becomes a file name. */
     private fun finalFile(videoId: String, format: String, startAt: Int): File {
         requireVideoId(videoId)
         require(format in FILE_FORMATS) { "format $format is not a file format" }
