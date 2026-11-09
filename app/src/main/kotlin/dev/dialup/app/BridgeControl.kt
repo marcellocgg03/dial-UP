@@ -16,20 +16,20 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The only code that starts or stops the bridge service from the UI (plan 07-04). The switch is one persisted
+ * The only code that starts or stops the bridge service from the UI. The switch is one persisted
  * flag ([AppSettingsData.bridgeEnabled]); every start path reads it (the service bootstrap, [BootReceiver] and
- * the app's own start), so off stays off until [setEnabled] turns it on again (D-04).
+ * the app's own start), so off stays off until [setEnabled] turns it on again.
  */
 object BridgeControl {
     /**
      * Persists the switch and applies it. On: starts the service when the battery exemption is held and it is
      * not already running. Off: stops the running service, which stops discovery, DIAL, the media server,
-     * polling and the locks with it (D-02). [source] (ui, restart) goes into the `settings` event.
+     * polling and the locks with it. [source] (ui, restart) goes into the `settings` event.
      */
     fun setEnabled(context: Context, on: Boolean, source: String) {
         val app = context.applicationContext
         AppSettings.of(app).update { it.copy(bridgeEnabled = on) }
-        // On while the old service is still being destroyed (a quick off-then-on flip): the start waits for it (WR-01)
+        // On while the old service is still being destroyed (a quick off-then-on flip): the start waits for it
         val deferred = on && ServiceHub.service != null
         val details = mutableMapOf<String, Any?>("bridgeEnabled" to on, "source" to source)
         if (deferred) details["deferred"] = true
@@ -73,7 +73,7 @@ object BridgeControl {
     private val startFlight = SingleFlight<Boolean>()
 
     /**
-     * Starts the service once the old one is gone, when the switch is still on and the battery exemption is held (D-04). A
+     * Starts the service once the old one is gone, when the switch is still on and the battery exemption is held. A
      * service that is running and not stopping simply times out the wait and nothing happens.
      */
     private fun startAfterStop(app: Context) {
@@ -101,13 +101,13 @@ object BridgeControl {
     private val restartFlight = SingleFlight<Boolean>()
 
     /**
-     * Restarts the bridge: off, wait up to 15 s for the old service to be gone and for the process-wide stop of plan 07-20,
-     * then on. Only call it after [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (plan 07-10's
-     * RestartPrompt does that): a restart ends playback like a switch-off does (D-03). The off-then-on order avoids starting
+     * Restarts the bridge: off, wait up to 15 s for the old service to be gone and for the process-wide stop,
+     * then on. Only call it after [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (the
+     * restart prompt does that): a restart ends playback like a switch-off does. The off-then-on order avoids starting
      * the service while the old instance is still being destroyed. The sequence runs on [BridgeLifecycle.scope], so closing
-     * or recreating the Activity mid-restart cannot cancel it, and its switch-on is non-cancellable (CR-03). A second restart
+     * or recreating the Activity mid-restart cannot cancel it, and its switch-on is non-cancellable. A second restart
      * while one runs joins it. Returns false when the old service did not stop in time. [source] lands in the `settings`
-     * evidence events: "restart" for the author's button, "auto-restart" for the restart an app open makes (T-dcg-06).
+     * evidence events: "restart" for the author's button, "auto-restart" for the restart an app open makes.
      */
     suspend fun restart(context: Context, source: String = "restart"): Boolean =
         restartFlight.launch(BridgeLifecycle.scope) {
@@ -124,7 +124,7 @@ object BridgeControl {
      * yt-dlp update). Only a bridge that is running is stopped and started again; with the bridge off, or never started, [block]
      * simply runs and the switch is left alone. The bridge comes back on in all cases once the stop was requested, also when
      * [block] throws or is cancelled, and a stop that did not finish in time still gets its restart (the same guarantee as
-     * [restart]). It ends playback like a switch-off does (D-03), so call it only after the author agreed. The sequence runs on
+     * [restart]). It ends playback like a switch-off does, so call it only after the author agreed. The sequence runs on
      * [BridgeLifecycle.scope]; [source] lands in the `settings` evidence events.
      */
     suspend fun <T> whileStopped(context: Context, source: String, block: suspend () -> T): T {

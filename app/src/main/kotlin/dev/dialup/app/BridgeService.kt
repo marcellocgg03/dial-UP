@@ -63,14 +63,14 @@ object ServiceHub {
 
 /**
  * The bridge's foreground service (type connectedDevice). Holds a MulticastLock for its whole
- * lifetime and a WifiLock and a timed partial WakeLock while casting (D-16, [LockPolicy]), writes a heartbeat every 30 s and a state.json snapshot
+ * lifetime and a WifiLock and a timed partial WakeLock while casting ([LockPolicy]), writes a heartbeat every 30 s and a state.json snapshot
  * that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
  * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir.
  *
- * Sticky on purpose since Phase 5 (D-01): a system kill shows as an exit-info entry followed by
+ * Sticky on purpose: a system kill shows as an exit-info entry followed by
  * `service-start reason=sticky`. The notification Stop action and a denied start return
- * START_NOT_STICKY, so they are not restarted; Stop also persists the switch off (plan 07-04). A denied start
- * (no battery exemption, D-12, or the switch off, D-04) shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
+ * START_NOT_STICKY, so they are not restarted; Stop also persists the switch off. A denied start
+ * (no battery exemption, or the switch off) shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
  * from the first onStartCommand, which knows the start reason ([startReasonOf]).
  */
 class BridgeService : Service(), SpikeHost {
@@ -110,7 +110,7 @@ class BridgeService : Service(), SpikeHost {
 
     override fun onCreate() {
         super.onCreate()
-        // an exception nobody handles on this scope would end the process; log it instead (plan 05-19, WR-01). The scope
+        // an exception nobody handles on this scope would end the process; log it instead. The scope
         // exists before the evidence log does, so a failure in that window goes to logcat.
         scope = CoroutineScope(
             SupervisorJob() + Dispatchers.IO + loggingExceptionHandler { where, t ->
@@ -122,7 +122,7 @@ class BridgeService : Service(), SpikeHost {
             },
         )
 
-        // Pitfall 12: channel first, startForeground before anything slow. A refusal (A9) is logged
+        // Channel first, startForeground before anything slow. A refusal is logged
         // and stops the service instead of crashing it.
         var foregroundError: Throwable? = null
         try {
@@ -140,11 +140,11 @@ class BridgeService : Service(), SpikeHost {
 
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
-        // RS-04: the rotating event log is app-private (filesDir/evidence), one shared writer for the process (CR-01).
+        // The rotating event log is app-private (filesDir/evidence), one shared writer for the process.
         val logDir = eventLogDir(filesDir)
         logDir.mkdirs()
         evidence = EvidenceLog.shared(logDir)
-        // D-11: the level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
+        // The level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
         evidence.setLevel(logLevelOf(loadAppConfig(filesDir).config.logLevel))
         logDirFact = logDir
         scope.launch { removeLegacyLogs() }
@@ -159,7 +159,7 @@ class BridgeService : Service(), SpikeHost {
     }
 
     /**
-     * RS-04: earlier builds wrote the event log to the shared external files directory (logs/, readable by other apps on Android 8
+     * Earlier builds wrote the event log to the shared external files directory (logs/, readable by other apps on Android 8
      * to 10). Removes those files and the directory once per start; best effort, every failure is swallowed.
      */
     private fun removeLegacyLogs() {
@@ -181,7 +181,7 @@ class BridgeService : Service(), SpikeHost {
         if (startForegroundFailed) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
             evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
-            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on (D-04)
+            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on
             AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
             evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
             NetworkResume.disarm(this)
@@ -197,12 +197,12 @@ class BridgeService : Service(), SpikeHost {
     }
 
     /**
-     * Everything slow, behind the battery gate (D-04, D-12: the same gate for open, boot and sticky
+     * Everything slow, behind the battery gate (the same gate for open, boot and sticky
      * starts). Returns false when the gate is shut; the service has then asked to stop and holds no lock.
      */
     private fun bootstrap(reason: StartReason): Boolean {
         val exempt = BatteryGate.isOpen(this)
-        // D-04: the author's switch, persisted; a sticky restart after it went off is denied below
+        // The author's switch, persisted; a sticky restart after it went off is denied below
         val enabled = AppSettings.of(this).data.value.bridgeEnabled
         evidence.event(
             "service-start",
@@ -223,7 +223,7 @@ class BridgeService : Service(), SpikeHost {
         }
         NetworkResume.disarm(this)
         acquireLocks()
-        // published only now: currentState() and heartbeatFields() read the lateinit locks that acquireLocks() sets (WR-09)
+        // published only now: currentState() and heartbeatFields() read the lateinit locks that acquireLocks() sets
         ServiceHub.service = this
         logExitInfo()
         startFeatures()
@@ -236,7 +236,7 @@ class BridgeService : Service(), SpikeHost {
     /**
      * Returns without waiting for the bridge shutdown: [CastFeature.stop] hands it to [BridgeLifecycle.scope] (off the main
      * thread, outliving this service) and every start path waits on [BridgeLifecycle.awaitIdle], so clearing
-     * [ServiceHub.service] early is safe (plan 07-20, review WR-02).
+     * [ServiceHub.service] early is safe.
      */
     override fun onDestroy() {
         evidence.event("service-stop")
@@ -288,9 +288,11 @@ class BridgeService : Service(), SpikeHost {
     // ----- locks ---------------------------------------------------------------------------------
 
     /**
-     * Creates the three locks and acquires only the multicast lock (D-16): the Wi-Fi and wake locks
+     * Creates the three locks and acquires only the multicast lock: the Wi-Fi and wake locks
      * follow the cast count through [applyPlayLocks].
      */
+    // WifiManager.WIFI_MODE_FULL_HIGH_PERF is deprecated from API 29 but is the only high-performance Wi-Fi lock mode on
+    // API 26-28 (minSdk 26); the replacement, WIFI_MODE_FULL_LOW_LATENCY, exists from API 29 and is used there.
     @Suppress("DEPRECATION")
     private fun acquireLocks() {
         val wifi = applicationContext.getSystemService(WifiManager::class.java)
@@ -313,9 +315,9 @@ class BridgeService : Service(), SpikeHost {
 
     /**
      * Holds the Wi-Fi lock and the partial wake lock while [hold] (a speaker is casting or the 60 s
-     * grace is running) and releases both otherwise (D-16, SVC-03). The wake lock always carries
+     * grace is running) and releases both otherwise. The wake lock always carries
      * [WAKE_LOCK_TIMEOUT_MS] and is re-armed on every call while held (reference counting is off), so
-     * a stuck loop cannot keep the CPU awake for ever (Pitfall 9). Only transitions are logged.
+     * a stuck loop cannot keep the CPU awake for ever. Only transitions are logged.
      */
     @Synchronized
     private fun applyPlayLocks(hold: Boolean, reason: String) {
@@ -367,7 +369,7 @@ class BridgeService : Service(), SpikeHost {
         while (scope.isActive) {
             try {
                 applyPlayLocks(playLocks.shouldHold(), "tick")
-                val link = wifiLinkProperties() // one lookup per tick (WR-09)
+                val link = wifiLinkProperties() // one lookup per tick
                 val state = currentState(link)
                 evidence.event("heartbeat", heartbeatFields(link))
                 writeStateFile(state)
@@ -391,7 +393,7 @@ class BridgeService : Service(), SpikeHost {
             "ignoringBatteryOpt" to power.isIgnoringBatteryOptimizations(packageName),
             "uptimeMs" to (SystemClock.elapsedRealtime() - startedAtMs),
             // absolute clocks: elapsedRealtime counts deep sleep, uptimeMillis does not, so the
-            // difference between two heartbeats shows how long the CPU slept (Pitfall 3)
+            // difference between two heartbeats shows how long the CPU slept
             "elapsedRealtimeMs" to SystemClock.elapsedRealtime(),
             "uptimeMillis" to SystemClock.uptimeMillis(),
             "standbyBucket" to standbyBucket(),
@@ -439,7 +441,7 @@ class BridgeService : Service(), SpikeHost {
 
     private fun writeStateFile(state: JsonObject) {
         // temp file then atomic replace, so a reader never sees a half-written state.json; a failure is thrown to the
-        // heartbeat loop, which logs it as a feature-error (WR-09)
+        // heartbeat loop, which logs it as a feature-error
         writeTextAtomic(File(evidenceDir, "state.json"), state.toString(), AtomicWriteOptions.APP)
     }
 
@@ -572,7 +574,7 @@ class BridgeService : Service(), SpikeHost {
 
     /**
      * The count is derived from feature state (every [CastCountSource] feature), never from events.
-     * The notification is re-posted only when its text differs from the last one posted (Pitfall 11).
+     * The notification is re-posted only when its text differs from the last one posted.
      */
     private suspend fun castCountLoop() {
         val sources = features.filterIsInstance<NetworkStateSource>()

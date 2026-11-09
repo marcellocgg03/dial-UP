@@ -14,7 +14,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Plan 07-20 (review CR-01 a): the old bridge must be gone before the next one binds, also when the old and the new bridge
+ * The old bridge must be gone before the next one binds, also when the old and the new bridge
  * belong to two [BridgeService] instances (the service is destroyed and recreated by the switch, Restart and the
  * notification). The state therefore lives in the process, not in [CastFeature].
  *
@@ -65,7 +65,7 @@ class StopToken internal constructor(private val core: LifecycleCore) {
 
 /**
  * The process-wide instance. [scope] outlives every service: the shutdown of a destroyed service continues here, off
- * the main thread (review WR-02). The handler only logs, nothing launched here may end the process.
+ * the main thread. The handler only logs, nothing launched here may end the process.
  */
 object BridgeLifecycle {
     private val core = LifecycleCore()
@@ -84,7 +84,7 @@ object BridgeLifecycle {
     suspend fun awaitIdle(timeoutMs: Long): Boolean = core.awaitIdle(timeoutMs)
 }
 
-/** True when [t] or one of its causes is a [java.net.BindException] (a port the old bridge still holds, plan 07-19). */
+/** True when [t] or one of its causes is a [java.net.BindException] (a port the old bridge still holds). */
 fun isBindFailure(t: Throwable): Boolean {
     var cur: Throwable? = t
     var depth = 0
