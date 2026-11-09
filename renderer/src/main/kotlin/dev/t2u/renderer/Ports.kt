@@ -24,7 +24,7 @@ private const val MAX_PORT = 65535
 private val prettyJson = Json { prettyPrint = true }
 
 /**
- * CAST-02. [warn] receives one line per problem (unreadable file, wrong shape, dropped entry,
+ * [warn] receives one line per problem (unreadable file, wrong shape, dropped entry,
  * failed write). It is never used for control flow and nothing here throws on bad files.
  */
 class PortRegistry(
