@@ -59,7 +59,7 @@ The Android system and the Android SDK are not redistributed.
 
 ## Libraries built into the app
 
-Compiled into the APK through Gradle. Source code and licence texts are available at the
+Compiled into the APK through Gradle, directly or through another library. Source code and licence texts are available at the
 upstream locations.
 
 | Library | Copyright | Licence | Licence text |
@@ -70,6 +70,7 @@ upstream locations.
 | AndroidX (core, activity, lifecycle, Compose, Material 3, Material icons) | Copyright The Android Open Source Project | Apache-2.0 | https://www.apache.org/licenses/LICENSE-2.0 |
 | SLF4J (slf4j-api, slf4j-jdk14) | Copyright QOS.ch Sarl | MIT | https://www.slf4j.org/license.html |
 | jsoup | Copyright Jonathan Hedley and contributors | MIT | https://jsoup.org/license |
+| Jackson (jackson-core, jackson-databind, jackson-annotations), Apache Commons IO and Commons Compress, Typesafe Config, Guava `listenablefuture`, JetBrains annotations, JSpecify | Copyright their respective authors and The Apache Software Foundation | Apache-2.0 | https://www.apache.org/licenses/LICENSE-2.0 |
 
 The Apache-2.0 libraries are used unmodified. Where a NOTICE file ships inside a library, it is
 carried into the APK with that library.
