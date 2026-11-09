@@ -32,8 +32,8 @@ import dev.dialup.app.model.RestartPrompt
 import dev.dialup.app.model.confirmText
 
 /**
- * The thin card that offers a bridge restart after a setting that needs one (GUI-09, D-09). It goes away by itself; the
- * confirmation for a restart during a cast is a dialog and so is shown here even after the card has gone (D-03). A card that an
+ * The thin card that offers a bridge restart after a setting that needs one. It goes away by itself; the
+ * confirmation for a restart during a cast is a dialog and so is shown here even after the card has gone. A card that an
  * app open showed because something is cast stays until nothing is cast: this reports every change of the cast count to the prompt.
  */
 @OptIn(ExperimentalComposeUiApi::class)

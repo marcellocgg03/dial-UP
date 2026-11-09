@@ -78,7 +78,7 @@ private val THEMES = listOf(
 )
 
 /**
- * The Settings tab (GUI-08): every playback and maintenance setting, each saved as soon as it is changed, grouped as Playback, Renderers,
+ * The Settings tab: every playback and maintenance setting, each saved as soon as it is changed, grouped as Playback, Renderers,
  * Maintenance, Appearance and Diagnostics. The Hidden renderers row opens its own screen ([HiddenRenderersActivity]). The log switch
  * with its Share log and Clear log buttons comes last.
  */

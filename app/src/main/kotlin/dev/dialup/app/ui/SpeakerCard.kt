@@ -49,12 +49,12 @@ import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import kotlinx.coroutines.delay
 
-/** How faint a card is drawn while its speaker is offline (D-07). */
+/** How faint a card is drawn while its speaker is offline. */
 private const val OFFLINE_ALPHA = 0.5f
 
 /**
- * One speaker as a Material 3 card (GUI-01): art, name, state word, and what it plays. The card has no loudness control of
- * any kind (notes, T-02-36).
+ * One speaker as a Material 3 card: art, name, state word, and what it plays. The card has no loudness control of
+ * any kind.
  */
 @Composable
 fun SpeakerCard(
@@ -69,7 +69,7 @@ fun SpeakerCard(
 ) {
     val udn = speaker.udn
     val playing = speaker.online && speaker.status == PlayerStatus.PLAYING
-    // One tick a second, only while this speaker plays and the card is composed (T-07-08). The clock is the renderer's epoch clock.
+    // One tick a second, only while this speaker plays and the card is composed. The clock is the renderer's epoch clock.
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(speaker.status, speaker.position, speaker.online) {
         nowMs = System.currentTimeMillis()
@@ -78,7 +78,7 @@ fun SpeakerCard(
             nowMs = System.currentTimeMillis()
         }
     }
-    // D-07: a speaker that does not answer is drawn greyed; buttonsFor has already switched every control off
+    // a speaker that does not answer is drawn greyed; buttonsFor has already switched every control off
     ElevatedCard(modifier.fillMaxWidth().alpha(if (speaker.online) 1f else OFFLINE_ALPHA).testTag("speaker-card-$udn")) {
         Row(
             Modifier.padding(16.dp),
@@ -106,7 +106,7 @@ fun SpeakerCard(
                     Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("audio-format-$udn"))
                 }
             }
-            // GUI-03: the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one (PD-3); Delete only on a renderer saved by address (quick 261101-oib).
+            // the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one; Delete only on a renderer saved by address.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {

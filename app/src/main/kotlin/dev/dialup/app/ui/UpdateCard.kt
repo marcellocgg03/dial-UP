@@ -34,7 +34,7 @@ import dev.dialup.app.model.safeReleaseUrl
 import kotlinx.coroutines.launch
 
 /**
- * The card on the Renderers tab that says a newer DialUP release exists (UPD-01). It shows only while automatic checks are on
+ * The card on the Renderers tab that says a newer DialUP release exists. It shows only while automatic checks are on
  * and the recorded release is newer than [currentVersion]; it has no dismiss button, it goes when the app is updated or the
  * switch is turned off. The link opens only a page that passed [safeReleaseUrl].
  */
@@ -69,7 +69,7 @@ fun UpdateCard(model: AppUpdateModel, autoEnabled: Boolean, currentVersion: Stri
 }
 
 /**
- * The App updates section of Settings (UPD-01): the version, the automatic-check switch and Check now, which works with the
+ * The App updates section of Settings: the version, the automatic-check switch and Check now, which works with the
  * switch off and ignores the throttle. A newer release found by hand gets a link, again only through [safeReleaseUrl].
  */
 @Composable

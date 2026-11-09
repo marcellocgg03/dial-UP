@@ -16,7 +16,7 @@ import dev.dialup.app.ThemeMode
 import dev.dialup.app.useDarkTheme
 
 /**
- * The app's Material 3 theme (GUI-12): follows the Theme setting (System follows the phone's light or dark setting),
+ * The app's Material 3 theme: follows the Theme setting (System follows the phone's light or dark setting),
  * with wallpaper colours on Android 12 and later.
  */
 @Composable
