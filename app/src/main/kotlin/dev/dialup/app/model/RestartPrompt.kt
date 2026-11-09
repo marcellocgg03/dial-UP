@@ -30,9 +30,9 @@ fun restartFields(e: EffectiveSettings): RestartFields = RestartFields(gapless =
 enum class AutoRestart { NONE, RESTART, SHOW_CARD }
 
 /**
- * The rule for an app open (quick 261101-dcg). PD-6: "pending" is derived, never stored: a bridge runs ([running] is the
+ * The rule for an app open. "Pending" is derived, never stored: a bridge runs ([running] is the
  * restart fields it was started with, null without a bridge) and they differ from the [saved] ones. A bridge started after the
- * change read the new values, so nothing is pending for it, and a restart makes the two equal, so it does not repeat. PD-7: never
+ * change read the new values, so nothing is pending for it, and a restart makes the two equal, so it does not repeat. Never
  * a silent restart while anything is loading, playing or paused ([casting] above 0): the restart card is shown instead. With the
  * switch off ([switchedOn] false) nothing happens.
  */
@@ -43,14 +43,14 @@ fun autoRestartOnOpen(running: RestartFields?, saved: RestartFields, switchedOn:
 }
 
 /**
- * The thin "Restart the bridge to apply this change" card and the question behind its button (plan 07-10, D-09, D-03).
+ * The thin "Restart the bridge to apply this change" card and the question behind its button.
  *
  * The card shows after a setting that needs a restart while the bridge runs, and hides itself after [visibleMs]. Hiding only
  * hides: the timer never runs [action]. Pressing Restart goes through [restartStep]: with nothing loading, playing or paused the
- * action runs at once, otherwise [confirmPending] asks first and [confirmRestart] runs it. The action runs once at a time (T-07-24).
+ * action runs at once, otherwise [confirmPending] asks first and [confirmRestart] runs it. The action runs once at a time, so a double tap cannot restart twice.
  * The action gets the source of the restart ([RESTART_SOURCE], or [AUTO_RESTART_SOURCE] for [restartNow]).
  *
- * Opening the app with a restart owed (quick 261101-dcg, PD-7): [restartNow] runs the action at once, and [showUntilCastEnds]
+ * Opening the app with a restart owed: [restartNow] runs the action at once, and [showUntilCastEnds]
  * keeps the card up with no timer until [onCastingChanged] says nothing is cast any more.
  */
 class RestartPrompt(
@@ -88,7 +88,7 @@ class RestartPrompt(
         }
     }
 
-    /** Shows the card with no timer; it stays until [onCastingChanged] reports nothing cast, or [dismiss] (PD-7). */
+    /** Shows the card with no timer; it stays until [onCastingChanged] reports nothing cast, or [dismiss]. */
     @Synchronized
     fun showUntilCastEnds() {
         timer?.cancel()
@@ -115,7 +115,7 @@ class RestartPrompt(
         card.value = false
     }
 
-    /** Restarts now, with no question: the app was opened with nothing cast (PD-7). Hides the card; runs once at a time. */
+    /** Restarts now, with no question: the app was opened with nothing cast. Hides the card; runs once at a time. */
     fun restartNow() {
         dismiss()
         run(AUTO_RESTART_SOURCE)

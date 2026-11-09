@@ -11,17 +11,17 @@ data class BridgeStatus(val running: Boolean, val accessMode: DialAccessMode) {
     }
 }
 
-/** The only text the header shows under its title (GUI-15). */
+/** The only text the header shows under its title. */
 const val WAITING_FOR_WIFI = "Waiting for Wi-Fi"
 
 /**
  * True when the switch is on and the exemption is held, so the bridge would run, but the phone has no Wi-Fi or hotspot address
- * ([wifiPresent] false). The service stops itself on Wi-Fi loss (plan 07.1-01), so this does not depend on the service.
+ * ([wifiPresent] false). The service stops itself on Wi-Fi loss, so this does not depend on the service.
  */
 fun waitingForWifi(enabled: Boolean, exempt: Boolean, wifiPresent: Boolean): Boolean = enabled && exempt && !wifiPresent
 
 /**
- * The header's only subtitle (GUI-15): [WAITING_FOR_WIFI] when [waitingForWifi], else "" (no subtitle). "Running", the access
+ * The header's only subtitle: [WAITING_FOR_WIFI] when [waitingForWifi], else "" (no subtitle). "Running", the access
  * mode and the other status texts are not shown any more: the switch and the battery banner
  * say the rest.
  */

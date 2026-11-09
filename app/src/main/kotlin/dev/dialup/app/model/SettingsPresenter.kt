@@ -76,7 +76,7 @@ interface BridgePort {
     suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? = updateNow()
     suspend fun ytdlpVersion(): String?
 
-    /** The restart-relevant settings the running bridge was started with; null while there is no bridge (PD-6). */
+    /** The restart-relevant settings the running bridge was started with; null while there is no bridge. */
     fun runningWith(): RestartFields?
 
     /** Restarts the bridge; [source] ([RESTART_SOURCE] or [AUTO_RESTART_SOURCE]) lands in the `settings` evidence events. */
@@ -85,7 +85,7 @@ interface BridgePort {
 
 private val NOT_CASTING: StateFlow<Int> = MutableStateFlow(0)
 
-/** The settings the tab changes, and whether the running bridge needs a restart to pick the change up (D-09). */
+/** The settings the tab changes, and whether the running bridge needs a restart to pick the change up. */
 enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
@@ -180,8 +180,8 @@ const val LOG_CLEARED = "Log cleared"
 fun clearedMessage(count: Int): String = "Cleared $count ${if (count == 1) "file" else "files"}"
 
 /**
- * The Settings tab's brain (plan 07-10, GUI-08): shows the effective value of each setting and writes the author's change to
- * settings.json at once. Pure: no Android types, so it is tested with fakes. It offers only enumerated values (T-07-23).
+ * The Settings tab's brain: shows the effective value of each setting and writes the author's change to
+ * settings.json at once. Pure: no Android types, so it is tested with fakes. It offers only enumerated values, so a setting never takes a value outside its list.
  */
 class SettingsPresenter(
     private val scope: CoroutineScope,
@@ -247,7 +247,7 @@ class SettingsPresenter(
     }
 
     /**
-     * Re-reads the cache usage and the yt-dlp version. A bridge or file-system fault keeps the last values (review IN-04): this
+     * Re-reads the cache usage and the yt-dlp version. A bridge or file-system fault keeps the last values: this
      * runs in coroutines whose exceptions would reach the composition scope's handler and end the process. Cancellation propagates.
      * True only when both answers came back non-null.
      */
@@ -314,7 +314,7 @@ class SettingsPresenter(
     }
 
     /**
-     * Called on every app open (PD-7; the Activity decides what an open is). When the running bridge was started with other
+     * Called on every app open (the Activity decides what an open is). When the running bridge was started with other
      * restart-relevant settings than the saved ones and the switch is on, it restarts the bridge once with nothing cast
      * ([RestartPrompt.restartNow]) or, with something cast ([casting] above 0), shows the restart card until nothing is cast
      * ([RestartPrompt.showUntilCastEnds]). Nothing pending, no bridge or the switch off: nothing. A failure is dropped; an open
@@ -368,7 +368,7 @@ class SettingsPresenter(
 
     /**
      * System, Light or Dark. UI-only: the screen recolours at once and the bridge never reads it, so no restart. The
-     * parameter is the enum, so there is no out-of-list value to refuse (T-07-23 by type).
+     * parameter is the enum, so there is no out-of-list value to refuse.
      */
     fun setThemeMode(mode: ThemeMode): Boolean {
         settings.update { it.copy(theme = mode) }
@@ -418,7 +418,7 @@ class SettingsPresenter(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // one line naming the action and the exception class: no stack trace, no path (review IN-04)
+                // one line naming the action and the exception class: no stack trace, no path
                 ui.update { it.copy(message = "Could not clear the cache (${e.javaClass.simpleName})") }
             }
             refreshUsage()
@@ -434,7 +434,7 @@ class SettingsPresenter(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // one line naming the action and the exception class: no stack trace, no path (review IN-04)
+                // one line naming the action and the exception class: no stack trace, no path
                 ui.update { it.copy(logMessage = "Could not clear the log (${e.javaClass.simpleName})") }
             }
         }
@@ -526,7 +526,7 @@ class SettingsPresenter(
             status = "UNAVAILABLE", ms = 0, error = "yt-dlp is not available",
         )
 
-    // end as a failed outcome so the button is usable again instead of stuck on Running (review IN-04)
+    // end as a failed outcome so the button is usable again instead of stuck on Running
     private fun failed(status: String, error: String) = YtDlpUpdateOutcome(
         ok = false, trigger = "ui", channel = ui.value.ytdlpChannel, before = null, after = null, status = status, ms = 0, error = error,
     )

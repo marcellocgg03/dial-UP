@@ -8,7 +8,7 @@ import dev.t2u.renderer.SpeakerPosition
 import dev.t2u.renderer.SpeakerUi
 import java.util.Locale
 
-/** The word a speaker card shows for the speaker's state (GUI-01). An offline speaker reads Offline whatever it last did. */
+/** The word a speaker card shows for the speaker's state. An offline speaker reads Offline whatever it last did. */
 fun statusLabel(status: PlayerStatus, online: Boolean): String {
     if (!online) return "Offline"
     return when (status) {

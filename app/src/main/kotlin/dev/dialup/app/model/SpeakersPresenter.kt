@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 /** What the play/pause button does now: it is one button that shows [PLAY] or [PAUSE], or is greyed out. */
 enum class PlayPause { PLAY, PAUSE, DISABLED }
 
-/** Which of a card's buttons can be tapped (plan 07-08, GUI-02). There is no volume button (T-02-36). */
+/** Which of a card's buttons can be tapped. There is no volume button. */
 data class CardButtons(val playPause: PlayPause, val stop: Boolean, val previous: Boolean, val next: Boolean)
 
 private val NO_BUTTONS = CardButtons(PlayPause.DISABLED, stop = false, previous = false, next = false)
@@ -28,7 +28,7 @@ private val NO_BUTTONS = CardButtons(PlayPause.DISABLED, stop = false, previous 
  * Enables a button only when its action can do something: pause while playing; play while paused, or
  * while stopped with something to play; stop and clear while playback is active/loading or there is a current track/queue
  * item; previous and next from the queue's navigation info. An offline speaker, or one whose last command is still running
- * ([busy], Pitfall 9), has every button off.
+ * ([busy], so a second tap cannot race the first), has every button off.
  */
 fun buttonsFor(s: SpeakerUi, busy: Boolean): CardButtons {
     if (!s.online || busy) return NO_BUTTONS
@@ -51,7 +51,7 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
 }
 
 /**
- * Whether a card offers Hide (GUI-03, PD-3): when the renderer answers, or when it is saved by address, so its greyed card can be
+ * Whether a card offers Hide: when the renderer answers, or when it is saved by address, so its greyed card can be
  * hidden too. An offline card that is not saved has nothing to hide.
  */
 fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
@@ -64,16 +64,16 @@ fun hideEndsCast(s: SpeakerUi): Boolean =
     s.online && (s.status == PlayerStatus.PLAYING || s.status == PlayerStatus.PAUSED || s.status == PlayerStatus.LOADING)
 
 /**
- * Whether a card offers Delete (quick 261101-oib): only for a renderer added by address (saved in manual.json), whether it answers
+ * Whether a card offers Delete: only for a renderer added by address (saved in manual.json), whether it answers
  * or not. A discovered-only renderer comes back at the next search, so there is nothing to delete; Hide is what keeps it away.
  */
 fun deleteOffered(s: SpeakerUi): Boolean = s.manual
 
 /**
- * Whether the saved manual speakers are drawn as greyed cards (D-07, review WR-04). They are drawn whenever the running bridge's
+ * Whether the saved manual speakers are drawn as greyed cards. They are drawn whenever the running bridge's
  * own list is not shown: the switch is off (also while the old service is still stopping), or the service or the bridge is not up
  * (no Wi-Fi, a failed start, the start retry, a reload restart). With a bridge up under an enabled switch its own list already
- * merges the offline manual entries (plan 07-14), so drawing them again would duplicate them.
+ * merges the offline manual entries, so drawing them again would duplicate them.
  */
 fun savedManualVisible(switchOn: Boolean, serviceUp: Boolean, bridgeUp: Boolean): Boolean = !(switchOn && serviceUp && bridgeUp)
 
