@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 
 /**
- * How many renderers are being cast to (D-06). "Casting" means a speaker whose player status is
+ * How many renderers are being cast to. "Casting" means a speaker whose player status is
  * loading, playing or paused; `total` is every speaker that currently has a receiver.
  */
 data class CastCount(val casting: Int, val total: Int)
@@ -15,7 +15,7 @@ data class CastCount(val casting: Int, val total: Int)
 /** A user-visible cast notification is present only while Wi-Fi is available and a renderer is actively casting. */
 fun shouldShowCastNotification(c: CastCount, wifiAvailable: Boolean = true): Boolean = wifiAvailable && c.casting > 0
 
-/** The cast notification text (D-06). */
+/** The cast notification text. */
 fun notificationText(c: CastCount): String = "${c.casting} ${if (c.casting == 1) "renderer" else "renderers"} being cast to"
 
 /**
@@ -33,7 +33,7 @@ interface NetworkStateSource {
 }
 
 /**
- * Implemented by every feature that knows about speakers (the cast feature of plan 02-13). The count
+ * Implemented by every feature that knows about speakers (the cast feature). The count
  * is derived from feature state, never incremented or decremented by events.
  */
 interface CastCountSource {

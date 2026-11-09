@@ -1,6 +1,6 @@
 package dev.dialup.app
 
-// Plan 02-13: the product feature. Opening the app starts the Bridge (the index.js port) inside the connectedDevice
+// The product feature. Opening the app starts the Bridge (the index.js port) inside the connectedDevice
 // foreground service: every speaker found on the Wi-Fi becomes a cast target in YouTube and YouTube Music.
 // GPL-3.0-only.
 
@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * native payloads, yt-dlp and ffmpeg, the settings file, evidence logging and the notification count. Everything else
  * is in :renderer and below, tested on the JVM.
  *
- * Every OkHttp client in the app derives from `lanHttpClient()` (SVC-05); nothing here builds one directly.
+ * Every OkHttp client in the app derives from `lanHttpClient()`; nothing here builds one directly.
  *
  * The optional `files/config.json` (see :renderer ConfigFile.kt for the keys) is read each time the bridge starts; what
  * was applied is logged as a `config` event and shown under "config" by `cast-state`, and `reload-config` restarts the
@@ -64,7 +64,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * when Wi-Fi returns. A continuous outage beyond [dev.dialup.app.model.WIFI_REBIND_WINDOW_MS] stops the bridge/service
  * without sending Stop or Clear to speakers; Wi-Fi return starts a fresh bridge. Only `reload-config` otherwise restarts it.
  * A start that throws, or finds no Wi-Fi, is logged
- * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on (GUI-10).
+ * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on.
  */
 class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     override val name = "cast"
@@ -90,7 +90,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             settingsState.value = value
         }
 
-    /** The current bridge, as a flow so the status UI follows a rebuilt bridge (Wi-Fi start, reload-config) without reopening (plan 07-03). */
+    /** The current bridge, as a flow so the status UI follows a rebuilt bridge (Wi-Fi start, reload-config) without reopening. */
     private val bridgeState = MutableStateFlow<Bridge?>(null)
 
     private var bridge: Bridge?
@@ -107,21 +107,21 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     @OptIn(ExperimentalCoroutinesApi::class)
     val searching: Flow<Boolean> = bridgeState.flatMapLatest { it?.searching ?: flowOf(false) }
 
-    /** The bridge now, for the controls that act on one speaker (plan 07-08); null while there is none. */
+    /** The bridge now, for the controls that act on one speaker; null while there is none. */
     fun currentBridge(): Bridge? = bridgeState.value
 
     /** What the running bridge read at its start (gapless, forced format); set with [bridge], cleared with it. */
     @Volatile private var startedWith: RestartFields? = null
 
     /**
-     * The restart-relevant settings the running bridge was started with, or null while there is no bridge (PD-6). They live in
+     * The restart-relevant settings the running bridge was started with, or null while there is no bridge. They live in
      * memory for exactly as long as that bridge runs, so a process kill after a change leaves nothing pending: the next bridge
      * starts from settings.json. A Wi-Fi rebind keeps them because the bridge moves in place and the config is not reloaded.
      */
     fun runningWith(): RestartFields? = if (bridge != null) startedWith else null
 
     /**
-     * GUI-08: empties the running bridge's cache of every file no stream pins (T-07-21) and logs `cache-clear` with the
+     * Empties the running bridge's cache of every file no stream pins (a file a stream pins is kept) and logs `cache-clear` with the
      * count. Null while there is no bridge. Blocking file work: call off the main thread.
      */
     fun clearCache(): Int? {
@@ -131,20 +131,20 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         return cleared
     }
 
-    /** GUI-08: files, bytes and cap of the running bridge's cache; null without a bridge or without a file builder. */
+    /** Files, bytes and cap of the running bridge's cache; null without a bridge or without a file builder. */
     fun cacheInfo(): CacheInfo? = bridge?.cacheInfo()
 
-    /** GUI-07: one yt-dlp update now on the chosen channel; BUSY while a scheduled update or a lookup runs. Null without an updater. */
+    /** One yt-dlp update now on the chosen channel; BUSY while a scheduled update or a lookup runs. Null without an updater. */
     suspend fun updateNow(): YtDlpUpdateOutcome? = updater?.updateNow()
 
     /**
-     * The daily job's entry point while the service runs (plan 07.1-07): one update when the record says it is due and
+     * The daily job's entry point while the service runs: one update when the record says it is due and
      * nothing is cast or looked up. Null when the record says "recent"; a CASTING or BUSY style outcome postpones it.
      * Null without an updater.
      */
     suspend fun ytdlpUpdateIfDue(trigger: String): YtDlpUpdateOutcome? = updater?.updateIfDue(trigger)
 
-    /** GUI-07: the installed yt-dlp version; null when it cannot be read or the service is stopped. */
+    /** The installed yt-dlp version; null when it cannot be read or the service is stopped. */
     suspend fun ytdlpVersion(): String? = updater?.version()
 
     /** The current bridge's resolver; the yt-dlp updater waits while it has a lookup or, through the bridge, a download running. */
@@ -166,7 +166,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     /** Last Wi-Fi address the bridge was (or tried to be) bound to; used for the rebind log and the DIAL self check. */
     @Volatile private var lastIp: String? = null
 
-    /** The bridge card's state (plan 07-03, D-05): whether a bridge exists and who may cast. */
+    /** The bridge card's state: whether a bridge exists and who may cast. */
     @OptIn(ExperimentalCoroutinesApi::class)
     val status: Flow<BridgeStatus> = settingsState.flatMapLatest { s ->
         if (s == null) {
@@ -186,7 +186,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     private val networkLossCount = MutableStateFlow(CastCount(0, 0))
 
-    /** Derived from the bridge's card-visible state and used only to decide whether to show the cast notification (D-06). */
+    /** Derived from the bridge's card-visible state and used only to decide whether to show the cast notification. */
     override val castCount: StateFlow<CastCount> = count.asStateFlow()
     override val networkLossCastCount: StateFlow<CastCount> = networkLossCount.asStateFlow()
 
@@ -202,7 +202,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 bridge?.onAccessModeChanged(mode)
             }
         }
-        // GUI-08 / D-09: the log toggle acts on the running service at once. The level is the one a restart would give
+        // The log toggle acts on the running service at once. The level is the one a restart would give
         // (config.json plus the settings), taken from the value that changed because the file may not be written yet.
         host.scope.launch {
             appSettings.data.map { it.logEnabled }.distinctUntilChanged().drop(1).collect { enabled ->
@@ -221,12 +221,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         mon.start()
         host.scope.launch { withBridgeLock(host) { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
         HousekeepingAlarm.schedule(host.context)
-        // Daily yt-dlp update job (plan 07.1-07); a no-op while one with its id is pending.
+        // Daily yt-dlp update job; a no-op while one with its id is pending.
         YtDlpJob.schedule(host.context)
         // Started here and not in startBridge, which runs again on every Wi-Fi rebind and would stack updaters. The
         // updater has its own coroutine and dispatcher: the cast path never waits for it and it never waits for a cast.
         // The deadline runs on the elapsed-time clock (time the CPU slept counts), is re-checked at least every 15 minutes
-        // and at every housekeeping alarm (plan 05-11). It treats a lookup or a download as busy. Plan 07.1-07: it never
+        // and at every housekeeping alarm. It treats a lookup or a download as busy. It never
         // updates while a renderer is being cast to (a postponed update is re-checked, never forced) and goes through the
         // persisted record, so a restart or a Wi-Fi flap within 18 hours of an update causes no further one.
         val u = YtDlpUpdater(
@@ -245,7 +245,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 
     /**
-     * Every explicit stop ends here: the header switch (plan 07-04 persists it first), the notification Stop and adb stop.
+     * Every explicit stop ends here: the header switch (BridgeControl persists it first), the notification Stop and adb stop.
      * Explicit stops end playback and may clear speakers according to the setting. A Wi-Fi-loss timeout only stops the local
      * bridge; it leaves playback already accepted by speakers alone.
      */
@@ -262,8 +262,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         monitor = null
         rebindJob?.cancel()
         retryJob?.cancel()
-        // The shutdown runs on the process scope, never on the calling (main) thread, and never waits here (review WR-02).
-        // The token is registered before this returns, so a start on a new service instance sees the stop in flight (CR-01 a).
+        // The shutdown runs on the process scope, never on the calling (main) thread, and never waits here.
+        // The token is registered before this returns, so a start on a new service instance sees the stop in flight.
         val h = host
         val clear = !preserveSpeakerPlayback && settings?.data?.value?.clearOnCastEnd == true
         val token = BridgeLifecycle.beginStop()
@@ -290,7 +290,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     /**
      * Every start path (first start, retry, rebind): waits for a stop in flight, also one begun by another service
-     * instance, then takes the process-wide lifecycle lock (CR-01 a, D-1). A wait that runs out is logged and the start
+     * instance, then takes the process-wide lifecycle lock. A wait that runs out is logged and the start
      * goes on: the lock still serialises it and a port collision is handled as a bind failure.
      */
     private suspend fun withBridgeLock(h: SpikeHost, block: suspend () -> Unit) {
@@ -322,7 +322,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 
     /**
-     * One housekeeping pass (plan 05-11): the bridge's search, retry, re-announce and probe. Run by the in-process timer
+     * One housekeeping pass: the bridge's search, retry, re-announce and probe. Run by the in-process timer
      * of the bridge, by [HousekeepingReceiver] when the alarm wakes the idle phone, and by `cmd housekeeping`.
      */
     suspend fun housekeeping(trigger: String) {
@@ -358,7 +358,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 
     /**
-     * [startBridge] that logs a failure as `feature-error` instead of throwing (plan 05-19, review WR-01). True only when
+     * [startBridge] that logs a failure as `feature-error` instead of throwing. True only when
      * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with the lifecycle lock held.
      */
     private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
@@ -407,7 +407,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val payloads = h.payloads()
         val cacheDir = File(h.context.cacheDir, "yt-dlp").also { it.mkdirs() }
         val loaded = loadAppConfig(h.context.filesDir)
-        // D-11: reload-config and every Wi-Fi rebind pass through here, so a changed logLevel applies before the config event
+        // Reload-config and every Wi-Fi rebind pass through here, so a changed logLevel applies before the config event
         h.evidence.setLevel(logLevelOf(loaded.config.logLevel))
         configSummaryJson = configSummary(loaded)
         h.evidence.event("config", configEvidenceFields(loaded))
@@ -429,15 +429,15 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 launcher = FfmpegRunner(payloads, h.context.cacheDir, h.evidence),
                 http = lanHttpClient(),
                 accessMode = { appSettings.dialAccess.value },
-                // GUI-08 / D-09: read at clear time, so switching the setting applies to the running bridge
+                // Read at clear time, so switching the setting applies to the running bridge
                 clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
-                // GUI-08 / D-09: the cache cap read at every prune: the app's value when set, else config.json or the default
+                // The cache cap read at every prune: the app's value when set, else config.json or the default
                 cacheMb = { appSettings.data.value.cacheMb ?: loaded.config.cacheMb },
-                // GUI-03 / D-08: the hidden speakers, kept across bridges and readable while the bridge is off
+                // The hidden speakers, kept across bridges and readable while the bridge is off
                 hidden = SpeakerStores.of(h.context).hidden,
-                // GUI-04 / D-06: the speakers added by address, saved on a successful add and probed at every start
+                // The speakers added by address, saved on a successful add and probed at every start
                 manual = SpeakerStores.of(h.context).manual,
-                // GUI rename (261101-dcg): the author's renderer names, applied when a renderer is set up and live on a rename
+                // The author's renderer names, applied when a renderer is set up and live on a rename
                 names = SpeakerStores.of(h.context).names,
                 serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 DialUP/${BuildConfigFacts.versionName(h.context) ?: "0"}",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
@@ -446,7 +446,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
-                // plan 05-18's housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
+                // Housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
                 // changed address; a supplier that throws counts as no Wi-Fi
                 currentNetwork = { runCatching { bridgeNetwork(h) }.getOrNull() },
             ),
@@ -464,8 +464,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     }
 
     /**
-     * Call with the lifecycle lock held. [stopSpeakers]: stop every playing speaker first (D-03). [clearSpeakers]: also empty
-     * every speaker's transport URI (CAST-06, only with the GUI-08 setting on). Neither: the speakers are not touched.
+     * Call with the lifecycle lock held. [stopSpeakers]: stop every playing speaker first. [clearSpeakers]: also empty
+     * every speaker's transport URI (only with the clear-on-cast-end setting on). Neither: the speakers are not touched.
      */
     private suspend fun stopBridge(clearSpeakers: Boolean, stopSpeakers: Boolean = false) {
         val b = bridge
@@ -486,7 +486,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      * are advertised (first speaker up, or 15 s) and its duration is logged as `warmup`.
      */
     private fun scheduleWarmUp(h: SpikeHost, b: Bridge) {
-        // Debug builds only: DebugFeatures.warmUpVideoId is null in release, so no coroutine starts and no lookup is made (T-08-03).
+        // Debug builds only: DebugFeatures.warmUpVideoId is null in release, so no coroutine starts and no lookup is made.
         val id = DebugFeatures.warmUpVideoId(h.context) ?: return
         if (!warmed.compareAndSet(false, true)) return
         h.scope.launch {
