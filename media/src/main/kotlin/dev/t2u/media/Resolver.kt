@@ -23,8 +23,8 @@ import kotlinx.serialization.json.put
 import java.net.URI
 
 // Port of reference/tube2upnp/src/resolver.js. Pure JVM (no android.*): the youtubedl-android adapter lives
-// in :app behind YtDlpGateway. [Resolver] is the uncached single resolve the Phase 1 measurements use (a memo
-// cache would hide the raw yt-dlp timings); [CachingResolver] below is the PLAY-01 resolver of the cast path
+// in :app behind YtDlpGateway. [Resolver] is the uncached single resolve the timing measurements use (a memo
+// cache would hide the raw yt-dlp timings); [CachingResolver] below is the resolver of the cast path
 // (cache until the signed URL expires, coalesced lookups, invalidate for the 403/410 retry).
 
 /** resolver.js VIDEO_ID. A YouTube video ID is exactly 11 characters of this alphabet. */
@@ -35,7 +35,7 @@ const val NODE_FORMAT = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/be
 
 private const val MAX_ECHO = 32
 
-/** Refuses anything that is not an 11-character ID before any yt-dlp process can start (threat T-01-10). */
+/** Refuses anything that is not an 11-character ID before any yt-dlp process can start (the ID is an argument to yt-dlp). */
 fun requireVideoId(id: String): String {
     require(VIDEO_ID.matches(id)) { "Refusing invalid video ID \"${id.take(MAX_ECHO)}\"" }
     return id
@@ -153,7 +153,7 @@ data class ResolvedInfo(
     /** Redacted yt-dlp progress lines from a verbose lookup (player download, client attempts, JS solving). */
     val steps: List<String> = emptyList(),
 ) {
-    /** Never prints the signed URL, the headers or [rawJson] (T-03-22): logs and events only see the descriptive fields. */
+    /** Never prints the signed URL, the headers or [rawJson]: logs and events only see the descriptive fields. */
     override fun toString(): String =
         "ResolvedInfo(title=$title, ext=$ext, mime=$mime, duration=$duration, formatId=$formatId)"
 }
@@ -246,7 +246,7 @@ private fun queryParam(url: String, name: String): String? {
 /** The googlevideo `expire` query parameter in epoch seconds, or null. */
 fun urlExpire(url: String): Long? = queryParam(url, "expire")?.toLongOrNull()?.takeIf { it != 0L }
 
-/** Host of a URL, or null when it does not parse. Evidence records this instead of the signed URL (T-01-12). */
+/** Host of a URL, or null when it does not parse. Evidence records this instead of the signed URL. */
 fun urlHost(url: String): String? = try {
     URI(url).host
 } catch (_: Exception) {
@@ -328,7 +328,7 @@ class Resolver(private val gateway: YtDlpGateway) {
 
         private val URL_WITH_PATH = Regex("(https?://[^/\\s|]+)[^\\s|]*")
 
-        /** Keeps the host of any URL in yt-dlp's error text, drops path and signed query (T-01-12). */
+        /** Keeps the host of any URL in yt-dlp's error text, drops path and signed query. */
         fun redactUrls(text: String): String = URL_WITH_PATH.replace(text, "$1/...")
 
         private const val MAX_STEPS = 25
@@ -336,7 +336,7 @@ class Resolver(private val gateway: YtDlpGateway) {
 
         /**
          * The lines of a verbose lookup that say what yt-dlp did: the `[youtube]` steps and the JS runtime/challenge
-         * lines. Video ids are dropped and URLs reduced to their host (T-01-12); nothing else from stderr is kept.
+         * lines. Video ids are dropped and URLs reduced to their host; nothing else from stderr is kept.
          */
         fun stepLines(result: GatewayResult, id: String): List<String> =
             result.stderrHead.lineSequence()
@@ -364,7 +364,7 @@ private const val MAX_CACHE_MS = 60L * 60 * 1000
 private const val EXPIRY_MARGIN_MS = 5L * 60 * 1000
 private const val MAX_CACHE_ENTRIES = 100
 
-/** How long one yt-dlp lookup may run before every caller waiting on it gets a ResolveException (WR-03). A normal one takes a few seconds. */
+/** How long one yt-dlp lookup may run before every caller waiting on it gets a ResolveException. A normal one takes a few seconds. */
 private const val LOOKUP_TIMEOUT_MS = 90_000L
 
 /**
@@ -389,16 +389,16 @@ interface VideoResolver {
 }
 
 /**
- * resolver.js `resolve`/`invalidate`: the ID is checked before anything else (threat T-02-13), a result is
+ * resolver.js `resolve`/`invalidate`: the ID is checked before anything else, a result is
  * cached until [urlExpiry] with at most 100 entries (oldest first), concurrent lookups for one ID share a single
  * yt-dlp run, and a failed lookup is never cached. The blocking [YtDlpGateway] runs on [Dispatchers.IO] in a
  * private scope, so one caller giving up does not cancel the lookup the others wait for.
  *
- * [onEvent] gets `{id, result: hit|miss|coalesced|fail, ms, urlHost, expire}` and never the URL itself (T-02-15).
- * [verbose] adds yt-dlp's `-v` to every lookup; it is the `ytdlpVerbose` config switch (the app passes it in plan 03-11).
+ * [onEvent] gets `{id, result: hit|miss|coalesced|fail, ms, urlHost, expire}` and never the URL itself.
+ * [verbose] adds yt-dlp's `-v` to every lookup; it is the `ytdlpVerbose` config switch (the app passes it from its config).
  *
  * A lookup has its own deadline, [lookupTimeoutMs]: when it fires the yt-dlp thread is interrupted and every caller that
- * shares the lookup gets a [ResolveException]; the in-flight entry is dropped on any completion (WR-03).
+ * shares the lookup gets a [ResolveException]; the in-flight entry is dropped on any completion.
  */
 class CachingResolver(
     private val gateway: YtDlpGateway,

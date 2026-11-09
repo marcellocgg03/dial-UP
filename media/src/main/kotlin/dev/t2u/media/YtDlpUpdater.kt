@@ -1,6 +1,6 @@
 package dev.t2u.media
 
-// Keeps yt-dlp current in the background (PLAY-02): the port of resolver.js scheduleYtdlpUpdates. Pure JVM, no android
+// Keeps yt-dlp current in the background: the port of resolver.js scheduleYtdlpUpdates. Pure JVM, no android
 // imports, so the schedule and the failure handling run in unit tests. GPL-3.0-only.
 
 import kotlinx.coroutines.CancellationException
@@ -102,7 +102,7 @@ data class YtDlpUpdateOutcome(
  * cancellation, and a throwing [onEvent] sink cannot end the loop. [channel] is read before every attempt, so an edited
  * config takes effect at the next one; a value outside [YTDLP_CHANNELS] (or a throw) means [YTDLP_DEFAULT_CHANNEL].
  *
- * The rule (UPD-02): no update of any kind runs while something is cast to ([casting]); no automatic one runs while a
+ * The rule: no update of any kind runs while something is cast to ([casting]); no automatic one runs while a
  * lookup or file build is in flight ([busy]) either, and there is no maximum wait: a postponed update is re-checked every
  * [busyWaitMs] until the way is clear. Automatic updates also follow the persisted [record]: none sooner than
  * [YTDLP_DUE_SLACK_MS] short of a day after a success and none sooner than [retryMs] after an attempt, so a restart or a
@@ -173,9 +173,9 @@ class YtDlpUpdater(
     }
 
     /**
-     * GUI-07: one update on the chosen channel because the author asked for it. It refuses with status
+     * One update on the chosen channel because the author asked for it. It refuses with status
      * [YTDLP_STATUS_CASTING], without touching the gateway or the record, while a renderer is being cast to; then with
-     * status BUSY while a lookup runs ([busy]) or a scheduled update holds [dueMutex] (T-07-19), so two updates never
+     * status BUSY while a lookup runs ([busy]) or a scheduled update holds [dueMutex], so two updates never
      * overlap. A successful one writes the record and moves the next scheduled run a full [intervalMs] away once [run]
      * has begun. The outcome (a refusal included) was also delivered to the event sink.
      */
@@ -238,7 +238,7 @@ class YtDlpUpdater(
         }
     }
 
-    /** GUI-07: the installed yt-dlp version, read on the updater's own dispatcher; null when it cannot be read. */
+    /** The installed yt-dlp version, read on the updater's own dispatcher; null when it cannot be read. */
     suspend fun version(): String? = withContext(dispatcher) {
         try {
             gateway.version()

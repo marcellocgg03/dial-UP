@@ -3,8 +3,8 @@ package dev.t2u.dial
 import java.net.InetAddress
 
 /**
- * Who may reach a DIAL receiver (SVC-09, decision D-01). [PHONE] is the default: only the phone's own
- * apps. [LAN] is the opt-in whole-network mode of Phase 1.
+ * Who may reach a DIAL receiver. [PHONE] is the default: only the phone's own
+ * apps. [LAN] is the opt-in whole-network mode, which the author must allow.
  */
 enum class DialAccessMode(val wire: String) {
     PHONE("phone"),

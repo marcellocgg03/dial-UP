@@ -10,7 +10,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
- * When yt-dlp was last updated and last tried, as wall-clock milliseconds (UPD-02). It is the one due criterion, so a
+ * When yt-dlp was last updated and last tried, as wall-clock milliseconds. It is the one due criterion, so a
  * service restart or a Wi-Fi flap cannot start an update storm. A timestamp is null when it never happened.
  */
 data class YtDlpRecord(val lastSuccessWallMs: Long? = null, val lastAttemptWallMs: Long? = null)

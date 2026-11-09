@@ -53,7 +53,7 @@ data class DialConfig(
     val appState: String = "running",
     /** Persisted pid for the run link and the launch LOCATION; null means a random pid per server. */
     val pid: String? = null,
-    /** Decides per request, from the remote address string, whether a call is served (SVC-09). */
+    /** Decides per request, from the remote address string, whether a call is served. */
     val accessPolicy: (String) -> Boolean = { true },
 )
 
@@ -80,7 +80,7 @@ class DialServer(
     /**
      * Called for POST /apps/YouTube with the app name and the capped body (pairing code included).
      * The returned pid becomes the LOCATION; null or empty sends no LOCATION; an exception answers 503.
-     * Null (the Phase 1 behaviour) answers with the server's own pid.
+     * Null (the original behaviour) answers with the server's own pid.
      */
     private val onLaunch: (suspend (appName: String, body: String) -> String?)?,
 ) {
@@ -108,7 +108,7 @@ class DialServer(
     /**
      * Binds and starts the engine. A port another listener still holds (the old bridge during a restart)
      * throws [BindException] to the caller and leaves this instance startable again; Ktor's accept job
-     * must never throw it on a thread whose uncaught handler ends the process (CR-01 b).
+     * must never throw it on a thread whose uncaught handler ends the process.
      */
     fun start() {
         check(server == null) { "already started" }
