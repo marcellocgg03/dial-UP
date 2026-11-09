@@ -7,6 +7,8 @@ package dev.t2u.renderer
 // wrong speaker. Each speaker therefore gets its own directory. node-persist (one file per key) is
 // replaced by one JSON object per speaker (plain JSON files, no database).
 
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -71,7 +73,7 @@ class RendererDataStore(
                 val values = loaded()
                 if (value == null) values.remove(key) else values[key] = value
                 val text = JsonObject(LinkedHashMap(values)).toString()
-                withContext(Dispatchers.IO) { writeAtomically(file, text) }
+                withContext(Dispatchers.IO) { writeTextAtomic(file, text, AtomicWriteOptions.RENDERER) }
             } catch (e: Exception) {
                 onError("DataStore set '$key' failed", e)
             }

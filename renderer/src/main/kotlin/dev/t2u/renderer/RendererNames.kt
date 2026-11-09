@@ -6,6 +6,8 @@ package dev.t2u.renderer
 // hidden.json and manual.json, as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen"}}. A user name replaces the whole shown
 // name (card and DIAL friendly name) exactly as typed, trimmed. Matching (hide, manual, ports, the name filter) never uses it.
 
+import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -153,7 +155,7 @@ class RendererNames(dataDir: File, private val warn: (String) -> Unit = {}) {
             try {
                 withContext(Dispatchers.IO) {
                     val json = JsonObject(current.mapValues { (_, name) -> JsonObject(mapOf("name" to JsonPrimitive(name))) })
-                    writeAtomically(file, prettyNamesJson.encodeToString(JsonObject.serializer(), json))
+                    writeTextAtomic(file, prettyNamesJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
                 }
             } catch (e: IOException) {
                 warn("Could not save $file: ${e.message}")

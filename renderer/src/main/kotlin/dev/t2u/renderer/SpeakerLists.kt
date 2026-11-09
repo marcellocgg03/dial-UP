@@ -7,8 +7,10 @@ package dev.t2u.renderer
 // kept only so the Hidden section can show something the author recognises while the speaker is not running.
 
 import dev.t2u.lounge.PlayerStatus
+import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.parseIpv4Literal
+import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -136,7 +138,7 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
                             e.udn to JsonObject(mapOf("name" to JsonPrimitive(e.name), "address" to JsonPrimitive(e.address)))
                         },
                     )
-                    writeAtomically(file, prettyHiddenJson.encodeToString(JsonObject.serializer(), json))
+                    writeTextAtomic(file, prettyHiddenJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
                 }
             } catch (e: IOException) {
                 warn("Could not save $file: ${e.message}")
@@ -279,7 +281,7 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
                             )
                         },
                     )
-                    writeAtomically(file, prettyManualJson.encodeToString(JsonObject.serializer(), json))
+                    writeTextAtomic(file, prettyManualJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
                 }
             } catch (e: IOException) {
                 warn("Could not save $file: ${e.message}")
