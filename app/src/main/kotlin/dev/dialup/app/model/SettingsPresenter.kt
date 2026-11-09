@@ -4,6 +4,7 @@ package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
 import dev.dialup.app.DEFAULT_THEME
+import dev.dialup.app.Failures
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
@@ -330,7 +331,8 @@ class SettingsPresenter(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Failures.report("settings:auto-restart", e)
                 // nothing is applied; the author's own restart card still works
             }
         }

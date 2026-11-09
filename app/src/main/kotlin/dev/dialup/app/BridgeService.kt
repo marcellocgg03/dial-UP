@@ -170,7 +170,8 @@ class BridgeService : Service(), SpikeHost {
             }
             dir.delete() // only succeeds when empty
             if (removed > 0) evidence.event("legacy-log-removed", mapOf("count" to removed))
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            Failures.report("legacy-log-cleanup", t)
         }
     }
 
