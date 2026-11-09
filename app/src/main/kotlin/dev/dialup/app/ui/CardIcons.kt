@@ -9,7 +9,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 
 // The transport glyphs that material-icons-core does not carry (Pause, Stop, SkipPrevious, SkipNext), drawn from the standard
-// Material 24dp outlines so the card needs no material-icons-extended dependency (~30 MB of icons, plan 07-08).
+// Material 24dp outlines so the card needs no material-icons-extended dependency (~30 MB of icons).
 
 private fun glyph(name: String, path: String): ImageVector = materialIcon(name) {
     addPath(PathParser().parsePathString(path).toNodes(), fill = SolidColor(Color.Black))
