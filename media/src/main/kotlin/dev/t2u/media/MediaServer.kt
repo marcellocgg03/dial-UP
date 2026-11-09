@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicReference
 sealed interface StreamSource {
     /**
      * A complete file: HEAD, GET and Range with a Content-Length. [rebuild] builds the file again when it has vanished
-     * since registration (evicted, or reclaimed by Android; D-03) and returns the finished file; null for a plain file,
+     * since registration (evicted, or reclaimed by Android) and returns the finished file; null for a plain file,
      * which then answers 404 when it is gone.
      */
     data class FileSource(val file: File, val rebuild: (suspend () -> File)? = null) : StreamSource
@@ -114,8 +114,8 @@ interface MediaRegistrar {
 
     /**
      * The renderer no longer needs the stream at [path] (a newer track replaced it, or the speaker was stopped or cleared):
-     * whatever the server holds for it in memory can go (plan 03-20). The token itself stays registered, so a speaker that
-     * still asks for it is served. A file stream's file can be evicted by the cache from now on (D-04: the playing and the
+     * whatever the server holds for it in memory can go. The token itself stays registered, so a speaker that
+     * still asks for it is served. A file stream's file can be evicted by the cache from now on (the playing and the
      * prefetched file are pinned from [registerVideo] until this call). The default does nothing, so stubs that implement
      * only [registerVideo] keep compiling.
      */
@@ -171,25 +171,25 @@ data class MediaRequest(
     val note: String? = null,
     /**
      * What the direct proxy asked upstream for this request, as text with milliseconds to the first byte and to the end of
-     * each call and no URL (plan 03-20), or `window hit` when the answer came from memory; null for every other source.
+     * each call and no URL, or `window hit` when the answer came from memory; null for every other source.
      */
     val upstream: String? = null,
 )
 
 /**
- * Token media server, a port of reference/tube2upnp/src/mediaServer.js for the Phase 1 audio-path proof.
+ * Token media server, a port of reference/tube2upnp/src/mediaServer.js.
  *
  * Only `GET` and `HEAD` on `/stream/<32 lowercase hex>.<ext>` for a registered token are served; every other
  * path, method or token answers 404 (Node parity, and there is no route that takes a URL or a path, which
- * keeps the server from becoming an open proxy, threat T-01-14). Body lengths are set only through the
+ * keeps the server from becoming an open proxy). Body lengths are set only through the
  * OutgoingContent content length: a Content-Length header written by hand is duplicated by Ktor CIO.
  *
- * [mp3Bitrate] and [ffmpegLogLevel] are the `mp3Bitrate` and `ffmpegLogLevel` config switches (plan 03-10): the caller
+ * [mp3Bitrate] and [ffmpegLogLevel] are the `mp3Bitrate` and `ffmpegLogLevel` config switches: the caller
  * passes values that already passed `Config.validate`, so only a whitelisted name or a `NNNk` shape reaches ffmpeg.
  *
  * [bufferDir] is where HTTP/1.0 clients get ffmpeg output buffered first (they cannot parse chunked framing).
  *
- * Ranged GETs on video pipe tokens (plan 02-16, G4): the first response is always the live chunked stream, with no
+ * Ranged GETs on video pipe tokens: the first response is always the live chunked stream, with no
  * length and no Accept-Ranges. While it streams, the bytes are also kept in a bounded file under
  * `bufferDir/range-cache` ([PipeRangeCache], limits in [pipeRanges]); once the run has ended cleanly, a `Range`
  * request on that token is answered 206 with the true total from those bytes, without a new ffmpeg run. A
@@ -218,34 +218,34 @@ class MediaServer(
 
     private var server: EmbeddedServer<*, *>? = null
 
-    /** True while an engine is bound and accepting; false before [start], after [stop] and after a [rebindHost] whose bind failed (WR-05). */
+    /** True while an engine is bound and accepting; false before [start], after [stop] and after a [rebindHost] whose bind failed. */
     @Volatile private var listening = false
 
     @Volatile private var boundPort: Int = port
     private val tokens = LinkedHashMap<String, StreamEntry>()
     private val random = SecureRandom()
 
-    /** Token to the release of the cache pin a file token holds from registration (D-04). Each release is one-shot. */
+    /** Token to the release of the cache pin a file token holds from registration. Each release is one-shot. */
     private val tokenPins = ConcurrentHashMap<String, () -> Unit>()
 
-    /** Windows read ahead for `direct` tokens (plan 03-20); bounded by [READ_AHEAD_TOTAL_BYTES]. */
+    /** Windows read ahead for `direct` tokens; bounded by [READ_AHEAD_TOTAL_BYTES]. */
     private val readAhead = ReadAheadStore(READ_AHEAD_TOTAL_BYTES)
     private val scans = ConcurrentHashMap<String, DirectScan>()
 
-    /** Finished runs of video pipe tokens, for ranged GETs (plan 02-16); null when disabled or without a [bufferDir]. */
+    /** Finished runs of video pipe tokens, for ranged GETs; null when disabled or without a [bufferDir]. */
     private val rangeCache: PipeRangeCache? =
         if (pipeRanges.enabled && bufferDir != null) PipeRangeCache(File(bufferDir, "range-cache"), pipeRanges) else null
 
     fun start() {
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
-        files?.start() // keeps the finished files of an earlier run, drops half-written ones (D-12)
+        files?.start() // keeps the finished files of an earlier run, drops half-written ones
         startEngine(host, port)
     }
 
     /**
-     * Binds and starts the engine for [start] and [rebindHost]. A busy address throws [BindException] to the caller
-     * (CR-01 b): Ktor CIO binds inside its accept job, where a failure is uncaught and ends the process, so the address
+     * Binds and starts the engine for [start] and [rebindHost]. A busy address throws [BindException] to the caller:
+     * Ktor CIO binds inside its accept job, where a failure is uncaught and ends the process, so the address
      * is probed first (reuseAddress, as for the real bind: a restart must not hit EADDRINUSE from TIME_WAIT) and the
      * engine gets a supervisor that records a failure that slips past the probe. A failed call leaves [server] untouched.
      */
@@ -290,7 +290,7 @@ class MediaServer(
     }
 
     /**
-     * Moves the listener to [newHost] on the port it already has (plan 05-07, SVC-04). Only the HTTP engine is restarted:
+     * Moves the listener to [newHost] on the port it already has. Only the HTTP engine is restarted:
      * the registered tokens, the pins on cached files, the range cache and the file builder are kept, so a stream URL a
      * speaker was given before the move still answers after it. [stop] is never used to rebind, because it clears the range
      * cache, releases every pin and closes the file builder, which would 404 the track that is playing. A bind failure
@@ -318,7 +318,7 @@ class MediaServer(
     /** Only says the server object was started and not stopped. After a failed [rebindHost] it stays true; [isListening] is the truth about the socket. */
     fun isRunning(): Boolean = server != null
 
-    /** True while the socket is bound and accepting. A housekeeping pass rebinds a running server that is not listening (WR-05). */
+    /** True while the socket is bound and accepting. A housekeeping pass rebinds a running server that is not listening. */
     fun isListening(): Boolean = listening
 
     /** Node `clearCache`: deletes every cached built and source file and returns how many went. */
@@ -357,7 +357,7 @@ class MediaServer(
         evicted.forEach {
             rangeCache?.drop(it) // a token that left the table takes its cached bytes with it
             dropReadAhead(it, forget = true)
-            releaseTokenPin(it) // and its file may be evicted from the cache again (D-04)
+            releaseTokenPin(it) // and its file may be evicted from the cache again
         }
         return "/stream/$token.$ext"
     }
@@ -426,9 +426,9 @@ class MediaServer(
     }
 
     /**
-     * A file format: [prepare] normally built the file already, but a missing file does not fail the registration (D-14):
+     * A file format: [prepare] normally built the file already, but a missing file does not fail the registration:
      * the token is registered with a rebuild path and the first request builds it. The token pins the file's name in the
-     * cache until [release], token eviction or [stop] (D-04), so the playing and the prefetched file are never evicted.
+     * cache until [release], token eviction or [stop], so the playing and the prefetched file are never evicted.
      */
     private fun registerFile(entry: VideoEntry): String {
         require(entry.startAt >= 0) { "startAt must not be negative" }
@@ -561,7 +561,7 @@ class MediaServer(
         pipeMode: String,
         rebuild: (suspend () -> File)? = null,
     ) {
-        // Pinned while the response is written, so eviction and clearCache skip it (D-04, Node `#serveFile` pin).
+        // Pinned while the response is written, so eviction and clearCache skip it (Node `#serveFile` pin).
         // Only files in the builder's directory are pinned; a HEAD answer releases at once. A rebuilt file has the same
         // name as the vanished one, so this pin covers it too.
         val unpin = files?.pin(file)
@@ -591,9 +591,9 @@ class MediaServer(
                 call.respond(HttpStatusCode.NotFound)
                 return
             }
-            // D-03: evicted or reclaimed by Android since registration. Build it again (downloading the source again if
+            // Evicted or reclaimed by Android since registration. Build it again (downloading the source again if
             // that is gone too) and serve it; the sender sees nothing. A failure answers 502 with a fixed note: no
-            // exception text, which could carry a URL (T-04-08). FileBuilder coalesces per key and the wait is bounded (T-04-07).
+            // exception text, which could carry a URL. FileBuilder coalesces per key and the wait is bounded.
             val rebuilt = try {
                 withTimeoutOrNull(prepareTimeoutMs) { rebuild() }
             } catch (e: CancellationException) {
@@ -670,10 +670,10 @@ class MediaServer(
 
     /**
      * mediaServer.js `#proxy`: the speaker's request is answered from YouTube's own audio URL. The URL comes only
-     * from the resolver, never from the request (no open proxy, T-03-06), and the fetcher decides which hosts it
-     * will talk to (T-03-05). The upstream URL is never logged or returned.
+     * from the resolver, never from the request (no open proxy), and the fetcher decides which hosts it
+     * will talk to. The upstream URL is never logged or returned.
      *
-     * Read-ahead (plan 03-20): from the second small bounded Range of a token (at most [READ_AHEAD_SCAN_MAX_BYTES]) the
+     * Read-ahead: from the second small bounded Range of a token (at most [READ_AHEAD_SCAN_MAX_BYTES]) the
      * answer comes from a window of [READ_AHEAD_WINDOW_BYTES] fetched from upstream starting at the requested offset, so
      * the Lamp's post-seek scan of 6144-byte ranges costs one upstream call per window instead of one per range. The bytes
      * a speaker receives are those upstream returns for its Range. Anything unexpected falls back to the request-per-request path.
@@ -724,7 +724,7 @@ class MediaServer(
             var retried = false
             while (true) {
                 val info = r.resolve(id)
-                // The speaker's Range is the only thing of its request that goes upstream (T-03-06).
+                // The speaker's Range is the only thing of its request that goes upstream.
                 val headers = LinkedHashMap<String, String>(info.headers)
                 headers["Accept-Encoding"] = "identity"
                 if (range != null) headers["Range"] = range
@@ -825,7 +825,7 @@ class MediaServer(
      * One upstream request for [READ_AHEAD_WINDOW_BYTES] bytes from [start]. The window is installed only when upstream
      * answered 206 with a Content-Range that starts at [start], a known total and exactly the bytes it names; a 200 (Range
      * ignored) or anything else turns read-ahead off for the token and returns null. A 403 or 410 drops the token's windows
-     * before the one re-resolve (T-03-53). Only a Range goes upstream besides the resolver's headers (T-03-06).
+     * before the one re-resolve. Only a Range goes upstream besides the resolver's headers.
      */
     private suspend fun fetchWindow(
         id: String,
@@ -1010,7 +1010,7 @@ class MediaServer(
         is StreamSource.FileSource, is StreamSource.DirectProxy -> null
     }
 
-    /** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host (threat T-02-15). */
+    /** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host. */
     private fun failureLine(name: String, detail: String, prefixed: Boolean): String {
         val text = Resolver.redactUrls(detail).take(MAX_NOTE)
         return if (prefixed) "$name: $text" else text
@@ -1032,7 +1032,7 @@ class MediaServer(
             dlnaHeaders(call, entry)
             // No length is known, so the answer is chunked, and CIO writes the terminator (0 CRLF CRLF) after the headers
             // even though a HEAD answer has no body. On a kept-alive connection a client reads those bytes as the start
-            // of its next response (JDK client: Invalid status line "0", plan 03-27). CIO cannot send this answer without
+            // of its next response (JDK client: Invalid status line "0"). CIO cannot send this answer without
             // them (NoContent adds Content-Length: 0, which would say the track is empty; Transfer-Encoding is an
             // engine-only header), so the answer ends its connection and the client opens a new one for its GET.
             call.response.header(HttpHeaders.Connection, "close")
@@ -1059,7 +1059,7 @@ class MediaServer(
             call.respond(HttpStatusCode.NotImplemented)
             return
         }
-        // HTTP/1.0 clients cannot parse chunked framing and Ktor CIO answers them chunked (Pitfall 6):
+        // HTTP/1.0 clients cannot parse chunked framing and Ktor CIO answers them chunked:
         // give them a complete, length-delimited body instead.
         val dir = bufferDir
         if (call.request.httpVersion == "HTTP/1.0" && dir != null) {
@@ -1067,7 +1067,7 @@ class MediaServer(
             return
         }
 
-        // Plan 02-16 (G4): a ranged GET on a video token whose first run completed is answered from that run's bytes,
+        // A ranged GET on a video token whose first run completed is answered from that run's bytes,
         // before anything is resolved or launched. A header parseRange rejects falls through to the live path.
         val cache = if (src is StreamSource.VideoPipe) rangeCache else null
         val rangeHeader = call.request.headers[HttpHeaders.Range]
@@ -1193,8 +1193,8 @@ class MediaServer(
     /**
      * Runs the attempt ladder once with ffmpeg writing straight into a part file and registers the result, or
      * returns null so the caller falls back to the live path (which then produces the usual 200 or 502). Bounded
-     * three ways (threat T-02-56, T-02-57): the file may not pass the per-token cap (the token is then remembered as
-     * too big), the whole fill may not pass [PipeRangeConfig.coldFillTimeoutMs], and a cancelled request kills it.
+     * three ways (a cold fill must not exhaust disk, time or part files): the file may not pass the per-token cap
+     * (the token is then remembered as too big), the whole fill may not pass [PipeRangeConfig.coldFillTimeoutMs], and a cancelled request kills it.
      * The cache also limits how many part files exist at once, so a fill may be refused outright.
      *
      * Only formats whose file output is byte-identical to their pipe output may be filled ([COLD_FILL_FORMATS]);

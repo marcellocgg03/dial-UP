@@ -3,14 +3,14 @@ package dev.t2u.media
 // GPL-3.0-only. Port of the cache half of reference/tube2upnp/src/mediaServer.js (#pruneCache, #reuse, #pin,
 // cacheInfo): one size cap over the built files and the downloaded sources, least-recently-used eviction by file
 // modification time, pins for files in use. Pure JVM; the directory belongs to the file builder and nothing outside
-// it is ever touched (T-04-01).
+// it is ever touched.
 
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-/** Default cache cap in MB (D-02). Node's default is 512; a phone has less room. */
+/** Default cache cap in MB. Node's default is 512; a phone has less room. */
 const val DEFAULT_CACHE_MB = 256
 
 /** [DEFAULT_CACHE_MB] in bytes. */
@@ -198,10 +198,10 @@ class FileCache(
 
     /**
      * Deletes the least-recently-used cache files, oldest modification time first (ties by name), until the total
-     * fits the limit read now. Never chosen: names in [keep] (the file just built and its source, D-04: they
+     * fits the limit read now. Never chosen: names in [keep] (the file just built and its source: they
      * survive even when they alone exceed the cap) and pinned names.
      *
-     * Pairing (D-01): when a built file goes and no other built file of its video remains, the video's `.source`
+     * Pairing: when a built file goes and no other built file of its video remains, the video's `.source`
      * goes in the same step, unless [busy] says a build or download of that video is running, or the source is
      * kept or pinned. A source whose video still has a built file, or is busy, is skipped at its turn; an orphan
      * source is an ordinary LRU entry. Returns the number of files deleted.
@@ -321,10 +321,10 @@ class FileCache(
     }
 
     /**
-     * The start scan (D-12, Node `start`): the whole directory belongs to the builder, so every regular file that is
+     * The start scan (Node `start`): the whole directory belongs to the builder, so every regular file that is
      * not a finished non-empty cache file goes (`.part`, `.source.download`, `.info.json`, yt-dlp leftovers such as
      * `.ytdl` and `.part-Frag`, empty files, anything foreign); the rest is kept, then pruned to the current cap.
-     * Creates the directory when missing. Only names listed from [dir] are ever deleted (T-04-01).
+     * Creates the directory when missing. Only names listed from [dir] are ever deleted.
      */
     fun scan(): CacheInfo {
         dir.mkdirs()
