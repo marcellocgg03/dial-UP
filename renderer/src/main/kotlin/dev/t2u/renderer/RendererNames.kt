@@ -7,6 +7,7 @@ package dev.t2u.renderer
 // name (card and DIAL friendly name) exactly as typed, trimmed. Matching (hide, manual, ports, the name filter) never uses it.
 
 import dev.t2u.upnp.AtomicWriteOptions
+import dev.t2u.upnp.stringOrNull
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +17,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
@@ -76,7 +76,7 @@ class RendererNames(dataDir: File, private val warn: (String) -> Unit = {}) {
             val data = Json.parseToJsonElement(file.readText())
             if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
             for ((udn, value) in data) {
-                val name = stringField(value, "name")?.let { cleanRendererName(it) }
+                val name = (value as? JsonObject)?.stringOrNull("name")?.let { cleanRendererName(it) }
                 when {
                     name == null -> warn("Ignoring entry '$udn' in $file: it needs a usable string name")
                     loaded.size >= MAX_NAMES -> warn("Ignoring entry '$udn' in $file: more than $MAX_NAMES named renderers")
@@ -134,11 +134,6 @@ class RendererNames(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
         if (removed) persist()
         return removed
-    }
-
-    private fun stringField(entry: JsonElement, key: String): String? {
-        val field = (entry as? JsonObject)?.get(key) as? JsonPrimitive ?: return null
-        return if (field.isString) field.content else null
     }
 
     /** Call with [lock] held. */

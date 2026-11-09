@@ -9,6 +9,8 @@ package dev.t2u.lounge
 
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.NoEvents
+import dev.t2u.upnp.objectOrNull
+import dev.t2u.upnp.stringOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
@@ -271,31 +273,27 @@ class InnerTubePlaylistRequestHandler(
 
         /** The first existing watchEndpoint object among the key [paths]; a path ends at the object holding "watchEndpoint". */
         private fun JsonObject.watchEndpoint(vararg paths: List<String>): JsonObject? =
-            paths.firstNotNullOfOrNull { p -> path(*p.toTypedArray())?.obj("watchEndpoint") }
+            paths.firstNotNullOfOrNull { p -> path(*p.toTypedArray())?.objectOrNull("watchEndpoint") }
 
         private fun JsonObject.path(vararg keys: String): JsonObject? =
-            keys.fold(this as JsonObject?) { o, k -> o?.obj(k) }
+            keys.fold(this as JsonObject?) { o, k -> o?.objectOrNull(k) }
 
         private fun toVideo(watch: JsonObject?, target: Video): Video? {
             watch ?: return null
-            val id = watch.str("videoId")?.takeIf { VIDEO_ID.matches(it) } ?: return null
+            val id = watch.stringOrNull("videoId")?.takeIf { VIDEO_ID.matches(it) } ?: return null
             val ctt = watch.path("watchEndpointSupportedAuthorizationTokenConfig", "videoAuthorizationToken")
                 ?.get("credentialTransferTokens").let { it as? JsonArray }
-                ?.firstOrNull().let { it as? JsonObject }?.str("token")
+                ?.firstOrNull().let { it as? JsonObject }?.stringOrNull("token")
             return Video(
                 id = id,
                 client = target.client,
                 context = VideoContext(
-                    playlistId = watch.str("playlistId"),
+                    playlistId = watch.stringOrNull("playlistId"),
                     index = (watch["index"] as? JsonPrimitive)?.content?.toIntOrNull(),
                     ctt = ctt,
-                    params = watch.str("params"),
+                    params = watch.stringOrNull("params"),
                 ),
             )
         }
-
-        private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
-
-        private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     }
 }
