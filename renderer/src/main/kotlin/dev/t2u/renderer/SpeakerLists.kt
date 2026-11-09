@@ -2,7 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
-// GUI-03 (plan 07-11, D-08): the speakers the author hid from the cast menus. The set lives in <dataDir>/hidden.json next to
+// The speakers the author hid from the cast menus. The set lives in <dataDir>/hidden.json next to
 // ports.json, as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen", "address": "192.168.1.20"}}. The name and address are
 // kept only so the Hidden section can show something the author recognises while the speaker is not running.
 
@@ -27,7 +27,7 @@ import java.io.IOException
 
 private val prettyHiddenJson = Json { prettyPrint = true }
 
-/** T-07-27: the hidden set never holds more than this many speakers (a damaged or runaway file cannot grow it). */
+/** The hidden set never holds more than this many speakers (a damaged or runaway file cannot grow it). */
 const val MAX_HIDDEN = 128
 
 /** A speaker the author hid: its UDN and what it was called and where it was when it was hidden. */
@@ -145,10 +145,10 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
 
 private val prettyManualJson = Json { prettyPrint = true }
 
-/** T-07-31: the manual list never holds more than this many speakers (a damaged or runaway file cannot grow it). */
+/** The manual list never holds more than this many speakers (a damaged or runaway file cannot grow it). */
 const val MAX_MANUAL = 32
 
-/** GUI-04 (plan 07-13, D-06): a speaker the author added by typing its IPv4 address, kept so it is probed at every start. */
+/** A speaker the author added by typing its IPv4 address, kept so it is probed at every start. */
 data class ManualSpeaker(val ip: String, val udn: String, val name: String, val location: String)
 
 /**
@@ -232,7 +232,7 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         return true
     }
 
-    /** T-07-31: the address is re-checked here, so a damaged file or a careless caller cannot save an aim at a public address. */
+    /** The address is re-checked here, so a damaged file or a careless caller cannot save an aim at a public address. */
     private fun validAddress(ip: String): Boolean {
         val parsed = parseIpv4Literal(ip) ?: return false
         return isPrivateLanAddress(parsed)
@@ -282,9 +282,9 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
 }
 
 /**
- * The greyed card of every saved renderer whose UDN is not in [hidden], in the saved order (GUI-04, D-07, PD-3): idle, no track,
+ * The greyed card of every saved renderer whose UDN is not in [hidden], in the saved order: idle, no track,
  * no navigation, not online, marked manual. A hidden saved renderer stays in manual.json but is not listed: a hidden one must
- * not come back as a greyed card, with the bridge on or off. A user name in [names] (by UDN, quick 261101-dcg) replaces the saved name on the card.
+ * not come back as a greyed card, with the bridge on or off. A user name in [names] (by UDN) replaces the saved name on the card.
  */
 fun savedSpeakerCards(saved: List<ManualSpeaker>, hidden: Set<String>, names: Map<String, String> = emptyMap()): List<SpeakerUi> =
     saved.filter { it.udn !in hidden }.map { entry ->

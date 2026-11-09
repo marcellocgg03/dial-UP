@@ -2,8 +2,8 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
-// GUI-04 (plan 07-12, D-06): adding a speaker by the IPv4 address the author types. Two layers keep the typed text from
-// aiming the app at anything but a device on the home network (T-07-29): [parseManualIp] for the text, and
+// Adding a speaker by the IPv4 address the author types. Two layers keep the typed text from
+// aiming the app at anything but a device on the home network: [parseManualIp] for the text, and
 // [manualTargetAllowed] inside Bridge.addManual, so no caller can make the bridge send to a public address.
 
 import dev.t2u.upnp.isPrivateLanAddress
@@ -15,23 +15,23 @@ import java.net.URI
 /** The UDP port a speaker listens on for SSDP searches. */
 const val MANUAL_SSDP_PORT = 1900
 
-/** GUI-04, D-07: how often the bridge asks every saved manual speaker again (prune alone takes 45 minutes). */
+/** How often the bridge asks every saved manual speaker again (prune alone takes 45 minutes). */
 const val MANUAL_PROBE_INTERVAL_MS = 60_000L
 
 /** How long an add waits for the speaker to answer the probe and its description to load. */
 const val MANUAL_ANSWER_TIMEOUT_MS = 5_000L
 
-/** Plan 07-17: how long an add waits for an answer to the unicast search before it asks for the HTTP description instead. */
+/** How long an add waits for an answer to the unicast search before it asks for the HTTP description instead. */
 const val MANUAL_SSDP_GRACE_MS = 1_500L
 
-/** Plan 07-17: the HTTP port a Sonos speaker serves its UPnP description on. */
+/** The HTTP port a Sonos speaker serves its UPnP description on. */
 const val MANUAL_DESCRIPTION_PORT = 1400
 
-/** Plan 07-17: where a Sonos speaker at [host] serves its device description; [host] is the typed IPv4 literal. */
+/** Where a Sonos speaker at [host] serves its device description; [host] is the typed IPv4 literal. */
 fun sonosDescriptionUrl(host: String): String = "http://$host:$MANUAL_DESCRIPTION_PORT/xml/device_description.xml"
 
 /**
- * Plan 07-17, T-07-45: whether the fallback may request [url] for the typed address [ip]. Only a plain http URL whose host is
+ * Whether the fallback may request [url] for the typed address [ip]. Only a plain http URL whose host is
  * exactly the typed literal, with no user-info and a real port, passes. The text is parsed with [URI], which never resolves a name.
  */
 fun descriptionUrlAllowed(url: String, ip: InetAddress): Boolean {
@@ -62,7 +62,7 @@ fun parseManualIp(text: String): Inet4Address? {
 fun manualTargetAllowed(ip: InetAddress): Boolean =
     ip is Inet4Address && !ip.isMulticastAddress && !ip.isAnyLocalAddress && isPrivateLanAddress(ip)
 
-/** What an add by address came to. Nothing is saved in any case except by plan 07-13, and only for Added or AlreadyListed. */
+/** What an add by address came to. Nothing is saved except by [ManualSpeakers], and only for Added or AlreadyListed. */
 sealed interface ManualAddResult {
     /** The speaker answered and now has a card. */
     data class Added(val udn: String, val name: String) : ManualAddResult
@@ -87,7 +87,7 @@ sealed interface ManualAddResult {
 enum class ManualVerdict { ONLINE, MISSED, OFFLINE }
 
 /**
- * GUI-04, D-07: the missed-probe counter of one saved manual speaker (one instance per saved UDN). A round in which the speaker
+ * The missed-probe counter of one saved manual speaker (one instance per saved UDN). A round in which the speaker
  * replied is [ManualVerdict.ONLINE] and resets the count; [offlineAfter] rounds in a row without a reply make it
  * [ManualVerdict.OFFLINE], and it stays OFFLINE until a reply. Pure: no clock and no network.
  */

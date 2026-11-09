@@ -24,13 +24,13 @@ import kotlinx.serialization.json.put
 const val LEARNED_FORMAT_KEY = "tube2upnp.format.v2"
 
 /**
- * The per-speaker store key that remembers whether the speaker takes SetNextAVTransportURI (plan 04-06, D-08). Kotlin original:
+ * The per-speaker store key that remembers whether the speaker takes SetNextAVTransportURI. Kotlin original:
  * Node keeps `#gaplessSupported` in memory only, so every restart costs a failing call per speaker. The value is
  * `{"supported": <bool>, "model": "<manufacturer>|<modelName>|<modelNumber>", "at": <epoch ms>}`.
  */
 const val LEARNED_GAPLESS_KEY = "tube2upnp.gapless"
 
-/** A stored "no" is trusted this long (7 days); after that the speaker is asked once more, since a firmware update can add support (D-13). */
+/** A stored "no" is trusted this long (7 days); after that the speaker is asked once more, since a firmware update can add support. */
 const val GAPLESS_REPROBE_MS = 7L * 24 * 60 * 60 * 1000
 
 /** The identity a stored answer belongs to: the three description fields joined with `|`. */
@@ -44,13 +44,13 @@ fun gaplessMemory(supported: Boolean, model: String, now: Long): JsonObject = bu
     put("at", now)
 }
 
-/** The model a stored value was written for, or null when [stored] is not an object with a string `model` (T-04-17). */
+/** The model a stored value was written for, or null when [stored] is not an object with a string `model`. */
 fun gaplessMemoryModel(stored: JsonElement?): String? =
     ((stored as? JsonObject)?.get("model") as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /**
- * What a stored value says about gapless support, or null for "unknown": anything of the wrong shape (T-03-19 discipline, T-04-17),
- * a value written for another [model], and a stored false older than [GAPLESS_REPROBE_MS] (D-13: asked again once). A stored true
+ * What a stored value says about gapless support, or null for "unknown": anything of the wrong shape,
+ * a value written for another [model], and a stored false older than [GAPLESS_REPROBE_MS] (asked again once). A stored true
  * is trusted whatever its age; a contradiction removes or flips it (see the renderer).
  */
 fun readGaplessMemory(stored: JsonElement?, model: String, now: Long): Boolean? {
@@ -84,7 +84,7 @@ fun streamingFormat(sourceMime: String): String =
 /**
  * The format for the next start: a forced [mode] (anything but "auto") wins; in auto mode the [learned]
  * format when it is a chain member, else the first chain entry the speaker accepts. A stored value outside
- * the chain is ignored (T-03-19).
+ * the chain is ignored.
  */
 fun chooseFormat(mode: String, learned: String?, protocols: List<SinkProtocol>?, sourceMime: String): String {
     if (mode == "streaming") return streamingFormat(sourceMime)
