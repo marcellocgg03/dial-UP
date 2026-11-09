@@ -1,4 +1,4 @@
-// Owner: Plan 01-06 (ffmpeg pipes and the Ktor media server).
+// Owner: the ffmpeg pipes and the Ktor media server measurements.
 package dev.dialup.app
 
 import dev.t2u.media.MediaRequest
@@ -20,9 +20,9 @@ import java.io.File
 import java.net.URI
 
 /**
- * SPK-05 instrument: the Ktor media server and the youtubedl-android ffmpeg on the phone.
+ * Instrument for the Ktor media server and the youtubedl-android ffmpeg on the phone.
  *
- * Commands are adb-triggered (D-02); each long job replies `{"started":true}` at once and writes its result
+ * Commands are adb-triggered; each long job replies `{"started":true}` at once and writes its result
  * (`files/evidence/media-tokens-<input>.json`) when done, which `tools/spike.sh pull` copies and
  * `tools/media-check.sh` / `tools/sonos-play.sh` consume.
  *
@@ -90,7 +90,7 @@ class MediaFeature : SpikeFeature {
         h.evidence.event("cmd-done", mapOf("cmd" to "media-start", "base" to base(srv), "tokens" to 1))
     }
 
-    /** Generates the 30 s 440 Hz tone on the phone with its own ffmpeg (SPK-05 input 1). Reuses an earlier file. */
+    /** Generates the 30 s 440 Hz tone on the phone with its own ffmpeg (input 1). Reuses an earlier file. */
     private fun ensureSine(h: SpikeHost): File {
         val dir = File(h.spikeDir, "media").also { it.mkdirs() }
         val sine = File(dir, "sine.m4a")
@@ -194,7 +194,7 @@ class MediaFeature : SpikeFeature {
         if (path.isNullOrEmpty()) return fail("no download yet")
         val file = File(path)
         if (!file.isFile) return fail("no download yet")
-        // The path must canonicalise under app storage (threat T-01-15).
+        // The path must canonicalise under app storage, so a command cannot serve an arbitrary file.
         val canonical = file.canonicalFile.toPath()
         val roots = listOf(h.context.filesDir, h.context.cacheDir).map { it.canonicalFile.toPath() }
         if (roots.none { canonical.startsWith(it) }) return fail("path outside app storage")
@@ -230,7 +230,7 @@ class MediaFeature : SpikeFeature {
     /**
      * Registers every way of serving [pipe] (inputs 1-3 reported separately):
      * a direct file token when the source is an m4a, pipe tokens for ADTS (offered as three MIME types, since the
-     * Sonos sink list has no AAC type, Pitfall 7) and MP3, and file-backed ADTS and MP3 tokens (complete file
+     * Sonos sink list has no AAC type) and MP3, and file-backed ADTS and MP3 tokens (complete file
      * first, Content-Length and Range) so a renderer that needs them can be tested whatever its HTTP version.
      */
     private fun runPipeTest(h: SpikeHost, input: String, pipe: PipeInput?) {
@@ -278,7 +278,7 @@ class MediaFeature : SpikeFeature {
         val json = buildJsonObject {
             put("base", base(srv))
             put("input", input)
-            // URL inputs are recorded by host only: the signed URL stays in files/spike (threat T-01-12)
+            // URL inputs are recorded by host only: the signed URL stays in files/spike, never in the evidence log
             if (source != null) put("source", source)
             put(
                 "tokens",

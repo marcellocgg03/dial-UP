@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
- * adb command channel (decision D-02). Exported, but the manifest guards it with
- * android.permission.DUMP, which only the adb shell holds (threat T-01-01); `am broadcast` is
+ * adb command channel. Exported, but the manifest guards it with
+ * android.permission.DUMP, which only the adb shell holds, so no other app can send a command; `am broadcast` is
  * ordered, so the reply travels back as the broadcast's result data.
  *
  * Built-in commands: ping, dump-state, stop, payloads, dial-access. Anything else goes to the feature whose
@@ -74,7 +74,7 @@ class CommandReceiver : BroadcastReceiver() {
             "ping" -> CommandReply(true, """{"ok":true}""")
             "dump-state" -> CommandReply(true, service.currentState().toString())
             "stop" -> {
-                // the author's own stop from adb: persist off like the notification Stop (D-04)
+                // the author's own stop from adb: persist off like the notification Stop
                 AppSettings.of(context).update { it.copy(bridgeEnabled = false) }
                 service.evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "adb"))
                 service.stopSelf()
@@ -101,7 +101,7 @@ class CommandReceiver : BroadcastReceiver() {
         }
     }
 
-    /** `dial-access [mode=phone|lan]` (D-02): sets or reports who may reach the DIAL receivers. */
+    /** `dial-access [mode=phone|lan]`: sets or reports who may reach the DIAL receivers. */
     private fun dialAccess(context: Context, service: BridgeService, args: Map<String, String>): CommandReply {
         val settings = AppSettings.of(context)
         val raw = args["mode"] ?: return CommandReply(true, accessJson(settings.dialAccess.value))

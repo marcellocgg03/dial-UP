@@ -1,4 +1,4 @@
-// Owner: Plan 01-05 (yt-dlp resolver measurements).
+// Owner: the yt-dlp resolver measurements.
 package dev.dialup.app
 
 import android.os.SystemClock
@@ -23,16 +23,16 @@ import java.io.File
 import java.time.Instant
 
 /**
- * SPK-04 instrument: runs the bundled yt-dlp on the phone through [AndroidYtDlpGateway] and records what
- * happened. Commands are adb-triggered (D-02); long-running ones reply `{"started":true}` at once and write a
+ * Instrument that runs the bundled yt-dlp on the phone through [AndroidYtDlpGateway] and records what
+ * happened. Commands are adb-triggered; long-running ones reply `{"started":true}` at once and write a
  * result file into files/evidence, which `tools/spike.sh pull` copies.
  *
- * File contract with Plan 01-06 (it reads these, this plan writes them; no shared classes):
+ * File contract with MediaFeature (it reads these, this feature writes them; no shared classes):
  *  - files/spike/last-resolve.json {"id","url","ext","httpHeaders","title"}: the FULL googlevideo URL, so it
- *    lives only in app-private files/spike and never in files/evidence (threat T-01-12).
+ *    lives only in app-private files/spike and never in files/evidence.
  *  - files/spike/last-download.json {"id","path","bytes"}.
  *
- * Only one yt-dlp job runs at a time ([jobLock], threat T-01-13); a second request replies `{"error":"busy"}`.
+ * Only one yt-dlp job runs at a time ([jobLock]); a second request replies `{"error":"busy"}`.
  */
 class ResolverFeature : SpikeFeature {
     override val name = "resolver"
@@ -106,7 +106,7 @@ class ResolverFeature : SpikeFeature {
     private fun handleResolve(args: Map<String, String>): CommandReply {
         val id = args["id"].orEmpty()
         if (id.isEmpty()) return error("id required")
-        // Refused synchronously, before any job or process exists (threat T-01-10).
+        // Refused synchronously, before any job or process exists, so a malformed id never reaches yt-dlp.
         if (!isValidVideoId(id)) return CommandReply(false, ERR_INVALID_ID)
         val cache = args["cache"] ?: "off"
         val verbose = args["verbose"] ?: "0"
@@ -219,7 +219,7 @@ class ResolverFeature : SpikeFeature {
         val cacheDir = if (cacheOn) ytdlpCacheDir(h) else null
         val (record, info) = res.resolveOnce(id, if (cacheOn) "single-cache" else "single", 0, cacheDir, verbose)
         lastRecord = record.toJson()
-        // The record holds only host and expire, never the URL (T-01-12).
+        // The record holds only host and expire, never the URL.
         h.evidence.event("resolve", record.toEvent())
         writeEvidenceFile("resolve-$id.json", record.toJson())
         if (info != null) writeLastResolve(h, id, info)
@@ -258,7 +258,7 @@ class ResolverFeature : SpikeFeature {
         val (verboseRecord, verboseInfo) = res.resolveOnce(firstId, "verbose", 0, null, true)
         jsRuntimeLine = verboseRecord.jsRuntimeLine
         val verboseText = cap.last?.stderrHead.orEmpty()
-        // URLs in yt-dlp's debug output are cut to scheme and host before the file is written (T-01-12)
+        // URLs in yt-dlp's debug output are cut to scheme and host before the file is written
         writeEvidenceText("ytdlp-verbose$suffix.txt", Resolver.redactUrls(verboseText).take(VERBOSE_MAX_CHARS))
         h.evidence.event("resolve", verboseRecord.toEvent() + mapOf("jsRuntimeLine" to jsRuntimeLine))
         if (verboseInfo != null && !lastResolveWritten) {
