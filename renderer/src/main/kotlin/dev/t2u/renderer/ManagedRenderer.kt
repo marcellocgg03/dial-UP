@@ -1,7 +1,7 @@
 package dev.t2u.renderer
 
-// Contract between the renderer (plan 02-10, port of renderer.js) and the discovery registry
-// (plan 02-11, port of the index.js onAlive/prune logic). GPL-3.0-only.
+// Contract between the renderer (port of renderer.js) and the discovery registry
+// (port of the index.js onAlive/prune logic). GPL-3.0-only.
 
 /**
  * One speaker, as the registry sees it. All members mirror renderer.js.
@@ -40,7 +40,7 @@ interface ManagedRenderer {
     suspend fun destroy()
 
     /**
-     * Empties the speaker's transport URI when it still holds a stream this app loaded (CAST-06). Bounded,
+     * Empties the speaker's transport URI when it still holds a stream this app loaded. Bounded,
      * never throws and does nothing once destroyed. The default does nothing; the registry calls it only
      * on an explicit service Stop, before [destroy].
      */
@@ -54,7 +54,7 @@ interface ManagedRenderer {
     suspend fun reviveIfDue(now: Long): Boolean? = null
 
     /**
-     * The phone moved to [host] (plan 05-08, SVC-04, D-07): the renderer builds stream URLs with it from now on, still
+     * The phone moved to [host]: the renderer builds stream URLs with it from now on, still
      * recognises URLs with its earlier addresses as its own, and re-sets the loaded track on the speaker from the new
      * address. Returns without waiting for the re-set. Called by the bridge after its listeners moved. The default does nothing.
      */

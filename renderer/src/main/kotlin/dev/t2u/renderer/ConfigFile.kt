@@ -1,7 +1,7 @@
 package dev.t2u.renderer
 
-// Kotlin original, GPL-3.0-only: the optional config.json (DISC-04 name filter, SVC-07 forced format
-// and debug switches). Pure JVM; reading the file from app storage is plan 03-11.
+// Kotlin original, GPL-3.0-only: the optional config.json (name filter, forced format
+// and debug switches). Pure JVM; reading the file from app storage is left to the caller.
 
 import dev.t2u.media.YTDLP_CHANNELS
 import kotlinx.serialization.json.Json
@@ -77,7 +77,7 @@ private val KNOWN_KEYS = setOf(
  * ```
  *
  * Types are strict (a numeric string is not a number). `nameSuffix` and `nameTemplate` are deliberately
- * not readable (D-04: the " (app)" suffix has no setting); they, and any unknown key, are ignored and
+ * not readable (the " (app)" suffix has no setting); they, and any unknown key, are ignored and
  * listed by name in one warning. Warnings name keys and indexes, never values.
  */
 fun parseConfigFile(text: String, base: Config): ConfigFileResult {

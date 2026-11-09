@@ -8,9 +8,9 @@ import dev.t2u.lounge.PlayerStatus
 data class SpeakerPosition(val positionSec: Double, val durationSec: Double, val atMs: Long)
 
 /**
- * The immutable UI snapshot of one speaker (plan 07-03, GUI-01): what the Speakers list shows and nothing else. It never
- * carries stream URLs, lounge tokens or pairing codes (T-07-01). [online] and [manual] are for manually added speakers
- * (plans 07-12 to 07-14); a speaker found by discovery is online and not manual.
+ * The immutable UI snapshot of one speaker: what the Speakers list shows and nothing else. It never
+ * carries stream URLs, lounge tokens or pairing codes. [online] and [manual] are for manually added speakers;
+ * a speaker found by discovery is online and not manual.
  */
 data class SpeakerUi(
     val udn: String,
@@ -27,14 +27,14 @@ data class SpeakerUi(
     val manual: Boolean = false,
 )
 
-/** What a speaker card's buttons can ask of a speaker (plan 07-08, GUI-02). There is deliberately no volume action (T-02-36). */
+/** What a speaker card's buttons can ask of a speaker. There is deliberately no volume action. */
 enum class SpeakerAction { PLAY, PAUSE, STOP, PREVIOUS, NEXT }
 
 /**
  * Runs a card [action] on this speaker. A card command is a local command (no sender id): it goes through the same [Renderer]
  * player methods as the phone's commands, so the YouTube sender sees it as a normal state change. STOP stops and clears the
- * speaker whether or not the clear-when-cast-ends setting is on; clearing leaves a speaker playing another source alone
- * (T-03-26). Returns whether the speaker did what was asked.
+ * speaker whether or not the clear-when-cast-ends setting is on; clearing leaves a speaker playing another source alone.
+ * Returns whether the speaker did what was asked.
  */
 suspend fun Renderer.perform(action: SpeakerAction): Boolean = when (action) {
     SpeakerAction.PLAY -> resume()

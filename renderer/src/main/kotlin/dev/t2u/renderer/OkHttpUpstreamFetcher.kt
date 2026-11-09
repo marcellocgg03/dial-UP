@@ -1,7 +1,7 @@
 package dev.t2u.renderer
 
 // Kotlin original, GPL-3.0-only. The Node proxy talks to any URL the resolver returns; here the host is checked
-// first (plan 03-02, threat T-03-05; recorded as an adaptation in PARITY.md by plan 03-12).
+// first (recorded as an adaptation in PARITY.md).
 
 import dev.t2u.media.UpstreamFetcher
 import dev.t2u.media.UpstreamRequest
@@ -35,7 +35,7 @@ fun interface UpstreamPolicy {
 
 /**
  * [UpstreamFetcher] on OkHttp. [http] is the LAN-guarded client from `lanHttpClient()`; the client used here is
- * derived from it with `newBuilder`, so the SVC-05 cleartext guard still applies even if [policy] would allow a
+ * derived from it with `newBuilder`, so the cleartext guard still applies even if [policy] would allow a
  * public cleartext host. Redirects are handled here, not by OkHttp: at most one hop, and the target must pass
  * [policy] too. There is no call timeout, because the body streams for as long as the song plays.
  *

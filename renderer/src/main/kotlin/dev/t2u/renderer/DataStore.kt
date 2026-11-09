@@ -22,12 +22,12 @@ import java.io.IOException
 private val UNSAFE_UDN_CHARS = Regex("[^A-Za-z0-9_.-]")
 
 /**
- * CAST-03. Values live in `<baseDir>/<sanitised rendererId>/store.json` as one JSON object (key to
+ * Values live in `<baseDir>/<sanitised rendererId>/store.json` as one JSON object (key to
  * JsonElement). The directory name is [rendererId] with every character outside `[A-Za-z0-9_.-]`
  * replaced by `_`; a name that would be `.`/`..`/empty, or that resolves outside [baseDir], is refused
- * with [IllegalArgumentException] (T-02-26: a UDN comes off the LAN).
+ * with [IllegalArgumentException] (a UDN comes off the LAN).
  *
- * Keys used in Phase 2:
+ * Keys used:
  *  - `dial.uuid`: Kotlin addition, keeps the SSDP/DIAL UDN of the receiver stable across restarts.
  *  - `app.pid`: the DIAL app process id (yt-cast-receiver YouTubeApp).
  *  - `mdxContext.cl` and `mdxContext.m`: screenId and deviceId of the two YouTube clients (yt-cast-receiver
