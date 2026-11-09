@@ -190,9 +190,9 @@ data class DidlSummary(
 private const val DIDL_MAX_CHARS = 65_536
 
 /**
- * Reads the first `item` of a DIDL-Lite string, ours or a speaker's (plan 02-15 evidence: what we sent and
- * what the speaker keeps). The text is untrusted LAN input: it is cut at 65,536 characters, parsed with
- * jsoup's XML parser (no DTD or entity resolution) and never throws. Null for null, blank, NOT_IMPLEMENTED,
+ * Reads the first `item` of a DIDL-Lite string, ours or a speaker's (what we sent and what the speaker keeps). The text is untrusted LAN
+ * input: it is cut at 65,536 characters, parsed with jsoup's XML parser (no DTD or entity resolution) and never throws.
+ * Null for null, blank, NOT_IMPLEMENTED,
  * a parse failure or a document without an item. Callers log lengths and flags only, never the text.
  */
 fun summarizeDidl(xml: String?): DidlSummary? {

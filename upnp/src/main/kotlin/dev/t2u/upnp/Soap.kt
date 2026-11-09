@@ -92,7 +92,7 @@ fun buildEnvelope(serviceType: String, action: String, params: List<Pair<String,
 private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
 
 /**
- * [http] must be [lanHttpClient] or derived from it with newBuilder() (SVC-05), so SOAP can only reach
+ * [http] must be [lanHttpClient] or derived from it with newBuilder(), so SOAP can only reach
  * private LAN addresses; the no-argument constructor does exactly that.
  */
 class SoapClient(private val http: OkHttpClient) {
