@@ -8,10 +8,10 @@ enum class StartReason(val wire: String) {
     /** The author opened the app. */
     OPEN("open"),
 
-    /** BOOT_COMPLETED after a phone reboot (D-03). */
+    /** BOOT_COMPLETED after a phone reboot. */
     BOOT("boot"),
 
-    /** Android restarted the process after a kill; the service gets a null intent (D-01). */
+    /** Android restarted the process after a kill; the service gets a null intent. */
     STICKY("sticky"),
 }
 
@@ -32,15 +32,15 @@ fun startReasonOf(intentIsNull: Boolean, action: String?, reasonExtra: String?):
     }
 
 /**
- * Whether the bridge may run: only with the battery-optimisation exemption (D-12) and only while the
- * author's switch is on (D-04). The reason never opens the gate; it is passed so the decision and its
+ * Whether the bridge may run: only with the battery-optimisation exemption and only while the
+ * author's switch is on. The reason never opens the gate; it is passed so the decision and its
  * log line name the same reason. A sticky restart after the switch went off is denied here.
  */
 @Suppress("UNUSED_PARAMETER")
 fun gateDecision(exempt: Boolean, enabled: Boolean, reason: StartReason): Boolean = exempt && enabled
 
 /**
- * Whether BOOT_COMPLETED may start the bridge: the author's switch is on and the exemption is held (D-04). It is checked before the service is started, so the system never gets a foreground-service
+ * Whether BOOT_COMPLETED may start the bridge: the author's switch is on and the exemption is held. It is checked before the service is started, so the system never gets a foreground-service
  * start the service would immediately deny.
  */
 fun bootStartDecision(enabled: Boolean, exempt: Boolean): Boolean = enabled && exempt

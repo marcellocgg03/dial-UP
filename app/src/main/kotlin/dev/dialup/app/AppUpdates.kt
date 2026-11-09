@@ -8,7 +8,7 @@ import dev.dialup.app.model.RELEASES_API_URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** The one process-wide app update check (UPD-01): the card on the Renderers tab and the App updates section in Settings share it. */
+/** The one process-wide app update check: the card on the Renderers tab and the App updates section in Settings share it. */
 object AppUpdates {
     @Volatile private var instance: AppUpdateModel? = null
 

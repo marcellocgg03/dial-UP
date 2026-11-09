@@ -17,6 +17,8 @@ import java.net.InetAddress
  * [NetworkResumeReceiver]'s hasWifiAddress already does on the main thread, and BOOT_COMPLETED, the resume receiver and
  * onResume must decide synchronously anyway. The UI's continuous presence flow runs it on Dispatchers.IO instead.
  */
+// ConnectivityManager.allNetworks is deprecated from API 31 but is the only synchronous way to list networks at minSdk 26;
+// the replacement is a NetworkCallback (registerNetworkCallback), which cannot answer on demand.
 @Suppress("DEPRECATION")
 fun bindableLink(context: Context): Pair<Inet4Address?, String?> {
     val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null to null
