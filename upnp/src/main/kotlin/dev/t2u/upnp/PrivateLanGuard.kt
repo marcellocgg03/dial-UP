@@ -1,6 +1,6 @@
 package dev.t2u.upnp
 
-// SVC-05: cleartext HTTP may only reach private LAN addresses. Sonos and DIAL traffic is plain HTTP to
+// Cleartext HTTP may only reach private LAN addresses. Sonos and DIAL traffic is plain HTTP to
 // private IPs (the manifest allows cleartext app-wide because the network-security-config cannot
 // express CIDR ranges), so this guard is what stops a malicious LOCATION header or redirect from
 // pointing the app at a public host or a name.
@@ -26,7 +26,8 @@ fun isPrivateLanAddress(a: InetAddress): Boolean = when (a) {
 }
 
 /**
- * Plain dotted-decimal IPv4 only (GUI-04, T-07-29): four parts, each 0..255 in decimal with no leading zero, no hex or octal
+ * Plain dotted-decimal IPv4 only (so a name or an odd spelling of an address is refused): four parts, each 0..255 in
+ * decimal with no leading zero, no hex or octal
  * spelling, no empty part, no whitespace. Built with getByAddress, so DNS is never consulted. Null for anything else.
  */
 fun parseIpv4Literal(text: String): Inet4Address? {
@@ -82,7 +83,7 @@ class PrivateLanGuard : Interceptor {
 }
 
 /**
- * The only way the app builds an HTTP client (SVC-05): every other OkHttpClient is derived from this
+ * The only way the app builds an HTTP client: every other OkHttpClient is derived from this
  * one with newBuilder(), so the guard and the no-redirect rule are inherited.
  */
 fun lanHttpClient(): OkHttpClient = OkHttpClient.Builder()

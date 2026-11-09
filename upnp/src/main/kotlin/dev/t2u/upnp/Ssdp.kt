@@ -109,7 +109,7 @@ class Ssdp(
     }
 
     /**
-     * GUI-04: one unicast M-SEARCH from every search socket to [target], the way a speaker that multicast discovery cannot
+     * One unicast M-SEARCH from every search socket to [target], the way a speaker that multicast discovery cannot
      * reach is asked directly (UPnP 1.1: a device answers a unicast search). The reply comes back to the socket that sent
      * it and reaches `onAlive` like any search reply. Unlike [search], a loopback socket may send here: the target is not multicast.
      */

@@ -86,7 +86,7 @@ class SsdpResponder(
     private val events: SsdpEvents,
     private val groupPort: Int = SsdpConstants.PORT,
     private val clockNanos: () -> Long = System::nanoTime,
-    /** Whether a datagram from this source may be answered (SVC-09); refused sources are dropped with reason "access". */
+    /** Whether a datagram from this source may be answered; refused sources are dropped with reason "access". */
     private val replyPolicy: (InetAddress) -> Boolean = { true },
     /** Whether [announce] may send ssdp:alive (false in phone-only mode); byebye is always sent. */
     private val announcePolicy: () -> Boolean = { true },
@@ -105,7 +105,7 @@ class SsdpResponder(
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val bound = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
-    /** Reply timestamps per source IP for the reflection cap (T-01-05). */
+    /** Reply timestamps per source IP for the reflection cap. */
     private val replyTimes = java.util.concurrent.ConcurrentHashMap<String, java.util.ArrayDeque<Long>>()
 
     @Volatile private var replySocket: MulticastSocket? = null
@@ -163,6 +163,8 @@ class SsdpResponder(
                     if (spec.joinInterface != null) {
                         joinGroup(InetSocketAddress(group, groupPort), spec.joinInterface)
                     } else if (spec.joinWithoutInterface) {
+                        // joinGroup(InetAddress) is deprecated since JDK 14; its replacement, joinGroup(SocketAddress, NetworkInterface),
+                        // is used above whenever an interface is known. This is the one case with no interface to name.
                         @Suppress("DEPRECATION")
                         joinGroup(group)
                     }
@@ -234,8 +236,8 @@ class SsdpResponder(
     }
 
     /**
-     * Replaces the reply socket and reopens every listen socket, on the same specs (D-06, Phase 1 carry-over d, review
-     * WR-03). The reply socket is recreated too: one the OS invalidated, or one that failed at [start], would otherwise
+     * Replaces the reply socket and reopens every listen socket, on the same specs. The reply socket is recreated too: one the OS
+     * invalidated, or one that failed at [start], would otherwise
      * leave the responder unable to answer, announce or probe for good. The registered devices and the running flag are
      * untouched: this is a socket-level repair (a multicast membership the OS dropped, a dead socket), never a rebind.
      * Returns how many listeners are bound now; 0 when the responder is not running.
