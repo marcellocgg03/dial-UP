@@ -14,7 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.ui.HiddenRenderersScreen
 
 /**
- * The hidden renderers screen (GUI-13), opened from the Settings tab. It only reads and edits the process-level speaker stores, so
+ * The hidden renderers screen, opened from the Settings tab. It only reads and edits the process-level speaker stores, so
  * it does not start the bridge or ask for any permission. The Theme setting is collected here as in [MainActivity].
  */
 class HiddenRenderersActivity : ComponentActivity() {

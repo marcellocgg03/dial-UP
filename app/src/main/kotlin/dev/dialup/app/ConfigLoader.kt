@@ -1,6 +1,6 @@
 package dev.dialup.app
 
-// Plan 03-11: the optional files/config.json (SVC-07 debug switches and forced format, DISC-04 name filter) turned
+// The optional files/config.json (debug switches, forced format and the speaker name filter) turned
 // into the effective renderer Config at every bridge start. Pure JVM (no android imports) so it is unit-tested in WSL.
 // GPL-3.0-only.
 
@@ -25,7 +25,7 @@ const val CONFIG_FILE = "config.json"
  * non-null overrides change anything, so a hand-edited config.json value stays in force until the author changes that
  * setting in the app.
  *
- * The one exception is `clearOnCastEnd`: it is an app-only setting (GUI-08) and config.json has no key for it, so its
+ * The one exception is `clearOnCastEnd`: it is an app-only setting and config.json has no key for it, so its
  * value always comes from settings.json (false by default). `ConfigOverlayTest` pins this.
  */
 fun applySettings(base: Config, s: AppSettingsData): Config =
@@ -75,7 +75,7 @@ private fun loadConfigOnly(filesDir: File): ConfigFileResult {
 
 /**
  * What was applied, for the evidence log and the cast-state command. Switch values and counts only: the include and
- * exclude patterns are never echoed (T-03-34), and the warnings already name keys, not values.
+ * exclude patterns are never echoed (they may hold device names), and the warnings already name keys, not values.
  */
 fun configSummary(result: ConfigFileResult): JsonObject {
     val c = result.config

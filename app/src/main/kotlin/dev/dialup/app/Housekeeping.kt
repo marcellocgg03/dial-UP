@@ -1,7 +1,7 @@
 package dev.dialup.app
 
-// Plan 05-11: the idle-time heartbeat of the bridge's housekeeping. Coroutine timers stall when the
-// CPU sleeps, and since plan 05-09 the wake lock is held only while casting, so one AlarmManager alarm wakes the phone
+// The idle-time heartbeat of the bridge's housekeeping. Coroutine timers stall when the
+// CPU sleeps, and the wake lock is held only while casting, so one AlarmManager alarm wakes the phone
 // every few minutes, runs CastFeature.housekeeping and sets the next alarm. GPL-3.0-only.
 
 import android.app.AlarmManager
@@ -18,14 +18,14 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Schedules the housekeeping alarm. The alarm is inexact (`setAndAllowWhileIdle`, which needs no permission), explicit
  * (it targets [HousekeepingReceiver] only) and re-armed by the receiver after every run; [CastFeature.stop] cancels it.
  *
- * Known limit, the timing bounds (plan 05-11, measured by plans 05-12 and 05-13):
- *  - Phone awake (screen on, or casting with the wake lock of plan 05-09): housekeeping every 5 minutes from the
- *    in-process timer, the retry check every 10 s; a failed setup is retried within 5 min 10 s (DISC-05 "within about
- *    five minutes").
+ * Known limit, the timing bounds (measured in the soak runs):
+ *  - Phone awake (screen on, or casting with the wake lock): housekeeping every 5 minutes from the
+ *    in-process timer, the retry check every 10 s; a failed setup is retried within 5 min 10 s (the
+ *    requirement is "within about five minutes").
  *  - Doze (nothing casting, no wake lock): idle housekeeping runs are at most nine minutes ([IDLE_HOUSEKEEPING_BOUND_MS])
  *    apart. Basis: the Android Doze documentation says setAndAllowWhileIdle alarms fire no more than once per nine
  *    minutes per app; AOSP AlarmManagerService gives an app on the battery-optimisation allowlist (the service only
- *    runs with that exemption, D-12) FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED and leaves the inexact window of 75 % of the
+ *    runs with that exemption) FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED and leaves the inexact window of 75 % of the
  *    delay (5:00 to 8:45 after the alarm was set). Derived: re-announce (LAN mode) and self-probe at most 9 minutes
  *    apart, a failed-setup retry at most 5 + 9 = 14 minutes after the failure, a revival's first attempt at most
  *    9 minutes after the terminate and later attempts at most 14 minutes apart, a yt-dlp update at most 9 minutes
@@ -66,7 +66,7 @@ object HousekeepingAlarm {
 }
 
 /**
- * Receives the housekeeping alarm. Not exported: the alarm's PendingIntent is explicit and immutable (T-05-29). Holds a
+ * Receives the housekeeping alarm. Not exported: the alarm's PendingIntent is explicit and immutable, so no other app can fire it. Holds a
  * partial wake lock with a 60 s timeout, runs the cast feature's housekeeping bounded to 45 s, sets the next alarm and
  * releases the lock and finishes the broadcast when the work ends or the scope is cancelled. Without a running service
  * nothing runs and nothing is rescheduled.
@@ -83,7 +83,7 @@ class HousekeepingReceiver : BroadcastReceiver() {
         val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "t2u:tick")
         lock.setReferenceCounted(false)
         lock.acquire(WAKE_LOCK_TIMEOUT_MS)
-        // runs once, whatever the scope does: a cancelled scope never starts the body below (WR-04)
+        // runs once, whatever the scope does: a cancelled scope never starts the body below
         val finish = {
             runCatching { if (lock.isHeld) lock.release() }
             runCatching { pending.finish() }

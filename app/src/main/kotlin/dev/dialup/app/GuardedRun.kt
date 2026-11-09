@@ -1,6 +1,6 @@
 package dev.dialup.app
 
-// Plan 05-19: guards for the places where a failure must be logged and survived instead of ending the casting.
+// Guards for the places where a failure must be logged and survived instead of ending the casting.
 // Pure Kotlin (no android imports) so it is tested on the JVM. GPL-3.0-only.
 
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -13,7 +13,7 @@ import kotlin.coroutines.cancellation.CancellationException
 /** How long CastFeature waits before it tries to start a bridge again after a start that threw or found no Wi-Fi. */
 const val START_RETRY_MS = 30_000L
 
-/** Longest exception message that goes into the evidence log (D-11: it can carry paths, URLs or device names). */
+/** Longest exception message that goes into the evidence log (it can carry paths, URLs or device names). */
 private const val MAX_MESSAGE_CHARS = 200
 
 /** The fields of a `feature-error` event: where it happened, the exception class and the message cut to 200 characters. */
