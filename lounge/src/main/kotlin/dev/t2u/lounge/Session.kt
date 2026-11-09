@@ -539,7 +539,7 @@ class Session(
     /**
      * [openRpcStream], and when it fails with a network error (an IOException that is not the lounge answering with a
      * status) the same token is retried with growing waits for up to [rpcOutageBudgetMs] since the first failure, so a
-     * Wi-Fi outage of a minute or two does not cost the session its token (plan 05-10; yt-cast-receiver's RPCConnection
+     * Wi-Fi outage of a minute or two does not cost the session its token (yt-cast-receiver's RPCConnection
      * terminates after 3 connects). An HTTP status failure or an exhausted budget throws, which takes the refresh path.
      */
     private suspend fun openRpcRidingOutOutage(handle: RpcHandle): Opened {
