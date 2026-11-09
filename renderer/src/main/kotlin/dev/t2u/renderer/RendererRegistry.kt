@@ -4,7 +4,7 @@ package dev.t2u.renderer
 //
 // One cast target per MediaRenderer UDN. The registry owns the maps index.js keeps at module level
 // (renderers, skipped, pending) and the port claim; it creates speakers through a [RendererFactory]
-// so it is tested with fakes and wired to the real Renderer by the composition root (plan 02-13).
+// so it is tested with fakes and wired to the real Renderer by the composition root.
 //
 // Concurrency: the maps are guarded by one Mutex that is never held across init() or destroy(), and
 // the pending set guarantees one init per UDN however many alives arrive at once.
@@ -44,7 +44,7 @@ import kotlin.coroutines.ContinuationInterceptor
 
 private val RENDERER_TYPE_RE = Regex("urn:schemas-upnp-org:device:MediaRenderer:\\d")
 
-/** Bound on the "already logged" memory so a flood of made-up UDNs cannot grow it without limit (T-02-41). */
+/** Bound on the "already logged" memory so a flood of made-up UDNs cannot grow it without limit. */
 private const val MAX_REMEMBERED_GUARD_HITS = 1024
 
 class RendererRegistry(
@@ -54,26 +54,26 @@ class RendererRegistry(
     private val events: EventSink = NoEvents,
     private val clock: () -> Long = System::currentTimeMillis,
     private val clearBudgetMs: Long = CLEAR_BUDGET_MS,
-    /** How long [removeAll] and the other removals wait for one speaker's [ManagedRenderer.destroy] (plan 07-19). */
+    /** How long [removeAll] and the other removals wait for one speaker's [ManagedRenderer.destroy]. */
     private val destroyBudgetMs: Long = DESTROY_BUDGET_MS,
-    /** GUI-03: true for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
+    /** True for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
     private val hidden: (String) -> Boolean = { false },
 ) {
     companion object {
         /**
          * index.js RETRY_FAILED_MS: a device whose init threw is tried again after this long. A device that answered but is
          * not a usable renderer is held back for this long too and looked at again by the first alive after it; the timer
-         * never retries it (WR-07).
+         * never retries it.
          */
         const val RETRY_FAILED_MS = 5 * 60 * 1000L
 
-        /** How often the schedule looks for retries that are due (D-05: an attempt is at most about this late). */
+        /** How often the schedule looks for retries that are due (an attempt is at most about this late). */
         const val RETRY_CHECK_MS = 10_000L
 
         /** Bound on one [ManagedRenderer.destroy] inside a removal; a destroy that runs longer finishes in the background. */
         const val DESTROY_BUDGET_MS = 2000L
 
-        /** The skipped-speaker memory never holds more than this many entries (T-05-10); the earliest retry time goes first. */
+        /** The skipped-speaker memory never holds more than this many entries; the earliest retry time goes first. */
         const val MAX_SKIPPED = 256
 
         /** How many due setups [retryDue] runs at once. */
@@ -83,7 +83,7 @@ class RendererRegistry(
     /**
      * A device that is not set up. [until] is the epoch ms its hold ends. [src], [maxAge] and [attempts] let [retryDue] set
      * a failed device up again without a new alive; [attempts] counts the timer retries already made. A device that is not
-     * a usable renderer has no [src], so only a later alive looks at it again (WR-07).
+     * a usable renderer has no [src], so only a later alive looks at it again.
      *
      * [until] is wall-clock time and the clock can move backwards (NTP, carrier time). No legitimate wait is longer
      * than [RETRY_FAILED_MS], so an [until] further ahead than that is not waiting any more (see [isWaiting]).
@@ -102,7 +102,7 @@ class RendererRegistry(
 
     private val lock = Mutex()
 
-    /** Destroys that outlive their budget keep running here (plan 07-19); nothing ever cancels it. */
+    /** Destroys that outlive their budget keep running here; nothing ever cancels it. */
     private val destroyScope = CoroutineScope(SupervisorJob())
     private val running = LinkedHashMap<String, ManagedRenderer>()
     private val skipped = HashMap<String, Skip>()
@@ -115,7 +115,7 @@ class RendererRegistry(
     private val _renderersFlow = MutableStateFlow<List<ManagedRenderer>>(emptyList())
     private val _count = MutableStateFlow(0)
 
-    /** The running renderers, updated on every add and remove (plan 02-13 derives the D-06 cast count from it). */
+    /** The running renderers, updated on every add and remove (the cast count is derived from it). */
     val renderersFlow: StateFlow<List<ManagedRenderer>> = _renderersFlow.asStateFlow()
     val count: StateFlow<Int> = _count.asStateFlow()
 
@@ -142,7 +142,7 @@ class RendererRegistry(
         }
     }
 
-    /** One `retry` event per attempt (D-05): [reason] failed (a setup) or terminated (a receiver), [outcome] added, failed, skipped or running. */
+    /** One `retry` event per attempt: [reason] failed (a setup) or terminated (a receiver), [outcome] added, failed, skipped or running. */
     private fun logRetry(
         reason: String,
         udn: String,
@@ -189,7 +189,7 @@ class RendererRegistry(
 
     /**
      * The LOCATION must name the host that sent the datagram, and it must be a private LAN address
-     * (T-02-39: otherwise any device could make the app fetch an arbitrary URL). Names are refused
+     * (otherwise any device could make the app fetch an arbitrary URL). Names are refused
      * without a lookup. Returns null when the location is acceptable, else the reason.
      */
     private fun locationProblem(location: String, src: InetSocketAddress): String? {
@@ -330,7 +330,7 @@ class RendererRegistry(
     }
 
     /**
-     * D-05: sets up again every speaker whose setup threw and whose 5 minutes are over, without waiting for a new
+     * Sets up again every speaker whose setup threw and whose 5 minutes are over, without waiting for a new
      * alive, and asks every running speaker to revive a receiver that stopped itself ([ManagedRenderer.reviveIfDue]).
      * A device that was refused (not a usable renderer), one an alive is setting up right now and one that already
      * runs are left alone. Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
@@ -403,7 +403,7 @@ class RendererRegistry(
      * The receiver's shutdown runs under NonCancellable (the lounge sessions are ended even when the caller is cancelled), so
      * a time limit cannot cut it; instead the removal stops waiting and the job finishes in the background. The port goes
      * back to the allocator when the destroy has really ended, never at the timeout, so a port whose DIAL listener may still
-     * be open is not handed out (plan 07-19, CR-01 c).
+     * be open is not handed out.
      */
     private suspend fun destroyBounded(r: ManagedRenderer) {
         // The caller's dispatcher, so a test dispatcher keeps the job in its own (virtual) time; the Job is the registry's own.
@@ -424,7 +424,7 @@ class RendererRegistry(
     }
 
     /**
-     * GUI-04, D-07: takes the running speaker [udn] out of the registry for the bridge (an offline or removed manual speaker):
+     * Takes the running speaker [udn] out of the registry for the bridge (an offline or removed manual speaker):
      * it is destroyed (ssdp:byebye, DIAL server closed, the lounge session ended), its port freed, and [event] logged. Nothing
      * is sent to the speaker. Does nothing when no such speaker runs.
      */
@@ -434,7 +434,7 @@ class RendererRegistry(
     fun isRunning(udn: String): Boolean = _renderersFlow.value.any { it.udn == udn }
 
     /**
-     * GUI-03: takes the running speaker [udn] out of the cast menus. The caller has already put it in the hidden set, so
+     * Takes the running speaker [udn] out of the cast menus. The caller has already put it in the hidden set, so
      * every guard refuses it from now on. With [clear] the speaker is first emptied (bounded by `clearBudgetMs`), else with
      * [stop] a playing speaker is told to Stop (bounded the same way); then the renderer is destroyed (ssdp:byebye, DIAL
      * server closed, the lounge session ended) and its port freed. Nothing else is touched: the other speakers keep playing.
@@ -472,14 +472,14 @@ class RendererRegistry(
 
     /**
      * Shutdown (index.js shutdown): stop every receiver so they leave the cast menu. With [clearSpeakers] each
-     * speaker is first emptied through [ManagedRenderer.clearSpeaker] (CAST-06), bounded by `clearBudgetMs`, in
+     * speaker is first emptied through [ManagedRenderer.clearSpeaker], bounded by `clearBudgetMs`, in
      * parallel with the others, and before its own destroy (a destroyed renderer no longer clears). A clear that
      * hangs or throws never keeps a speaker from being destroyed. Clear only on an explicit service Stop: a
      * rebind, a goodbye and a stale speaker leave the speaker alone ([onByebye] and [prune] never clear).
      *
-     * With [stopSpeakers] and no [clearSpeakers], each speaker that is playing is told to Stop (D-03: switching the bridge
+     * With [stopSpeakers] and no [clearSpeakers], each speaker that is playing is told to Stop (switching the bridge
      * off ends playback) and keeps its track loaded; [stopOne] is bounded the same way. A speaker on another source gets no
-     * Stop (T-03-26, [Player.stop] reaches doStop's another-source check).
+     * Stop ([Player.stop] reaches doStop's another-source check).
      */
     suspend fun removeAll(clearSpeakers: Boolean = false, stopSpeakers: Boolean = false) {
         val udns = lock.withLock { running.keys.toList() }

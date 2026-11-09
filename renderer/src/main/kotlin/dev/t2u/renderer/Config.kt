@@ -1,18 +1,18 @@
 package dev.t2u.renderer
 
-// Port of tube2upnp src/config.js (Node defaults; config.json is SVC-07), GPL-3.0-only.
+// Port of tube2upnp src/config.js (Node defaults; config.json overlays them), GPL-3.0-only.
 
 import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YTDLP_DEFAULT_CHANNEL
 import java.io.File
 
-/** Name shown in the YouTube cast menu (CAST-07). Placeholders: {name} {manufacturer} {model}. */
+/** Name shown in the YouTube cast menu. Placeholders: {name} {manufacturer} {model}. */
 const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
 
 /**
- * D-04: while the Docker server runs next to this app, entries carry a hard-coded suffix
+ * While the Docker server runs next to this app, entries carry a hard-coded suffix
  * ("🔊 Living Room Speaker (app)") so the two sets of receivers can be told apart in the cast menu.
- * There is deliberately no naming setting. D-04: remove at parity (delete this constant, the
+ * There is deliberately no naming setting. Remove at parity (delete this constant, the
  * `nameSuffix` default and its use in [receiverName] callers).
  */
 const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
@@ -20,21 +20,21 @@ const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
 /** Output modes accepted by config.json; streaming tries ADTS then MP3. */
 val OUTPUT_FORMATS = setOf("auto", "streaming", "direct", "mp4", "adts", "mp3")
 
-/** The ffmpeg `-loglevel` names a config may select (T-03-09: a whitelist, never free text in an argument list). */
+/** The ffmpeg `-loglevel` names a config may select (a whitelist, never free text in an argument list). */
 val FFMPEG_LOG_LEVELS = setOf("quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug")
 
-/** The values `logLevel` may take (D-11): what the evidence log and logcat get. Exact lowercase strings. */
+/** The values `logLevel` may take: what the evidence log and logcat get. Exact lowercase strings. */
 val LOG_LEVELS: Set<String> = setOf("off", "info", "debug")
 
 /** `mp3Bitrate` shape: a number then `k`, 64..320 (checked by [isValidMp3Bitrate]). */
 private val MP3_BITRATE = Regex("""^(\d{2,3})k$""")
 
-/** True for "64k" through "320k" (T-03-09: only this shape can reach an ffmpeg argument). */
+/** True for "64k" through "320k" (only this shape can reach an ffmpeg argument). */
 fun isValidMp3Bitrate(value: String): Boolean =
     MP3_BITRATE.matchEntire(value)?.groupValues?.get(1)?.toInt()?.let { it in 64..320 } == true
 
 /**
- * DISC-04: which speakers appear. The patterns are case-insensitive regular expressions tested with a
+ * Which speakers appear. The patterns are case-insensitive regular expressions tested with a
  * find-anywhere match against the speaker's friendly name (renderer.js tests `desc.friendlyName`, not
  * the templated cast-menu name). A name is accepted when [include] is empty or any include pattern
  * matches, and no [exclude] pattern matches. Held as the pattern strings so [Config] equality works;
@@ -73,38 +73,38 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
 
 /**
  * Runtime configuration with the Node defaults. Built in code, optionally overlaid by config.json
- * (see [parseConfigFile], SVC-07). The Docker server runs on another
+ * (see [parseConfigFile]). The Docker server runs on another
  * host, so the Node ports (DIAL 3000+, media 8000) do not collide.
  *
  * @property excludeServers case-insensitive SERVER-header substrings of devices that are never speakers
- *   (the QuickShare NOTIFY flood). This is not the DISC-04 include/exclude
- *   filter, which is [nameFilter].
- * @property nameFilter DISC-04 include/exclude patterns on the friendly name; applied in Renderer.init (plan 03-06).
+ *   (the QuickShare NOTIFY flood). This is not the include/exclude
+ *   filter on the friendly name, which is [nameFilter].
+ * @property nameFilter include/exclude patterns on the friendly name; applied in Renderer.init.
  * @property mp3Bitrate ffmpeg bitrate for the mp3 format.
  * @property ytdlpVerbose adds `-v` to every yt-dlp lookup so the log can show its steps (on by default); consumed by the bridge.
- * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly"
- *   (PLAY-02). Read by the app before every update attempt, so an edited config.json applies at the next one.
- * @property ffmpegLogLevel debug switch, consumed by the bridge (plan 03-10).
- * @property logLevel "off", "info" (the default) or "debug" (SVC-06, D-11): what the app's event log file and logcat get;
+ * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly".
+ *   Read by the app before every update attempt, so an edited config.json applies at the next one.
+ * @property ffmpegLogLevel debug switch, consumed by the bridge.
+ * @property logLevel "off", "info" (the default) or "debug": what the app's event log file and logcat get;
  *   debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs. Applied at service start and at every bridge start.
  * @property outputFormat "auto" walks the learned direct, adts, mp3 chain; "streaming" tries adts then mp3;
  *   other values force that format. The Android app defaults to streaming.
  * @property queueSettleTimeoutMs how long a track end waits for a playlist refresh in flight before it asks for the
- *   next track; tuning for tests, not readable from config.json (plan 03-09).
+ *   next track; tuning for tests, not readable from config.json.
  * @property playRetryDelaysMs the waits before the retries of a track whose lookup or preparation failed for an unclear
- *   reason (D-11): the track is tried again after each wait, with a fresh lookup, and skipped when the last retry fails;
+ *   reason: the track is tried again after each wait, with a fresh lookup, and skipped when the last retry fails;
  *   tuning for tests, not readable from config.json, like [queueSettleTimeoutMs].
  * @property cacheMb size cap in MiB of the converted and downloaded track cache (built mp4 files and .source
  *   files; the pipe range cache and read-ahead are separate). Read by the cache each time it prunes, so a changed
- *   value applies at the next prune (D-02; Node CACHE_MB, default 512 there). 0 is legal: only the file just built stays.
+ *   value applies at the next prune (Node CACHE_MB, default 512 there). 0 is legal: only the file just built stays.
  * @property prefetch prepares the next track while the current one plays (Node PREFETCH).
  * @property gapless hands the prepared next track to the speaker with SetNextAVTransportURI; ignored when [prefetch]
- *   is false, because there is no prepared track to hand over (Node GAPLESS, D-07).
- * @property clearOnCastEnd GUI-08: when false (the default) a cast that ends, by the last sender leaving or by Stop,
+ *   is false, because there is no prepared track to hand over (Node GAPLESS).
+ * @property clearOnCastEnd when false (the default) a cast that ends, by the last sender leaving or by Stop,
  *   leaves the speaker as it is; when true the speaker's queue is cleared. Set only from the app's own settings
- *   (settings.json), never read from config.json; plan 07-07 reads it.
+ *   (settings.json), never read from config.json.
  * @property startTimeoutMs keeps the Node 12 s: it is measured from Play, after the resolve, so the
- *   cold yt-dlp start does not count (plan 02-14 records the real first-cast timing).
+ *   cold yt-dlp start does not count.
  */
 data class Config(
     val dataDir: File,
