@@ -20,8 +20,8 @@ import java.io.IOException
 const val SETTINGS_FILE = "settings.json"
 
 /**
- * Default DIAL access mode (decision D-01: phone only). The single place plan 02-06 flips if the
- * D-03 measurement shows YouTube does not list phone-only receivers.
+ * Default DIAL access mode: phone only. The single place to flip if a measurement shows YouTube does not
+ * list phone-only receivers.
  */
 val DEFAULT_DIAL_ACCESS = DialAccessMode.PHONE
 
@@ -49,7 +49,7 @@ fun useDarkTheme(mode: ThemeMode, systemDark: Boolean): Boolean = when (mode) {
 }
 
 /**
- * Everything the app's own screens can change, as kept in `files/settings.json` (GUI-08, D-04). The first three fields
+ * Everything the app's own screens can change, as kept in `files/settings.json`. The first three fields
  * always have a value; the nullable ones are overrides of config.json keys, written only once the author sets them in
  * the app. A null field means "config.json or the built-in default decides".
  */
@@ -59,7 +59,7 @@ data class AppSettingsData(
     val clearOnCastEnd: Boolean = false,
     val showAudioFormat: Boolean = false,
     val theme: ThemeMode = DEFAULT_THEME,
-    /** App-only: whether opening the app checks GitHub for a newer DialUP release (UPD-01). Not a config.json override. */
+    /** App-only: whether opening the app checks GitHub for a newer DialUP release. Not a config.json override. */
     val updateCheckEnabled: Boolean = true,
     val logEnabled: Boolean? = null,
     val gapless: Boolean? = null,
@@ -70,7 +70,7 @@ data class AppSettingsData(
 
 /**
  * What [parseSettings] found: the usable [data], the keys this version does not know ([extras], kept on write) and the
- * [problems], key names only, never values (T-07-04).
+ * [problems], key names only, never values (a value may be a secret).
  */
 data class ParsedSettings(
     val data: AppSettingsData,
@@ -192,7 +192,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
 }
 
 /**
- * App settings kept in `files/settings.json` (decision D-02, GUI-08). Read once at construction: a missing file gives
+ * App settings kept in `files/settings.json`. Read once at construction: a missing file gives
  * the defaults, malformed JSON or a bad value gives the default for that key and calls [onError] once (the safe default
  * for who may cast is phone only). [update] replaces the file atomically or not at all, so a reader never sees a half-written
  * file; a failed replacement keeps the previous file, calls [onError] and the next update writes the full current settings

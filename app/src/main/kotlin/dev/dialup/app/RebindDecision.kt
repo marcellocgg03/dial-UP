@@ -1,7 +1,7 @@
 package dev.dialup.app
 
-// Plan 05-10: what CastFeature does once the 2 s network debounce ends. One pure function so the decision table is
-// tested on the JVM. GPL-3.0-only. The Wi-Fi rebind is always on (GUI-10, plan 07-09): the old off switch is gone.
+// What CastFeature does once the 2 s network debounce ends. One pure function so the decision table is
+// tested on the JVM. GPL-3.0-only. The Wi-Fi rebind is always on: the old off switch is gone.
 
 enum class RebindAction {
     /** No Wi-Fi address right now: keep the bridge as it is (renderers are frozen) and wait for the next address change. */
@@ -21,7 +21,7 @@ enum class RebindAction {
 }
 
 /**
- * @param reason `config` (reload-config), `retry` (plan 05-19: CastFeature looks again for a bridge that failed to start)
+ * @param reason `config` (reload-config), `retry` (CastFeature looks again for a bridge that failed to start)
  * or a [NetworkMonitor] event name (`lost`, `available`, `linkPropertiesChanged`)
  * @param wifiIp the Wi-Fi IPv4 address when the debounce ended, null when there is none
  */
