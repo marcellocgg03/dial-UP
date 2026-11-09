@@ -192,11 +192,15 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
 /**
  * App settings kept in `files/settings.json` (decision D-02, GUI-08). Read once at construction: a missing file gives
  * the defaults, malformed JSON or a bad value gives the default for that key and calls [onError] once (the safe default
- * for who may cast is phone only). [update] replaces the file through a temp file and a rename, so a reader never sees a
- * half-written file. Keys this class does not know are kept.
+ * for who may cast is phone only). [update] replaces the file atomically or not at all, so a reader never sees a half-written
+ * file; a failed replacement keeps the previous file, calls [onError] and the next update writes the full current settings
+ * again. Keys this class does not know are kept.
  */
 class Settings(
     private val file: File,
+    private val writer: (File, String) -> Unit = { target, text ->
+        writeTextAtomic(target.absoluteFile.parentFile, target.name, text, atomicOnly = true)
+    },
     private val onError: (String, Throwable) -> Unit = { _, _ -> },
 ) {
     private val lock = Any()
@@ -246,11 +250,8 @@ class Settings(
     private fun write(data: AppSettingsData) {
         try {
             val json = settingsJson(data, extras).toString()
-            val dir = file.absoluteFile.parentFile
-            dir?.mkdirs()
-            val tmp = File(dir, "settings.json.tmp")
-            tmp.writeText(json)
-            if (!tmp.renameTo(file)) file.writeText(json)
+            file.absoluteFile.parentFile?.mkdirs()
+            writer(file, json)
         } catch (t: Throwable) {
             onError("settings:write", t)
         }
@@ -266,12 +267,7 @@ object AppSettings {
         synchronized(this) {
             instance?.let { return it }
             val file = File(context.applicationContext.filesDir, SETTINGS_FILE)
-            val created = Settings(file) { where, t ->
-                ServiceHub.service?.evidence?.event(
-                    "feature-error",
-                    mapOf("where" to where, "error" to t.javaClass.name, "message" to t.message),
-                )
-            }
+            val created = Settings(file, onError = { where, t -> Failures.report(where, t) })
             instance = created
             return created
         }
