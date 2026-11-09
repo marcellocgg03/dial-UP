@@ -2,7 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
-// WIFI-02 (plan 07.1-02): what a renderer does with its speaker once the network is back. The speaker is read first and
+// What a renderer does with its speaker once the network is back. The speaker is read first and
 // this pure function turns that one reading into an action, so the rule is one table that a plain test can pin.
 
 /** What the TrackURI of a GetPositionInfo reply says about the stream the speaker holds. */
@@ -54,7 +54,7 @@ internal const val RESYNC_WATCH_MS = 120_000L
  * Decides what to do after the network returned, from one reading of the speaker.
  *
  * A speaker that is STOPPED (or has no media) is never re-set at its own RelTime: a Sonos that ran dry during the outage
- * reports 0:00, which would restart the track from the beginning (RESEARCH Pitfall 1). Those cases use the last polled
+ * reports 0:00, which would restart the track from the beginning (the track would restart from the beginning). Those cases use the last polled
  * position. A FOREIGN stream wins over every readable transport state, so a source that took the speaker and stopped it is
  * not taken over again.
  *

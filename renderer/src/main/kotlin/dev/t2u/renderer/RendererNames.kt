@@ -2,7 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.t2u.renderer
 
-// GUI rename (quick 261101-dcg, PD-4): the names the author gave their renderers. The map lives in <dataDir>/names.json next to
+// Renaming: the names the author gave their renderers. The map lives in <dataDir>/names.json next to
 // hidden.json and manual.json, as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen"}}. A user name replaces the whole shown
 // name (card and DIAL friendly name) exactly as typed, trimmed. Matching (hide, manual, ports, the name filter) never uses it.
 
@@ -24,7 +24,7 @@ import java.io.IOException
 
 private val prettyNamesJson = Json { prettyPrint = true }
 
-/** A UPnP friendlyName "should be < 64 characters" (PD-4); counted in code points, so an emoji counts once. */
+/** A UPnP friendlyName "should be < 64 characters"; counted in code points, so an emoji counts once. */
 const val MAX_RENDERER_NAME = 63
 
 /** T-dcg-02: the names map never holds more than this many renderers (a damaged or runaway file cannot grow it). */
