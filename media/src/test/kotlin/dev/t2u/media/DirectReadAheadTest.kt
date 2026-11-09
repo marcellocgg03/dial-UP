@@ -105,6 +105,17 @@ class DirectReadAheadTest {
         assertTrue(data.copyOfRange(start, end + 1).contentEquals(r.body), "the bytes of range $start-$end differ from upstream's")
     }
 
+    /**
+     * The server adds a request-log entry after it has sent the response, from the connection's own thread, so a slow
+     * machine can still be missing the last entries, or have them in another order than the requests. Waits (5 s at most)
+     * until [ready] holds for a snapshot of the log, then returns the snapshot for the test to assert on.
+     */
+    private fun awaitSeen(ready: (List<MediaRequest>) -> Boolean): List<MediaRequest> {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!ready(seen.toList()) && System.nanoTime() < deadline) Thread.sleep(5)
+        return seen.toList()
+    }
+
     /** The request starts of the device log: a probe at 0, three at 64 KiB and up, then groups of six strided by 163840. */
     private fun deviceLogStarts(total: Int): List<Int> {
         val starts = ArrayList<Int>()
@@ -284,14 +295,18 @@ class DirectReadAheadTest {
             val ms = serve(CachingTestResolver(), up)
             val path = register(ms)
             for (s in listOf(0, 6144, 12288)) scan(ms, path, data, s)
-            // The log entry is added after the response is sent, so on a slow machine the third one can still be missing.
-            val deadline = System.nanoTime() + 5_000_000_000L
-            while (seen.size < 3 && System.nanoTime() < deadline) Thread.sleep(5)
-
-            val lines = seen.map { it.upstream.orEmpty() }
-            assertTrue(lines[0].startsWith("proxy 206 first byte ") && " ms total " in lines[0], "the probe is a plain upstream call: ${lines[0]}")
-            assertTrue(lines[1].startsWith("window 206 first byte ") && " ms total " in lines[1] && lines[1].endsWith(" $READ_AHEAD_WINDOW_BYTES B"), "the window fetch: ${lines[1]}")
-            assertEquals("window hit", lines[2])
+            // Each entry is added after its response is sent, by the connection's own thread: on a slow machine the third
+            // can be missing and two of them can land in the other order. Wait for the three lines, then match by shape.
+            val lines = awaitSeen { log ->
+                val l = log.map { it.upstream.orEmpty() }
+                l.size >= 3 && l.any { it.startsWith("proxy ") } && l.any { it.startsWith("window 206 ") } && "window hit" in l
+            }.map { it.upstream.orEmpty() }
+            assertEquals(3, lines.size, "one line per speaker request: $lines")
+            val probe = lines.single { it.startsWith("proxy ") }
+            val window = lines.single { it.startsWith("window 206 ") }
+            assertTrue(probe.startsWith("proxy 206 first byte ") && " ms total " in probe, "the probe is a plain upstream call: $probe")
+            assertTrue(window.startsWith("window 206 first byte ") && " ms total " in window && window.endsWith(" $READ_AHEAD_WINDOW_BYTES B"), "the window fetch: $window")
+            assertEquals(1, lines.count { it == "window hit" }, "the third range is served from the window: $lines")
             for (l in lines) {
                 assertTrue("googlevideo" !in l && "SECRET" !in l && "gen=" !in l && "http" !in l && "?" !in l, "no URL in: $l")
             }
@@ -315,7 +330,8 @@ class DirectReadAheadTest {
             for (s in starts) scan(ms, path, data, s)
 
             assertEquals(starts.size + 1, up.calls.size, "one refused window, then one call per range as before: ${up.calls.map { it.range }}")
-            assertTrue(seen.any { it.note.orEmpty().startsWith("read-ahead off") }, "the log says so: ${seen.map { it.note }}")
+            val log = awaitSeen { l -> l.size >= starts.size && l.any { it.note.orEmpty().startsWith("read-ahead off") } }
+            assertTrue(log.any { it.note.orEmpty().startsWith("read-ahead off") }, "the log says so: ${log.map { it.note }}")
             assertEquals(0L, ms.readAheadHeldBytes())
         }
     }
@@ -331,8 +347,11 @@ class DirectReadAheadTest {
             )
             val ms = serve(CachingTestResolver(), up)
             val path = register(ms)
-            for (s in listOf(0, 6144, 12288, 18432)) scan(ms, path, data, s)
-            assertTrue(seen.all { it.status == 206 }, "every speaker request was answered: ${seen.map { it.status }}")
+            val starts = listOf(0, 6144, 12288, 18432)
+            for (s in starts) scan(ms, path, data, s)
+            val log = awaitSeen { l -> l.size >= starts.size }
+            assertEquals(starts.size, log.size, "one log entry per speaker request")
+            assertTrue(log.all { it.status == 206 }, "every speaker request was answered: ${log.map { it.status }}")
         }
     }
 
