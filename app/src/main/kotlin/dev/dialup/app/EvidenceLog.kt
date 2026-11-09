@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Evidence text comes partly from untrusted LAN peers (SSDP and HTTP requests), so every line is one
  * JSON object with escaped control characters, string values capped at [MAX_STRING] chars and whole
- * lines capped at [MAX_LINE_BYTES] bytes (threat T-01-02, log injection and log bloat).
+ * lines capped at [MAX_LINE_BYTES] bytes (guards against log injection and log bloat).
  */
 object EvidenceLine {
     const val MAX_STRING = 2048
@@ -197,7 +197,7 @@ class EvidenceLog(
 
     fun event(kind: String, fields: Map<String, Any?> = emptyMap()) {
         if (closed.get()) return
-        // D-08: one filter governs both the file and the logcat mirror; checked before any work
+        // One filter governs both the file and the logcat mirror; checked before any work
         if (!shouldWrite(level, kind, fields)) return
         val ts = OffsetDateTime.now().format(tsFormat)
         val mono = monoNanos()
@@ -269,7 +269,7 @@ class EvidenceLog(
         fun current(): EvidenceLog? = synchronized(lock) { instance?.takeIf { !it.isClosed } }
 
         /**
-         * The process-wide log (CR-01): the same directory returns the existing live instance, a different directory closes the
+         * The process-wide log: the same directory returns the existing live instance, a different directory closes the
          * previous one and opens a new one, so a service restart or the Settings tab never starts a second writer.
          */
         fun shared(dir: File, logcat: ((String) -> Unit)? = null, monoNanos: (() -> Long)? = null): EvidenceLog = synchronized(lock) {

@@ -65,7 +65,7 @@ class FfmpegRunner(
     companion object {
         /**
          * The fields of the `ffmpeg` event. ffmpeg prints the failing input URL, a signed googlevideo URL, to stderr, so the tail
-         * goes through [Resolver.redactUrls] (scheme and host only) before the 512-character cut (RS-02).
+         * goes through [Resolver.redactUrls] (scheme and host only) before the 512-character cut.
          */
         internal fun exitFields(exit: ProcessExit): Map<String, Any?> = mapOf(
             "args" to redact(exit.args),
