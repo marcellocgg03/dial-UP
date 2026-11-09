@@ -7,8 +7,8 @@ package dev.t2u.renderer
 // speaker whose cast receiver is the YouTubeCastReceiver. Pure JVM: the Android glue (Wi-Fi address, payloads, settings,
 // notification) lives in :app and hands everything in through [BridgeNetwork] and [BridgeDeps].
 //
-// One DialAccessPolicy (D-01, SVC-09) feeds both the DIAL servers (through the receiver) and the SSDP responder, so the
-// access mode is read on every request by both. Everything that listens does so on the Wi-Fi IPv4 address only (PLAY-03).
+// One DialAccessPolicy feeds both the DIAL servers (through the receiver) and the SSDP responder, so the
+// access mode is read on every request by both. Everything that listens does so on the Wi-Fi IPv4 address only.
 
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.dial.DialAccessPolicy
@@ -83,7 +83,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Where the bridge listens and searches. [wifiIp] is the only address anything binds to (PLAY-03); [iface] is its
+ * Where the bridge listens and searches. [wifiIp] is the only address anything binds to; [iface] is its
  * interface (null in JVM tests); [ssdpListen] are the responder's multicast listen sockets (port 1900 on the phone).
  * [ssdpSearchTarget] and [notifyTarget] default to the SSDP group; tests point them at unicast sockets.
  */
@@ -95,17 +95,17 @@ data class BridgeNetwork(
     val notifyTarget: InetSocketAddress? = null,
 )
 
-/** D-06: how many speakers have a player that is loading, playing or paused, out of all speakers with a receiver. */
+/** How many speakers have a player that is loading, playing or paused, out of all speakers with a receiver. */
 data class BridgeCount(val casting: Int, val total: Int)
 
 /**
- * Everything the bridge needs from the app around it. [accessMode] is read per request (D-01). [http] must come from
- * `lanHttpClient()` (SVC-05); every client the bridge hands on is derived from it. [scope] is the service scope.
+ * Everything the bridge needs from the app around it. [accessMode] is read per request. [http] must come from
+ * `lanHttpClient()`; every client the bridge hands on is derived from it. [scope] is the service scope.
  * [launcher] runs ffmpeg for the media server (null: streams answer 501, as in JVM tests).
  *
  * The last three are injectable so tests can stand in for YouTube and googlevideo, and default to production: [innerTubeEndpoints]
- * is www.youtube.com, [upstreamPolicy] proxies googlevideo hosts over https only (T-03-31), and [sourceDownloader] (wired in
- * plan 03-11 on Android) is what the file format mp4 downloads their source with; without it, or without [launcher]
+ * is www.youtube.com, [upstreamPolicy] proxies googlevideo hosts over https only, and [sourceDownloader] (wired on
+ * Android) is what the file format mp4 downloads their source with; without it, or without [launcher]
  * or [bufferDir], file builds are unavailable.
  */
 data class BridgeDeps(
@@ -130,55 +130,55 @@ data class BridgeDeps(
     val housekeepingIntervalMs: Long = HOUSEKEEPING_INTERVAL_MS,
     /**
      * What the phone's Wi-Fi is right now; a null result means there is no Wi-Fi at this moment. No supplier means the bridge
-     * assumes it is present, as in JVM tests. The app passes a function that reads the system (plan 05-19).
+     * assumes it is present, as in JVM tests. The app passes a function that reads the system.
      */
     val currentNetwork: (() -> BridgeNetwork?)? = null,
     /** Tests only: builds the SSDP responder for a network. Null builds the production responder. */
     val responderFactory: ((BridgeNetwork, SsdpEvents, DialAccessPolicy) -> SsdpResponder)? = null,
     /**
-     * GUI-08: whether a cast that ends empties the speaker, read at clear time so the setting applies live (D-09). Null
+     * Whether a cast that ends empties the speaker, read at clear time so the setting applies live. Null
      * means the fixed [Config.clearOnCastEnd] decides; the app passes a supplier over its settings.
      */
     val clearOnCastEnd: (() -> Boolean)? = null,
     /**
-     * GUI-08: the cache cap in MiB, read by the file cache at every prune so a size changed in the app applies without a
-     * restart (D-09). Null, or a supplier that throws, means [Config.cacheMb] decides.
+     * The cache cap in MiB, read by the file cache at every prune so a size changed in the app applies without a
+     * restart. Null, or a supplier that throws, means [Config.cacheMb] decides.
      */
     val cacheMb: (() -> Int)? = null,
     /**
-     * GUI-03: the speakers the author hid. Null means nothing is ever hidden (and [Bridge.hide] does nothing); the app passes
+     * The speakers the author hid. Null means nothing is ever hidden (and [Bridge.hide] does nothing); the app passes
      * its process-level store, which also lives while the bridge is off.
      */
     val hidden: HiddenSpeakers? = null,
-    /** GUI-04: the UDP port a speaker added by address is searched at. 1900 on a real network; tests point it at the fake speaker. */
+    /** The UDP port a speaker added by address is searched at. 1900 on a real network; tests point it at the fake speaker. */
     val manualSsdpPort: Int = MANUAL_SSDP_PORT,
-    /** GUI-04: how long [Bridge.addManual] waits for the speaker's answer and its description. */
+    /** How long [Bridge.addManual] waits for the speaker's answer and its description. */
     val manualAnswerTimeoutMs: Long = MANUAL_ANSWER_TIMEOUT_MS,
     /**
-     * GUI-04, D-06: the speakers added by address. A successful [Bridge.addManual] saves the speaker here and [Bridge.start]
+     * The speakers added by address. A successful [Bridge.addManual] saves the speaker here and [Bridge.start]
      * probes every saved entry, so its card returns at every start. Null saves nothing and probes nothing.
      */
     val manual: ManualSpeakers? = null,
     /**
-     * GUI-04, D-07: how often every saved manual speaker is asked again. A speaker that missed two rounds in a row is taken out of
+     * How often every saved manual speaker is asked again. A speaker that missed two rounds in a row is taken out of
      * the registry (no longer a cast target) and comes back when it answers. Tests shorten it.
      */
     val manualProbeIntervalMs: Long = MANUAL_PROBE_INTERVAL_MS,
     /**
-     * GUI-04, D-06, plan 07-17: where [Bridge.addManual] fetches the device description of the typed address when the unicast
+     * Where [Bridge.addManual] fetches the device description of the typed address when the unicast
      * search got no reply (a Sonos speaker ignores it). The argument is the typed IPv4 literal; the result must keep that host
      * ([descriptionUrlAllowed]) or nothing is requested. Tests point it at the fake speaker.
      */
     val manualDescriptionUrl: (String) -> String = ::sonosDescriptionUrl,
-    /** Plan 07-17: how long [Bridge.addManual] waits for a reply to the unicast search before it falls back to the description. */
+    /** How long [Bridge.addManual] waits for a reply to the unicast search before it falls back to the description. */
     val manualSsdpGraceMs: Long = MANUAL_SSDP_GRACE_MS,
     /**
-     * GUI rename (261101-dcg): the names the author gave their renderers, by UDN. Process-level in the app, so it also lives
+     * The names the author gave their renderers, by UDN. Process-level in the app, so it also lives
      * while the bridge is off. Null renames nothing ([Bridge.rename] answers false).
      */
     val names: RendererNames? = null,
     /**
-     * WR-05: the waits between the attempts to rebind the media server on a new address. A busy address is tried again after
+     * The waits between the attempts to rebind the media server on a new address. A busy address is tried again after
      * each delay (so [Bridge.rebindNetwork] makes up to one more attempt than there are delays); an empty list tries once.
      */
     val mediaRebindBackoffMs: List<Long> = MEDIA_REBIND_BACKOFF_MS,
@@ -188,7 +188,7 @@ data class BridgeDeps(
 private const val DROP_LOG_WINDOW_MS = 60_000L
 
 /**
- * D-06: how often the bridge re-announces (LAN mode), probes its own SSDP listener and searches for speakers. Five minutes
+ * How often the bridge re-announces (LAN mode), probes its own SSDP listener and searches for speakers. Five minutes
  * is six times inside the advertised max-age of 1800 s (SsdpMessage CACHE-CONTROL); there is no jitter because one host
  * sends it.
  */
@@ -198,22 +198,22 @@ const val HOUSEKEEPING_INTERVAL_MS = 300_000L
 const val SSDP_SEARCH_REPLY_WINDOW_MS = 3_000L
 
 /**
- * WR-05: the waits between the media-server rebind attempts after a Wi-Fi move. The old Wi-Fi address can still be held for a
+ * The waits between the media-server rebind attempts after a Wi-Fi move. The old Wi-Fi address can still be held for a
  * second or two (TIME_WAIT, a socket the system has not released), so a single failed bind is retried before it is given up;
  * a server that is still down after the last wait is rebound by the next housekeeping pass.
  */
 val MEDIA_REBIND_BACKOFF_MS: List<Long> = listOf(1_000L, 2_000L, 4_000L)
 
-/** How many sources the per-address reply record holds (GUI-04, T-07-32); the oldest goes when a new source arrives at the cap. */
+/** How many sources the per-address reply record holds; the oldest goes when a new source arrives at the cap. */
 private const val MANUAL_REPLY_CAP = 64
 
 /** How often [Bridge.addManual] looks for the answer. */
 private const val MANUAL_POLL_MS = 100L
 
-/** Plan 07-17: the shortest time the description fetch of an add is given, whatever is left of the probe budget. */
+/** The shortest time the description fetch of an add is given, whatever is left of the probe budget. */
 private const val MANUAL_DESCRIBE_MIN_MS = 1_000L
 
-/** Plan 07-18: the timeout of one saved-speaker liveness fetch (T-07-50). */
+/** The timeout of one saved-speaker liveness fetch. */
 private const val MANUAL_LIVENESS_FETCH_MS = 3_000L
 
 /** A receiver younger than this is kept in the move list even while it is still "stopped" (its start has not run yet). */
@@ -223,7 +223,7 @@ private const val TRACK_GRACE_MS = 120_000L
 private const val PROBE_TIMEOUT_MS = 2000L
 
 /**
- * D-9: a device description's UDN (`uuid:RINCON_..._MR` on a real Sonos, upper case) in the form `udnFromUsn` gives a USN's UDN,
+ * A device description's UDN (`uuid:RINCON_..._MR` on a real Sonos, upper case) in the form `udnFromUsn` gives a USN's UDN,
  * which is the key the registry, replySources, hidden.json and manual.json all use: the `uuid:` prefix removed in any letter
  * case, trimmed and lower-cased.
  */
@@ -234,7 +234,7 @@ internal fun descriptionUdn(raw: String): String {
 }
 
 class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
-    /** Where the bridge listens now; [rebindNetwork] replaces it, so every reader takes the current value (plan 05-07). */
+    /** Where the bridge listens now; [rebindNetwork] replaces it, so every reader takes the current value. */
     @Volatile private var net: BridgeNetwork = net
 
     /** Set by [networkLost], cleared by [rebindNetwork]: housekeeping has nothing to do on a dead network. */
@@ -269,7 +269,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /**
      * Serialises everything that changes the sockets: the probe and repair step of housekeeping, [networkLost] and
      * [rebindNetwork]. A housekeeping pass holds it only around that step, never through its search and retries, so a
-     * network drop is acknowledged at once (review WR-06).
+     * network drop is acknowledged at once.
      */
     private val netLock = Mutex()
 
@@ -278,7 +278,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * Wall-clock time the last run that completed started; null before the first. A run that failed or was cancelled stamps
-     * nothing, so the next trigger runs instead of being skipped as recent (WR-06). Guards against a timer tick and an alarm
+     * nothing, so the next trigger runs instead of being skipped as recent. Guards against a timer tick and an alarm
      * tick doubling up.
      * It is the wall clock (not nanoTime) because sleep time must count; a clock that moved backwards counts as "not recent".
      */
@@ -291,7 +291,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      */
     private val advertisedDevices = ConcurrentHashMap<String, SsdpDevice>()
 
-    // Evidence for the device session (plan 05-18, W1): did anything reach the app after the network came back? M-SEARCH
+    // Evidence for the device session: did anything reach the app after the network came back? M-SEARCH
     // datagrams (the own liveness probe excluded) and DIAL HTTP requests counted since the last housekeeping event that took
     // them, and when the last of each arrived. Counts and times only: no address, name or payload.
     private val msearchRx = java.util.concurrent.atomic.AtomicLong(0)
@@ -309,8 +309,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     private val replySources = ConcurrentHashMap<String, SourceReply>()
 
     /**
-     * Records a reply from [address]. A full table evicts its oldest entry whose address is not a saved manual address (plan
-     * 07-18, WR-03: a chatty LAN must not make a saved speaker look silent); when every entry is a saved address nothing is
+     * Records a reply from [address]. A full table evicts its oldest entry whose address is not a saved manual address (a chatty
+     * LAN must not make a saved speaker look silent); when every entry is a saved address nothing is
      * evicted and the table stays at most [MAX_MANUAL] over the cap. Internal so a test can drive it.
      */
     internal fun noteReply(address: String, udn: String) {
@@ -338,7 +338,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * One entry per speaker the bridge can cast to (a device without AVTransport or one the name filter excludes is never in
-     * the registry), each following its [Renderer.ui]. Empty until the first speaker is up and again after [stop] (plan 07-03).
+     * the registry), each following its [Renderer.ui]. Empty until the first speaker is up and again after [stop].
      */
     val speakers: StateFlow<List<SpeakerUi>> = _speakers.asStateFlow()
 
@@ -391,7 +391,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
-    /** The running renderer with this UDN, for the card controls of the status UI; null when there is none (plan 07-03). */
+    /** The running renderer with this UDN, for the card controls of the status UI; null when there is none. */
     fun renderer(udn: String): Renderer? = registry?.renderers().orEmpty().filterIsInstance<Renderer>().firstOrNull { it.udn == udn }
 
     private fun emit(kind: String, vararg fields: Pair<String, Any?>) {
@@ -416,7 +416,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-08: deletes every finished file in the cache that no stream pins (T-07-21) and returns how many went; 0 when this
+     * Deletes every finished file in the cache that no stream pins and returns how many went; 0 when this
      * bridge has no file builder. A `cache` event records the count.
      */
     fun clearCache(): Int {
@@ -425,7 +425,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         return cleared
     }
 
-    /** GUI-08: files, bytes and cap of the cache now; null when this bridge has no file builder. */
+    /** Files, bytes and cap of the cache now; null when this bridge has no file builder. */
     fun cacheInfo(): CacheInfo? = mediaServer?.cacheInfo()
 
     /** How many file builds and source downloads run now (0 without a file builder); the yt-dlp updater waits while it is above 0. */
@@ -441,11 +441,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-03, D-08: drops the speaker [udn] as a DIAL target at once and keeps it out until [unhide]. The speaker joins the
+     * Drops the speaker [udn] as a DIAL target at once and keeps it out until [unhide]. The speaker joins the
      * hidden set first, so every guard (alive, retry, a setup in flight) refuses it before the receiver goes; then a playing
      * speaker is stopped (and emptied only when clear-when-cast-ends is on) and its receiver stopped, which sends
      * ssdp:byebye, closes its DIAL port and ends the lounge session. The other speakers are not touched. A saved renderer that
-     * does not answer (no running speaker, but an entry in manual.json) is hidden too (PD-3): there is nothing to stop, its greyed
+     * does not answer (no running speaker, but an entry in manual.json) is hidden too: there is nothing to stop, its greyed
      * card leaves the list, and its probes go on while the registry's hidden guard refuses their answers. False when there is
      * neither a running nor a saved speaker with that UDN, or no hidden store.
      */
@@ -468,7 +468,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI rename (261101-dcg, PD-4, PD-5): [name] is the author's name for the renderer [udn]; null goes back to the name the
+     * Rename: [name] is the author's name for the renderer [udn]; null goes back to the name the
      * renderer described itself with. A name goes through [RendererNames.set], so an unusable one (blank, over 63 characters, a
      * control character) answers false and changes nothing. Afterwards, while the bridge runs, the running renderer with that UDN
      * (if any) shows the new name on its card and serves it as its DIAL friendly name at once, without a restart. Emits `renamed`.
@@ -483,7 +483,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-03: brings the hidden speaker [udn] back. It leaves the hidden set, then the bridge searches for speakers at once so
+     * Brings the hidden speaker [udn] back. It leaves the hidden set, then the bridge searches for speakers at once so
      * the speaker returns without waiting for the next periodic search. False when it was not hidden (or there is no store).
      */
     suspend fun unhide(udn: String): Boolean {
@@ -497,7 +497,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-14: one MediaRenderer search on demand, from the Refresh button or the app coming to the foreground. [trigger] names
+     * One MediaRenderer search on demand, from the Refresh button or the app coming to the foreground. [trigger] names
      * who asked (`ui`, `foreground`). It goes through the running bridge's SSDP client and never opens or reopens sockets; the
      * periodic schedule and the prune are separate and unchanged. Sends nothing, and answers false, when the bridge is not
      * running or its network is marked down (emits `search` with `skipped`). True when the search was sent.
@@ -535,15 +535,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-04, D-06: adds the speaker at [ip] by asking it directly. One unicast M-SEARCH goes to [ip] on
+     * Adds the speaker at [ip] by asking it directly. One unicast M-SEARCH goes to [ip] on
      * [BridgeDeps.manualSsdpPort]; the reply reaches the registry like any search reply (so its guards apply: the LOCATION host
      * must equal the sender and be private LAN, excluded servers and hidden speakers are refused), and the card exists only
-     * when that setup succeeds. Nothing is sent unless [manualTargetAllowed] accepts [ip] (T-07-29). Only a reply whose source
-     * address is [ip] counts (T-07-30). A Sonos speaker ignores a unicast M-SEARCH, so when no reply came within
-     * [BridgeDeps.manualSsdpGraceMs] the bridge fetches the device description from the typed address (plan 07-17: one GET to
+     * when that setup succeeds. Nothing is sent unless [manualTargetAllowed] accepts [ip]. Only a reply whose source
+     * address is [ip] counts. A Sonos speaker ignores a unicast M-SEARCH, so when no reply came within
+     * [BridgeDeps.manualSsdpGraceMs] the bridge fetches the device description from the typed address (one GET to
      * [BridgeDeps.manualDescriptionUrl], host must equal [ip]) and hands it to the registry as synthetic alive headers, so the
      * same guards apply. Waits at most [BridgeDeps.manualAnswerTimeoutMs] in total. A speaker the bridge already lists is
-     * reported at once. Added and AlreadyListed results are saved (plan 07-13), every other result saves nothing.
+     * reported at once. Added and AlreadyListed results are saved, every other result saves nothing.
      */
     suspend fun addManual(ip: InetAddress): ManualAddResult {
         val outcome = probeManual(ip)
@@ -555,7 +555,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** What [probeManual] came to and which probe path produced the answer: `ssdp` (unicast search) or `http` (description). */
     private class ProbeOutcome(val result: ManualAddResult, val via: String)
 
-    /** D-06: a speaker that was added or was already listed is remembered; every other outcome leaves nothing behind. */
+    /** A speaker that was added or was already listed is remembered; every other outcome leaves nothing behind. */
     private suspend fun saveManual(ip: InetAddress, result: ManualAddResult) {
         val store = deps.manual ?: return
         val udn = when (result) {
@@ -568,15 +568,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * D-06: asks every saved speaker directly, as the first add did. Each address passes [parseIpv4Literal] and
-     * [manualTargetAllowed] again (T-07-31), so a damaged or edited file cannot aim the bridge at a public address. The replies
+     * Asks every saved speaker directly, as the first add did. Each address passes [parseIpv4Literal] and
+     * [manualTargetAllowed] again, so a damaged or edited file cannot aim the bridge at a public address. The replies
      * reach the registry like any search reply; a speaker that does not answer simply has no card until it does.
      */
     private fun probeSavedSpeakers(client: Ssdp, reg: RendererRegistry) {
         val saved = deps.manual?.entries?.value.orEmpty()
         if (saved.isEmpty()) return
         handlerScope.launch {
-            // plan 07-18: besides the unicast search, each saved speaker's description is fetched, because a Sonos ignores the search
+            // Besides the unicast search, each saved speaker's description is fetched, because a Sonos ignores the search
             for (entry in saved.take(MAX_MANUAL)) {
                 launch { sendManualProbe(client, entry) }
                 launch { describeSaved(entry, reg) }
@@ -584,7 +584,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
-    /** One unicast search to a saved speaker, after the same two address checks as the first add (T-07-31). Never throws. */
+    /** One unicast search to a saved speaker, after the same two address checks as the first add. Never throws. */
     private suspend fun sendManualProbe(client: Ssdp, entry: ManualSpeaker) {
         val ip = parseIpv4Literal(entry.ip)
         if (ip == null || !manualTargetAllowed(ip)) {
@@ -602,15 +602,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-04, D-07: once per [BridgeDeps.manualProbeIntervalMs] decides for every saved speaker whether it
+     * Once per [BridgeDeps.manualProbeIntervalMs] decides for every saved speaker whether it
      * answered since the previous round (any search reply or NOTIFY from its address counts, see [noteReply]); a speaker that
      * missed two rounds in a row is removed from the registry, so it stops being a cast target, and a later answer sets it up
      * again through the registry's ordinary alive path. Then every saved speaker is asked again, which is also what keeps a
      * speaker that only answers unicast from being pruned after 45 minutes. A round is skipped while the network is down
      * (nothing could have answered). The client is read from the field, so a rebind's replacement is followed. [since] is when
-     * the start-up probe went out. At most [MAX_MANUAL] datagrams per round (T-07-33).
+     * the start-up probe went out. At most [MAX_MANUAL] datagrams per round.
      *
-     * Quick 261102-dmv, D-11: a saved speaker whose UDN is running in the registry at another address than the saved one has
+     * A saved speaker whose UDN is running in the registry at another address than the saved one has
      * moved (new subnet or DHCP lease) and discovery already found it there. Its saved address is replaced by the live one
      * (`manual-moved`, manual.json rewritten, keyed by UDN) at the start of the round, and the old address gets no verdict,
      * because it would never answer and would drop the live renderer. When the live address is not a private LAN address or the
@@ -626,14 +626,14 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             while (true) {
                 delay(deps.manualProbeIntervalMs)
                 if (networkDown) continue
-                // D-11: entries whose renderer is running at another address are moved to it (or at least not judged) first
+                // Entries whose renderer is running at another address are moved to it (or at least not judged) first
                 val movedAway = adoptMovedSpeakers(reg, store)
                 val saved = store.entries.value
                 val udns = saved.map { it.udn }.toSet()
                 liveness.keys.retainAll(udns)
                 offline.retainAll(udns)
                 for (udn in movedAway) liveness.remove(udn)
-                // plan 07-18: the description fetches finish before the verdicts, so an HTTP answer in this round counts
+                // The description fetches finish before the verdicts, so an HTTP answer in this round counts
                 coroutineScope { for (entry in saved.take(MAX_MANUAL)) launch { describeSaved(entry, reg) } }
                 // taken after the fetches: an answer from this round must not count again in the next one
                 val roundAt = System.currentTimeMillis()
@@ -659,7 +659,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * D-11: for every saved speaker whose UDN runs in [reg] at an address other than the saved one, saves the live address
+     * For every saved speaker whose UDN runs in [reg] at an address other than the saved one, saves the live address
      * (and the live description URL when it belongs to that address, else the default one) in place of the stale one and logs
      * `manual-moved`. Returns the UDNs of all such speakers, adopted or not, so the caller skips their liveness verdict: the
      * saved address is wrong, so its silence says nothing about the renderer. A live address that fails [manualTargetAllowed]
@@ -682,15 +682,15 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * GUI-04, D-07: forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
-     * of the registry (byebye, DIAL server closed); its hidden and renamed marks go too (quick 261101-oib). A speaker that multicast discovery also finds comes back at the next search as
+     * Forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
+     * of the registry (byebye, DIAL server closed); its hidden and renamed marks go too. A speaker that multicast discovery also finds comes back at the next search as
      * an ordinary discovered speaker without the manual mark; hiding it is what keeps it away. False when it was not saved.
-     * The app calls this from Delete on the card of a renderer saved by address (quick 261101-oib); BridgeManualTest covers it.
+     * The app calls this from Delete on the card of a renderer saved by address; BridgeManualTest covers it.
      */
     suspend fun removeManual(udn: String): Boolean {
         val store = deps.manual ?: return false
         if (!store.remove(udn)) return false
-        // quick 261101-oib: nothing of the renderer stays behind; a hidden one is un-hidden, its user name is dropped
+        // Nothing of the renderer stays behind; a hidden one is un-hidden, its user name is dropped
         deps.hidden?.remove(udn)
         deps.names?.remove(udn)
         if (started.get() && !stopped.get()) registry?.remove(udn, "manual-removed", null)
@@ -713,7 +713,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val host = ip.hostAddress.orEmpty()
         val listedBefore = reg.renderers().firstOrNull { it.address == host }
         if (listedBefore != null && deps.hidden?.contains(listedBefore.udn) != true) {
-            // review CR-02: a speaker that already has a card needs no probe; it also may not answer a unicast search at all
+            // A speaker that already has a card needs no probe; it also may not answer a unicast search at all
             return ProbeOutcome(ManualAddResult.AlreadyListed(listedBefore.udn, listedBefore.name ?: listedBefore.udn), "listed")
         }
         // an answer from before this probe must not count
@@ -763,10 +763,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * Plan 07-17, D-06: the HTTP fallback for a speaker that ignores a unicast search (a Sonos speaker). Fetches the device
-     * description at [BridgeDeps.manualDescriptionUrl] for [ip], only when [descriptionUrlAllowed] accepts the URL (T-07-45), and
+     * The HTTP fallback for a speaker that ignores a unicast search (a Sonos speaker). Fetches the device
+     * description at [BridgeDeps.manualDescriptionUrl] for [ip], only when [descriptionUrlAllowed] accepts the URL, and
      * feeds it to the registry as the alive headers an SSDP reply would have carried: `LOCATION` is the URL just fetched, so the
-     * registry's host-equals-sender, private LAN, hidden and excluded-server guards apply unchanged (T-07-46). The `SERVER` header
+     * registry's host-equals-sender, private LAN, hidden and excluded-server guards apply unchanged. The `SERVER` header
      * is left empty because [fetchDescription] does not expose response headers; a device that is not a MediaRenderer is stopped
      * here or by the registry's setup. Returns a final result when the description decides it (not a speaker), otherwise null and
      * the caller's loop reads the registry. Never throws except for cancellation.
@@ -825,11 +825,11 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * Plan 07-18, WR-03, D-07: the liveness signal for a saved manual speaker that never answers a unicast search (a Sonos
+     * The liveness signal for a saved manual speaker that never answers a unicast search (a Sonos
      * speaker). Fetches the speaker's description (the saved `location` when [descriptionUrlAllowed] holds for the re-validated
-     * saved address, otherwise [BridgeDeps.manualDescriptionUrl], T-07-48) and counts it as an answer only when the document's UDN
-     * equals the saved one, letter case ignored because a Sonos serves it in upper case and the saved one is lower case
-     * (T-07-49, D-9); the registry then refreshes the running renderer or sets it up. A failure is one `manual-probe` event
+     * saved address, otherwise [BridgeDeps.manualDescriptionUrl]) and counts it as an answer only when the document's UDN
+     * equals the saved one, letter case ignored because a Sonos serves it in upper case and the saved one is lower case;
+     * the registry then refreshes the running renderer or sets it up. A failure is one `manual-probe` event
      * and means "no answer". Never throws except for cancellation.
      */
     private suspend fun describeSaved(entry: ManualSpeaker, reg: RendererRegistry): Boolean {
@@ -862,8 +862,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * Blocking form of [startSuspending], for tests and callers that are not in a coroutine. The app calls [startSuspending]
-     * (WR-06): a blocking start inside a coroutine would hold its dispatcher thread through the bind and the engine start.
+     * Blocking form of [startSuspending], for tests and callers that are not in a coroutine. The app calls [startSuspending]:
+     * a blocking start inside a coroutine would hold its dispatcher thread through the bind and the engine start.
      */
     fun start() {
         runBlocking { startSuspending() }
@@ -872,7 +872,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /**
      * Starts the media server, the SSDP responder and client and the discovery schedules. The body runs on [Dispatchers.IO]
      * because the bind and the engine start block. Throws after undoing a failed start, and a start that threw (a rejected
-     * config included) leaves the bridge not running (WR-06).
+     * config included) leaves the bridge not running.
      */
     suspend fun startSuspending() {
         check(started.compareAndSet(false, true)) { "already started" }
@@ -892,7 +892,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
         val wifi = net.wifiIp.hostAddress.orEmpty()
         // File builds (mp4) need ffmpeg, a place to write and a way to download the source. The builder keeps its
-        // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb` (D-02, D-12); it
+        // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb`; it
         // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
         // directory itself. The media server owns the builder's lifetime.
         val launcher = deps.launcher
@@ -1008,7 +1008,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
         handlerScope.launch { visibleCountFlow(reg).collect { _visibleCastCount.value = it } }
         handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
-        // reads the field, so a later replacement of the client is followed (plan 05-07)
+        // reads the field, so a later replacement of the client is followed
         reg.launchSchedules(handlerScope) { multicastSearch("schedule", markRegistrySearched = false) }
         handlerScope.launch {
             while (true) {
@@ -1165,9 +1165,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * The status UI's list: every renderer's [Renderer.ui] combined, rebuilt whenever a speaker joins or leaves the registry.
-     * With a manual store (GUI-04, D-07) a running speaker whose UDN is saved is marked manual, and a saved speaker that is not
+     * With a manual store a running speaker whose UDN is saved is marked manual, and a saved speaker that is not
      * running (it does not answer) is listed after them as an offline card: idle, no track, controls off. A hidden saved speaker
-     * is not listed (PD-3): the registry refuses it, and it must not come back as a greyed card.
+     * is not listed: the registry refuses it, and it must not come back as a greyed card.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun speakersFlow(reg: RendererRegistry): Flow<List<SpeakerUi>> {
@@ -1189,7 +1189,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     // ------------------------------------------------------------------------------------------ commands
 
-    /** D-01: lan makes the receivers visible to the whole network right away; phone-only needs no action (the policy is read per request). */
+    /** `lan` makes the receivers visible to the whole network right away; phone-only needs no action (the policy is read per request). */
     fun onAccessModeChanged(mode: DialAccessMode) {
         if (mode == DialAccessMode.LAN) responder?.announce()
     }
@@ -1200,12 +1200,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * The periodic safety net for discovery (D-06, Phase 1 carry-over d). In LAN mode it sends ssdp:alive for every
+     * The periodic safety net for discovery. In LAN mode it sends ssdp:alive for every
      * receiver again; in phone-only mode it sends nothing (the receivers must stay invisible to the LAN) and logs why.
      * In both modes it proves that the responder's own listener still receives, by sending itself one probe, and on
      * silence it reopens the listen sockets (a socket-level repair, never a bridge rebind) and probes once more.
      * Returns true when the run happened; false when the bridge is not running or the run failed (also logged). Only a run that
-     * completed counts as done: a failed one does not make the next trigger "recent" (WR-06).
+     * completed counts as done: a failed one does not make the next trigger "recent".
      *
      * It skips (touching nothing) while the network is marked down ([networkLost]) and while the system reports no Wi-Fi
      * ([BridgeDeps.currentNetwork]; this still matters when [networkLost] has not been called yet): probing and reopening
@@ -1222,12 +1222,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             return false
         }
         return try {
-            // a timer tick and an alarm tick (plan 05-11) must not double up; the adb trigger is a person asking
-            // the recent check sits inside the lock so two simultaneous triggers run once (WR-06)
+            // a timer tick and an alarm tick must not double up; the adb trigger is a person asking
+            // the recent check sits inside the lock so two simultaneous triggers run once
             housekeepingLock.withLock {
                 val now = deps.clock()
                 val last = lastHousekeepingAt
-                // a negative elapsed time means the wall clock moved back: that is not "recent" (review WR-07)
+                // a negative elapsed time means the wall clock moved back: that is not "recent"
                 val elapsed = if (last != null) now - last else null
                 if (trigger != "adb" && elapsed != null && elapsed >= 0 && elapsed < deps.housekeepingIntervalMs / 2) {
                     emit("housekeeping", "trigger" to trigger, "skipped" to "recent", "ranAgoMs" to elapsed)
@@ -1294,7 +1294,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             clientFailed = true
             false
         }
-        // the registry defers its first prune after a long sleep until a search ran (plan 05-04)
+        // the registry defers its first prune after a long sleep until a search ran
         if (searched) registry?.searched()
         if (accessPolicy?.announceAllowed() == true) {
             withContext(Dispatchers.IO) { responder?.announce() }
@@ -1302,7 +1302,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } else {
             emit("reannounce", "mode" to "phone", "skipped" to "phone-only", "trigger" to trigger)
         }
-        // speakers whose setup failed or whose receiver stopped itself: the timer may have slept through their time (D-05)
+        // speakers whose setup failed or whose receiver stopped itself: the timer may have slept through their time
         val retried = try {
             registry?.retryDue() ?: 0
         } catch (e: CancellationException) {
@@ -1328,7 +1328,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * Proves the responder's own listener still receives and repairs what reopening cannot heal (D-06, review WR-03). The
+     * Proves the responder's own listener still receives and repairs what reopening cannot heal. The
      * caller holds [netLock]. Order: probe; on failure reopen the sockets ([SsdpResponder.restartListeners]) and probe again;
      * when that fails too, or the responder is missing, rebuild it ([repairResponder]). A client that could not search is
      * rebuilt too ([repairClient]). At most one of each per pass. Returns how many repairs were attempted.
@@ -1384,7 +1384,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /**
      * Replaces a responder that reopening could not heal (or that a failed rebind step left missing) with a new one on the
      * bridge's own address, serving every device the receivers advertised. Announces again only when the access policy allows
-     * it (never in phone-only mode, T-05-49). Skipped when the system address differs from the bridge's (T-05-50). The caller
+     * it (never in phone-only mode). Skipped when the system address differs from the bridge's. The caller
      * holds [netLock]. Returns false when nothing was attempted.
      */
     private suspend fun repairResponder(trigger: String): Boolean {
@@ -1486,19 +1486,19 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             networkDown = true
             emit("bridge", "event" to "network-lost")
             for (tracked in receiverList.toList()) tracked.receiver.onNetworkLost()
-            // polls pause on every renderer: what a broken stream does on the speaker is not mirrored to the phone (plan 05-08)
+            // polls pause on every renderer: what a broken stream does on the speaker is not mirrored to the phone
             for (r in registry?.renderers().orEmpty()) step("renderer", "network-lost") { r.onNetworkLost() }
         }
     }
 
     /**
-     * Moves the running bridge to [newNet] in place (SVC-04): a new SSDP responder and client on the new
+     * Moves the running bridge to [newNet] in place: a new SSDP responder and client on the new
      * address, every running receiver's DIAL server moved by [YouTubeCastReceiver.rebindDial]. Renderers, players and lounge
      * sessions stay, so the phone's cast session survives, and nothing is cleared on any speaker. When the address is
      * unchanged, the media listener stays in place to avoid interrupting active streams with an unnecessary server restart.
      * Each step is isolated, so one failure leaves the rest moved and logged. Does nothing unless the bridge is running and is
-     * only called on network events (D-06). It does not retry (D-05) with one exception: a changed-address media bind is tried
-     * again after [BridgeDeps.mediaRebindBackoffMs] (WR-05), and a media server that is still down afterwards is rebound by
+     * only called on network events. It does not retry with one exception: a changed-address media bind is tried
+     * again after [BridgeDeps.mediaRebindBackoffMs], and a media server that is still down afterwards is rebound by
      * housekeeping ([repairMedia]).
      */
     suspend fun rebindNetwork(newNet: BridgeNetwork) {
@@ -1516,7 +1516,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 step("media", "rebind") { rebindMedia(newIp) }
             }
             // a stopped responder is never left installed: the field is cleared as soon as the old one is stopped, and only a
-            // replacement that started is assigned (review WR-03); housekeeping rebuilds what a failed step leaves missing
+            // replacement that started is assigned; housekeeping rebuilds what a failed step leaves missing
             step("responder-stop", "rebind") {
                 try {
                     withContext(Dispatchers.IO) { oldResponder?.stop() }
@@ -1561,7 +1561,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * WR-05: moves the media server to [host], trying again after each [BridgeDeps.mediaRebindBackoffMs] delay when the bind
+     * Moves the media server to [host], trying again after each [BridgeDeps.mediaRebindBackoffMs] delay when the bind
      * fails. One `media-rebind` event per attempt. The last failure is rethrown, so [step] logs it as before. The caller holds
      * [netLock], which a retry holds for the length of the waits.
      */
@@ -1587,9 +1587,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
-     * WR-05: rebinds a media server that is running but not listening (a move whose bind kept failing) on the bridge's own
+     * Rebinds a media server that is running but not listening (a move whose bind kept failing) on the bridge's own
      * address. Does nothing when there is no media server or it is listening; skipped when the system address differs from the
-     * bridge's (T-05-50: that is the rebind's job). The caller holds [netLock]. Returns true when a rebind was attempted.
+     * bridge's (that is the rebind's job). The caller holds [netLock]. Returns true when a rebind was attempted.
      */
     private suspend fun repairMedia(trigger: String): Boolean {
         val media = mediaServer ?: return false
@@ -1695,7 +1695,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                             put("port", r.port)
                             put("status", (r as? Player)?.status?.name)
                             put("lastError", (r as? Renderer)?.lastError)
-                            // The learned SetNextAVTransportURI support: true, false, or JSON null while unknown (D-15).
+                            // The learned SetNextAVTransportURI support: true, false, or JSON null while unknown.
                             put("gapless", (r as? Renderer)?.gaplessSupport)
                         }
                     },
@@ -1721,16 +1721,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     // ------------------------------------------------------------------------------------------ stop
 
     /**
-     * Removes everything this bridge put on the network (D-06, Pitfall 12): in-flight setups are cancelled, every receiver
+     * Removes everything this bridge put on the network: in-flight setups are cancelled, every receiver
      * is destroyed (byebye, DIAL port closed, loungeScreenDisconnected), then the SSDP client, the responder and the media
      * server stop. Each step is isolated, so one failure never skips the rest. Safe to call twice.
      *
-     * With [clearSpeakers] every speaker this app loaded is emptied first (CAST-06; in parallel, each bounded, see
+     * With [clearSpeakers] every speaker this app loaded is emptied first (in parallel, each bounded, see
      * [RendererRegistry.removeAll]). Clear only on an explicit service Stop: a Wi-Fi rebind (the bridge comes
      * straight back), a start that failed, a goodbye and a stale speaker leave the speaker alone.
      *
-     * D-03: switching the bridge off ends playback. With [stopSpeakers] every speaker that is playing gets a Stop and keeps
-     * its track loaded; only [clearSpeakers] (the GUI-08 setting) also empties it. Neither flag: the speakers are not
+     * Switching the bridge off ends playback. With [stopSpeakers] every speaker that is playing gets a Stop and keeps
+     * its track loaded; only [clearSpeakers] (the setting to empty speakers when a cast ends) also empties it. Neither flag: the speakers are not
      * touched (the reload-config restart, where the bridge comes straight back).
      */
     suspend fun stop(clearSpeakers: Boolean = false, stopSpeakers: Boolean = false) {
