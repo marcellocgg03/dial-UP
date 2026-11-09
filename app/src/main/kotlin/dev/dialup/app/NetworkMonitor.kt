@@ -14,7 +14,7 @@ import java.net.Inet4Address
 /**
  * Logs every Wi-Fi network event as a `net` evidence line and calls [onChange] (with the event name)
  * whenever the phone's current Wi-Fi IPv4 address (a [WifiAddressTracker] over all Wi-Fi networks, so the loss of a
- * network that is not the current one changes nothing, review WR-04) differs from the last one seen, including going
+ * network that is not the current one changes nothing) differs from the last one seen, including going
  * to none and coming back (without this, matrix row 6 would measure the spike and not Android).
  * [seed] sets the address the owner is currently bound to so the initial callbacks cause no rebind.
  */
