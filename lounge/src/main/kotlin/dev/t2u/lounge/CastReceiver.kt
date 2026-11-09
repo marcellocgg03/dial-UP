@@ -23,12 +23,12 @@ interface CastReceiver {
     /**
      * Registers the owner's callback. It is called once per receiver by its owner; the receiver calls it after it
      * stopped itself because a lounge session failed for good, so the owner can give the speaker a new receiver
-     * (plan 05-04). The default does nothing, for receivers that never stop themselves.
+     * The default does nothing, for receivers that never stop themselves.
      */
     fun setOnTerminate(callback: (Throwable) -> Unit) {}
 
     /**
-     * GUI rename (261101-dcg, PD-5): from now on [name] is this receiver's DIAL friendly name. The device description answers
+     * Renaming from the settings screen: from now on [name] is this receiver's DIAL friendly name. The device description answers
      * with it at once and the device is advertised again (ssdp:alive where announcing is allowed). The lounge screen name keeps
      * the start-time name until the receiver's next start. The default does nothing.
      */

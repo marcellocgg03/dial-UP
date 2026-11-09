@@ -1,9 +1,9 @@
 package dev.t2u.lounge
 
-// Kotlin original: message-level logging for the lounge port, CAST-08.
+// Kotlin original: message-level logging for the lounge port.
 //
 // The lounge protocol is undocumented and can change without notice, so every message in both directions and every
-// raw chunk is reported to the EventSink, always redacted (T-02-30): lounge tokens, SID, gsessionid, screen and device
+// raw chunk is reported to the EventSink, always redacted: lounge tokens, SID, gsessionid, screen and device
 // ids, pairing codes and a sender's user name or avatar never reach a log. The key list follows tools/lounge-fixtures.py,
 // which scrubbed the recorded fixtures with the same rules.
 

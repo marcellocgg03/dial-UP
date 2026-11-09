@@ -1,8 +1,8 @@
 package dev.t2u.lounge
 
 // Replaces the incoming-message parsing of yt-cast-receiver 2.1.0 lib/app/Message.js (parseIncoming) and the
-// line reader of lib/app/RPCConnection.js (MIT, Copyright (c) Patrick Kan). CAST-08:
-// the lounge sends `<len>\n<payload>` chunks where len counts UTF-16 code units of the UTF-8-decoded text. The Node
+// line reader of lib/app/RPCConnection.js (MIT, Copyright (c) Patrick Kan).
+// The lounge sends `<len>\n<payload>` chunks where len counts UTF-16 code units of the UTF-8-decoded text. The Node
 // version ran a regex over single lines, which breaks on accented titles, emoji and chunks split across reads. This
 // decoder buffers until a chunk is complete and never reports message text (it can hold credentials).
 
@@ -21,7 +21,8 @@ data class IncomingMessage(val aid: Int, val name: String, val payload: JsonElem
 /**
  * Feed it text as it arrives; it calls [onPayload] with each complete chunk payload, in order.
  * A length line that is not a number is dropped and reported; a length above [maxChunkChars] resets the buffer
- * and is reported (T-02-32). [onGarbage] receives a short description only, never message text.
+ * and is reported, so a hostile length cannot make it buffer without bound. [onGarbage] receives a short
+ * description only, never message text.
  */
 class ChunkDecoder(
     private val onPayload: (String) -> Unit,

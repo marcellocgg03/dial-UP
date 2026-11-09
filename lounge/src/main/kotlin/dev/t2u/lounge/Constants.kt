@@ -4,7 +4,7 @@ package dev.t2u.lounge
 // lib/app/Session.js, lib/app/RPCConnection.js and lib/app/YouTubeApp.js
 // (MIT, Copyright (c) Patrick Kan).
 //
-// CAST-08 / protocol-risk constraint: the YouTube lounge protocol is undocumented and can
+// Protocol-risk constraint: the YouTube lounge protocol is undocumented and can
 // change without notice, so every protocol constant (URLs, bind parameters, device info, client
 // themes, player status codes, store keys, timeouts, user agent) lives in this one file. A protocol
 // change is a one-file diff.
@@ -95,7 +95,7 @@ object LoungeConstants {
     /** The Node server's undici body timeout (5 minutes) bounds the lounge long poll. */
     const val RPC_READ_TIMEOUT_MS = 300000L
 
-    /** The working Node server's User-Agent; the lounge endpoints are known to accept it (Pitfall 8). */
+    /** The working Node server's User-Agent; the lounge endpoints are known to accept it. */
     const val USER_AGENT = "node"
 
     /** Sender-initiated volume reports are coalesced over this interval. */
