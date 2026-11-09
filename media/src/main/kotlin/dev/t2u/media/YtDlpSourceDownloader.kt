@@ -15,7 +15,7 @@ import java.nio.file.attribute.PosixFilePermissions
 // yt-dlp call goes through YtDlpGateway.
 
 /**
- * A yt-dlp download failed. The message is free of signed URLs (T-03-18); [forbidden] is true when yt-dlp reported
+ * A yt-dlp download failed. The message is free of signed URLs; [forbidden] is true when yt-dlp reported
  * "HTTP Error 403", which the caller treats as a reason to extract afresh.
  */
 class DownloadException(message: String, val forbidden: Boolean) : Exception(message)
@@ -27,11 +27,11 @@ class DownloadException(message: String, val forbidden: Boolean) : Exception(mes
  *
  * The info JSON holds signed googlevideo URLs, so it goes into a file only this app can read (mode 600, created
  * new), next to [target]. Whatever is already at that path, a leftover or a symlink somebody planted, is removed
- * first and never written through (T-03-22, T-03-23). The file is deleted afterwards whether the download worked or not.
+ * first and never written through. The file is deleted afterwards whether the download worked or not.
  *
  * One attempt only: retries with a fresh extraction belong to [FileBuilder]. Reaching [timeoutMs] is an error
  * ([DownloadException]), not a cancellation, so the builder retries and finally reports it; a cancellation or an
- * outer time limit from the caller still propagates as a cancellation (WR-02).
+ * outer time limit from the caller still propagates as a cancellation.
  */
 class YtDlpSourceDownloader(
     private val gateway: YtDlpGateway,

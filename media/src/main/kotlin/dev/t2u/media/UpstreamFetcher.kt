@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * The implementation decides which hosts it will talk to and how redirects are handled; the media server only
  * relays. It must throw [java.io.IOException] for a refused host or a transport failure, and the exception text
- * must not carry the full URL (signed URLs are secrets, threat T-03-07).
+ * must not carry the full URL (signed URLs are secrets).
  */
 interface UpstreamFetcher {
     suspend fun fetch(request: UpstreamRequest): UpstreamResponse
