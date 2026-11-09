@@ -1,11 +1,11 @@
 package dev.t2u.renderer
 
-// Port of tube2upnp src/renderer.js (Phase 2 slice), GPL-3.0-only.
+// Port of tube2upnp src/renderer.js, GPL-3.0-only.
 //
 // One UPnP MediaRenderer exposed as one YouTube cast receiver. The renderer is the lounge Player: play,
-// pause, stop, seek and volume from the sender become SOAP calls to the speaker. Left for later phases:
-// gapless SetNextAVTransportURI and prefetch (Phase 4), SponsorBlock and play history (v2). The format chain
-// and per-speaker format learning (Phase 3) live in this class and in FormatChain.kt.
+// pause, stop, seek and volume from the sender become SOAP calls to the speaker. The gapless next-track handover
+// (SetNextAVTransportURI) and the prefetch behind it, the format chain and the per-speaker format learning live in this
+// class and in FormatChain.kt. SponsorBlock and play history are not implemented.
 
 import dev.t2u.lounge.AutoplayMode
 import dev.t2u.lounge.CastReceiver
@@ -73,14 +73,14 @@ private const val TRANSPORT_WAIT_STEP_MS = 300L
 /** Step of the wait for a playlist refresh in flight at a track end. */
 private const val QUEUE_SETTLE_STEP_MS = 100L
 
-/** How long a skip waits for the player to report the failed track STOPPED, and the step of that wait (plan 04-07). */
+/** How long a skip waits for the player to report the failed track STOPPED, and the step of that wait. */
 private const val SKIP_STOPPED_WAIT_MS = 2000L
 private const val SKIP_STEP_MS = 50L
 
-/** Step of the wait before a retry of a track that could not be prepared, so a newer play ends it quickly (plan 04-07). */
+/** Step of the wait before a retry of a track that could not be prepared, so a newer play ends it quickly. */
 private const val RETRY_WAIT_STEP_MS = 20L
 
-/** How long a play whose retry wait was overtaken waits for the newer play to settle before it reports (plan 04-07). */
+/** How long a play whose retry wait was overtaken waits for the newer play to settle before it reports. */
 private const val SUPERSEDED_SETTLE_MS = 10_000L
 
 /**
@@ -90,20 +90,20 @@ private const val SUPERSEDED_SETTLE_MS = 10_000L
  */
 private const val PAUSE_START_WAIT_MS = 3000L
 
-/** How long after a cast receiver stopped itself the first new one is started (plan 05-04); later attempts follow every 5 minutes. */
+/** How long after a cast receiver stopped itself the first new one is started; later attempts follow every 5 minutes. */
 const val REVIVE_FIRST_DELAY_MS = 10_000L
 
 /**
- * Upper bound on one speaker clear (CAST-06): the Stop, the emptied SetAVTransportURI and the read of the
+ * Upper bound on one speaker clear: the Stop, the emptied SetAVTransportURI and the read of the
  * current URI together. A speaker that does not answer must not hold up the lounge handler or the service
  * Stop (whose join is 10 s), and speakers are cleared in parallel, so the worst case is one budget.
  */
 const val CLEAR_BUDGET_MS = 4000L
 
-/** How long a clear waits for a SetAVTransportURI that a load has in flight, so the URI cannot land after the empty one (plan 03-21). */
+/** How long a clear waits for a SetAVTransportURI that a load has in flight, so the URI cannot land after the empty one. */
 const val CLEAR_INFLIGHT_WAIT_MS = CLEAR_BUDGET_MS / 2
 
-/** How long, after a clear gave up on a slow speaker, the renderer keeps reading the speaker for a late-landing stream (plan 03-23). */
+/** How long, after a clear gave up on a slow speaker, the renderer keeps reading the speaker for a late-landing stream. */
 const val SLOW_CLEAR_WATCH_MS = 15_000L
 
 /** The wait between two reads of that watch. */
@@ -130,7 +130,7 @@ internal const val SEEK_SETTLE_DEADLINE_MS = 15_000L
 internal const val SEEK_CORRECTION_TOLERANCE_S = 3.0
 
 /**
- * The shortest time between two corrections of the sender's seekbar (plan 03-18, drift or settled Seek): a speaker with a
+ * The shortest time between two corrections of the sender's seekbar (drift or settled Seek): a speaker with a
  * jittery RelTime cannot flood the phone with positions. Measured on the injected clock.
  */
 internal const val DRIFT_MIN_GAP_MS = 10_000L
@@ -145,30 +145,30 @@ internal const val DRIFT_CONFIRM_POLLS = 2
  * Upper bound on the wait for a speaker's first PLAYING, as a multiple of the start timeout, counted from the load (or
  * the first Play of a stream loaded while paused). A Seek sent before the speaker has played restarts the start timeout
  * clock (a Sonos can spend 13 s seeking near the end of a file, Lamp 2026-10-21 22:01), so this cap is what keeps a speaker
- * that is dead but still takes Seeks from being waited for forever (T-03-47).
+ * that is dead but still takes Seeks from being waited for forever.
  */
 internal const val START_HARD_CAP_FACTOR = 4
 
-/** Consecutive polls that must read another source's URI before the speaker counts as taken over (plan 03-25, T-03-61). */
+/** Consecutive polls that must read another source's URI before the speaker counts as taken over. */
 internal const val FOREIGN_POLLS_FOR_TAKEOVER = 2
 
-/** How many earlier own addresses a renderer still counts as its own after the phone moved (plan 05-08). */
+/** How many earlier own addresses a renderer still counts as its own after the phone moved. */
 internal const val OWN_HOSTS_KEPT = 4
 
-/** How long the re-set after an address change waits for a load that was in flight, and the step of that wait (plan 05-08, D-07). */
+/** How long the re-set after an address change waits for a load that was in flight, and the step of that wait. */
 internal const val NETWORK_RESET_WAIT_MS = 20_000L
 internal const val NETWORK_RESET_STEP_MS = 100L
 
 /**
  * Polls a STOPPED reading at the end of a track is waited out while the speaker already holds the queued stream, before the
- * queue advances the normal way (plan 04-06): a Sonos may report STOPPED for a moment as it switches.
+ * queue advances the normal way: a Sonos may report STOPPED for a moment as it switches.
  */
 internal const val GAPLESS_STOP_GRACE_POLLS = 3
 
 /** Transport states in which a speaker's RelTime can be believed again after a Seek. */
 private val SEEK_SETTLED_STATES = setOf("PLAYING", "PAUSED_PLAYBACK", "STOPPED", "NO_MEDIA_PRESENT")
 
-/** The first wait before a next track that failed to prepare is tried again; it doubles per failure (renderer.js PREFETCH_RETRY_MS, D-06). */
+/** The first wait before a next track that failed to prepare is tried again; it doubles per failure (renderer.js PREFETCH_RETRY_MS). */
 internal const val PREFETCH_RETRY_MS = 30_000L
 
 /** The longest that wait grows to (renderer.js PREFETCH_RETRY_MAX_MS). */
@@ -177,13 +177,13 @@ internal const val PREFETCH_RETRY_MAX_MS = 600_000L
 /** How many video ids the prefetch remembers a failure for; the oldest are dropped first. */
 internal const val PREFETCH_FAILURES_KEPT = 50
 
-/** The player states in which an address change re-sets the loaded track (plan 05-08, D-07); a stopped or idle player gets nothing. */
+/** The player states in which an address change re-sets the loaded track; a stopped or idle player gets nothing. */
 private val RESET_STATUSES = setOf(PlayerStatus.PLAYING, PlayerStatus.PAUSED, PlayerStatus.LOADING)
 
 private val HTTP_URL =Regex("^https?:", RegexOption.IGNORE_CASE)
 
 /**
- * Per-video back-off for the prefetch (renderer.js `#prefetchFailures`, D-06): a video that could not be prepared is not tried
+ * Per-video back-off for the prefetch (renderer.js `#prefetchFailures`): a video that could not be prepared is not tried
  * again by the poll before `retryMs * 2^(failures-1)` (capped at [maxMs]) has passed. Remembers the last [kept] ids; a repeated
  * failure moves its id to the newest end. Times are on the renderer's injected clock.
  */
@@ -213,7 +213,7 @@ internal class PrefetchBackoff(private val retryMs: Long, private val maxMs: Lon
 }
 
 /**
- * Everything a [Renderer] needs from the outside. [http] must derive from `lanHttpClient()` (SVC-05),
+ * Everything a [Renderer] needs from the outside. [http] must derive from `lanHttpClient()`,
  * [scope] is the service scope the renderer's own child scope hangs under, [clock] is epoch milliseconds.
  */
 data class RendererDeps(
@@ -226,15 +226,15 @@ data class RendererDeps(
     val events: EventSink = NoEvents,
     val clock: () -> Long = System::currentTimeMillis,
     val playlistRequestHandlerFactory: (() -> PlaylistRequestHandler)? = null,
-    /** The wait between two reads of the slow-clear watch (plan 03-23); a test replaces it to step the watch by hand. */
+    /** The wait between two reads of the slow-clear watch; a test replaces it to step the watch by hand. */
     val pause: suspend (Long) -> Unit = { delay(it) },
     /**
-     * GUI-08: whether a cast that ends (the last sender leaving) empties the speaker. Read at clear time, so a switch of
-     * the setting applies to a running bridge (D-09). The default reads the fixed [config] flag.
+     * whether a cast that ends (the last sender leaving) empties the speaker. Read at clear time, so a switch of
+     * the setting applies to a running bridge. The default reads the fixed [config] flag.
      */
     val clearOnCastEnd: () -> Boolean = { config.clearOnCastEnd },
     /**
-     * GUI rename (261101-dcg): the author's name for the speaker with this UDN, read once at init; null keeps the described name.
+     * Rename: the author's name for the speaker with this UDN, read once at init; null keeps the described name.
      * Matching (hide, manual, ports, the name filter) never uses it.
      */
     val userName: (String) -> String? = { null },
@@ -289,12 +289,12 @@ private class Current(
 
     /**
      * True after a native Seek the speaker accepted while paused, until the next Play: that Play can leave the speaker
-     * TRANSITIONING for seconds (Lamp, device session D), so the sender is told buffering until it plays (plan 03-20).
+     * TRANSITIONING for seconds (Lamp, device session D), so the sender is told buffering until it plays.
      */
     @Volatile var seekedWhilePaused: Boolean = false
 }
 
-/** How a [Renderer.loadResult] ended (plan 04-07, D-11). */
+/** How a [Renderer.loadResult] ended. */
 private sealed interface LoadResult {
     /** The speaker was told to play the track. */
     data object Started : LoadResult
@@ -342,8 +342,8 @@ internal fun isGaplessRefusal(e: UpnpError): Boolean =
  * position handed to the sender is [target]. [shown] and [shownAt] are the last position handed out and when, which
  * is what the sender's seekbar counts on from. [sawTransitioning] is set once the speaker has been seen in a state
  * other than a settled one (TRANSITIONING) after the Seek: a Sonos keeps reporting its OLD state, PLAYING with the old
- * RelTime, for about 0.7 s after it accepted the Seek (plan 03-16), so a bare PLAYING right after a Seek proves nothing.
- * [awaitPlay] marks the hold of a Play that followed a paused Seek (plan 03-20): the speaker is believed only once it is
+ * RelTime, for about 0.7 s after it accepted the Seek, so a bare PLAYING right after a Seek proves nothing.
+ * [awaitPlay] marks the hold of a Play that followed a paused Seek: the speaker is believed only once it is
  * PLAYING (or stopped), because it still reports PAUSED_PLAYBACK at the target for a moment after the Play.
  */
 private class PendingSeek(val id: Int, val target: Double, val startedMs: Long, val awaitPlay: Boolean = false) {
@@ -395,7 +395,7 @@ class Renderer(
     /** The name [receiverName] built from the description (template and suffix applied); null until [init] has read it. A user name replaces it on show, never in matching. */
     @Volatile private var describedName: String? = null
 
-    // The status UI follows these through [ui]; the property syntax and the private setters stay as they were (plan 07-03).
+    // The status UI follows these through [ui]; the property syntax and the private setters stay as they were.
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     private val _lastError = MutableStateFlow<String?>(null)
 
@@ -430,7 +430,7 @@ class Renderer(
     )
 
     /**
-     * The UI snapshot of this speaker (plan 07-03, GUI-01): one StateFlow that changes with the player status, the track, the
+     * The UI snapshot of this speaker: one StateFlow that changes with the player status, the track, the
      * last error and the sender-facing state, and ends with [destroy] (it runs on the renderer's own scope). No SOAP call
      * feeds it; the poll and the player events already hold everything it shows.
      */
@@ -458,8 +458,8 @@ class Renderer(
 
     /**
      * The addresses this renderer served streams from before the phone moved, at most [OWN_HOSTS_KEPT], newest last, never the
-     * current one (plan 05-08). A speaker that still holds a URL with one of them has one of our streams, not another source's
-     * (plan 03-25 rule). The token path still has to match, so a stranger's URL is not made ours by this list.
+     * current one. A speaker that still holds a URL with one of them has one of our streams, not another source's. The
+     * token path still has to match, so a stranger's URL is not made ours by this list.
      */
     @Volatile var ownHosts: List<String> = emptyList()
         private set
@@ -475,13 +475,13 @@ class Renderer(
 
     @Volatile private var position: PollPosition? = null
 
-    /** The native Seek whose settling is still being waited for (plan 03-15); null when there is none. */
+    /** The native Seek whose settling is still being waited for; null when there is none. */
     @Volatile private var pending: PendingSeek? = null
 
     /** Numbers the pending Seeks, so a poll can tell that the state it read is from before the Seek it sees. */
     private val seekSeq = AtomicInteger()
 
-    /** Consecutive polls that found the speaker away from the sender's seekbar (plan 03-18); only the poll touches it. */
+    /** Consecutive polls that found the speaker away from the sender's seekbar; only the poll touches it. */
     private var driftPolls = 0
 
     /** When the sender's seekbar was last corrected, for the minimum gap; only moved by [correctSender]. */
@@ -489,13 +489,13 @@ class Renderer(
 
     private val loadSeq = AtomicInteger()
 
-    /** Tracks that could not be prepared one after another (plan 04-07, D-11); reset when a play starts or a gapless switch is adopted. */
+    /** Tracks that could not be prepared one after another; reset when a play starts or a gapless switch is adopted. */
     private val unplayableStreak = AtomicInteger()
 
     /**
      * Counts the Pause and Play commands this app sends. A poll that began before such a command finished read
      * the speaker's state from before it, so its mirror would put the old state back for one poll (and tell the
-     * senders); the poll compares the count and leaves the mirror out when it moved (plan 03-09, PLAY-07).
+     * senders); the poll compares the count and leaves the mirror out when it moved.
      */
     private val commandEpoch = AtomicInteger()
 
@@ -507,21 +507,21 @@ class Renderer(
 
     /**
      * True from the moment a load starts sending a SetAVTransportURI (the speaker may hold one of our streams from then on,
-     * whether or not the load finishes) until the speaker was cleared (CAST-06 guard, plan 03-21).
+     * whether or not the load finishes) until the speaker was cleared (a clear is only owed after the app loaded something).
      */
     @Volatile private var loadedThisSession = false
 
-    /** One entry per SetAVTransportURI a load has sent and not yet seen answered; a clear waits for them (plan 03-21). */
+    /** One entry per SetAVTransportURI a load has sent and not yet seen answered; a clear waits for them. */
     private val uriInFlight: MutableSet<CompletableDeferred<Unit>> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /**
      * Loads that have started and not yet registered their SetAVTransportURI call: still resolving, preparing or sending Stop.
-     * A clear that finds one cancels it (bumps [loadSeq]) so it never reaches the speaker (plan 03-22).
+     * A clear that finds one cancels it (bumps [loadSeq]) so it never reaches the speaker.
      */
     private val loadsBeforeUri = java.util.concurrent.atomic.AtomicInteger()
 
     /**
-     * Consecutive polls that read a non-empty speaker URI that is not one of our own streams while we hold a track (plan 03-25).
+     * Consecutive polls that read a non-empty speaker URI that is not one of our own streams while we hold a track.
      * Two of them mean another source took the speaker over. Only the poll moves it, [adopt] resets it.
      */
     private var foreignPolls = 0
@@ -530,7 +530,7 @@ class Renderer(
     @Volatile private var metaReported = false
 
     /**
-     * The upcoming track, prepared in the background while the current one plays (D-05, PLAY-08). Taken by [load] when it is
+     * The upcoming track, prepared in the background while the current one plays. Taken by [load] when it is
      * the video asked for; every other fate (replaced, dropped, not adopted) releases its stream. Guarded by [queueLock].
      */
     @Volatile private var queued: Queued? = null
@@ -539,7 +539,7 @@ class Renderer(
 
     /**
      * Does this speaker take SetNextAVTransportURI? Null until a send has been answered; false after a refusal that
-     * [isGaplessRefusal] names. Read from the speaker's store at [init] and written back when it changes (D-08, plan 04-06).
+     * [isGaplessRefusal] names. Read from the speaker's store at [init] and written back when it changes.
      */
     @Volatile private var gaplessSupported: Boolean? = null
 
@@ -556,7 +556,7 @@ class Renderer(
     @Volatile private var advanced: Queued? = null
 
     /**
-     * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream (plan 04-06).
+     * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream.
      * Touched only by the poll; reset by [adopt] and by any poll that reads PLAYING.
      */
     private var stopGracePolls = 0
@@ -601,7 +601,7 @@ class Renderer(
 
     override fun clockMs(): Long = deps.clock()
 
-    /** The sender is told buffering while a Seek (or the Play after a paused Seek) is pending, until the poll settles it (plan 03-20). */
+    /** The sender is told buffering while a Seek (or the Play after a paused Seek) is pending, until the poll settles it. */
     override fun seekHoldActive(): Boolean = pending != null
 
     override fun refresh(maxAge: Int) {
@@ -640,10 +640,10 @@ class Renderer(
 
         val store = RendererDataStore(config.dataDir, udn) { message, error -> note("warn", "$message: ${error.message}") }
         this.store = store
-        // T-03-19: a stored value counts only when it names a chain format.
+        // A stored value counts only when it names a chain format.
         learnedFormat = (store.get(LEARNED_FORMAT_KEY) as? JsonPrimitive)
             ?.takeIf { it.isString }?.content?.takeIf { it in FALLBACK_CHAIN }
-        // D-08, D-13: what this speaker answered to SetNextAVTransportURI in an earlier run. Another model's answer is dropped.
+        // What this speaker answered to SetNextAVTransportURI in an earlier run. Another model's answer is dropped.
         model = speakerModel(desc.manufacturer, desc.modelName, desc.modelNumber)
         val storedGapless = store.get(LEARNED_GAPLESS_KEY)
         gaplessSupported = readGaplessMemory(storedGapless, model, deps.clock())
@@ -679,7 +679,7 @@ class Renderer(
     }
 
     /**
-     * GUI rename (261101-dcg, PD-5): [userName] is the author's new name for this speaker, or null to go back to the described
+     * Rename: [userName] is the author's new name for this speaker, or null to go back to the described
      * one. Does nothing before [init] has read the description (init reads the store itself) or after [destroy]. Otherwise the
      * card name changes, the receiver options are copied with the new name and screen name (so a revived receiver keeps it), and
      * the running receiver is told, which serves and advertises the new DIAL friendly name. The card stays renamed when the
@@ -703,7 +703,7 @@ class Renderer(
 
     /**
      * The cast receiver stopped itself because a lounge session failed for good (renderer.js only records lastError;
-     * here the speaker must come back into the cast menu, plan 05-04). Schedules the first revival 10 s from now.
+     * here the speaker must come back into the cast menu). Schedules the first revival 10 s from now.
      */
     private fun onReceiverTerminated(error: Throwable) {
         if (destroyed) return
@@ -782,7 +782,7 @@ class Renderer(
         val adv = advanced
         advanced = null
         if (adv != null && adv.video.id == video.id && position < 2) {
-            // The speaker is already playing it (gapless): bring our state in line, send nothing (D-09).
+            // The speaker is already playing it (gapless): bring our state in line, send nothing.
             loadSeq.incrementAndGet()
             adopt(adv.item, alreadyPlaying = true)
             unplayableStreak.set(0)
@@ -794,7 +794,7 @@ class Renderer(
     }
 
     /**
-     * Loads [video] for a play the sender asked for and applies D-11 when preparing it fails (plan 04-07): a failure for a
+     * Loads [video] for a play the sender asked for and handles a failed preparation: a failure for a
      * reason that is not clearly permanent is tried again after each of [Config.playRetryDelaysMs] with a fresh lookup (the
      * cached resolve is invalidated, as the download ladder does), then the track is skipped by [skipUnplayable], so one
      * broken track does not end the playlist. A failure of the speaker itself, or a load a newer play overtook, is not a track
@@ -857,7 +857,7 @@ class Renderer(
     }
 
     /**
-     * Moves the queue on after [video] could not be prepared (D-11): the player ends STOPPED for this track (the sender is
+     * Moves the queue on after [video] could not be prepared: the player ends STOPPED for this track (the sender is
      * told through the normal state change), then the queue's next track, or the autoplay video, is played. [MAX_UNPLAYABLE_IN_A_ROW]
      * failures in a row, or the end of the queue, leave the player STOPPED. Only the queue's current video moves the queue:
      * a direct doPlay of another video does not. The note carries the id and a reason class, never the message (it may hold a URL).
@@ -912,7 +912,7 @@ class Renderer(
     ): Boolean = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly) is LoadResult.Started
 
     /**
-     * [load] with the reason it did not start (plan 04-07, D-11): [LoadResult.PrepareFailed] when taking or preparing the item
+     * [load] with the reason it did not start: [LoadResult.PrepareFailed] when taking or preparing the item
      * failed (the lookup, the format chain, the registration), which the sender's own plays retry and skip past;
      * [LoadResult.SpeakerFailed] when a call to the speaker failed; [LoadResult.Superseded] when a newer play, a stop or
      * removal overtook the load.
@@ -927,7 +927,7 @@ class Renderer(
     ): LoadResult {
         val seq = loadSeq.incrementAndGet()
         // Taken after the bump: a prefetch that finishes later sees the new loadSeq and releases its item itself. Node re-sends
-        // the speaker's next slot after a load; the gapless hand-off (plan 04-05) does the same through the poll.
+        // the speaker's next slot after a load; the gapless hand-off does the same through the poll.
         val taken = synchronized(queueLock) { queued.also { queued = null } }
         pending = null
         stopPolling()
@@ -957,7 +957,7 @@ class Renderer(
             uriInFlight.add(sending)
             loadedThisSession = true
             // Registered above, then the check: a clear either bumped loadSeq before this check (the load stops here) or it
-            // finds the entry and the flag after its own bump and waits for the call, so no ordering lets the song land (plan 03-22).
+            // finds the entry and the flag after its own bump and waits for the call, so no ordering lets the song land.
             beforeUri = false
             loadsBeforeUri.decrementAndGet()
             startingSpeaker = true
@@ -985,10 +985,10 @@ class Renderer(
                     waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
                     if (superseded(seq)) return LoadResult.Superseded
                     if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
-                        // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
+                        // The speaker took the Seek but may still be seeking: hold the target until it settles.
                         pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
                     } else {
-                        // A speaker still starting can refuse a Seek; the first PLAYING poll sends it again (plan 03-17).
+                        // A speaker still starting can refuse a Seek; the first PLAYING poll sends it again.
                         item.current.owedSeek = position
                         note("warn", "Seek to ${Math.floor(position).toInt()}s after Play was refused - sending it again once the speaker plays")
                     }
@@ -1062,9 +1062,9 @@ class Renderer(
     }
 
     /**
-     * Keeps the next track prepared while this one plays (renderer.js `#maintainNext`, D-05). Called from the poll, so it only
+     * Keeps the next track prepared while this one plays (renderer.js `#maintainNext`). Called from the poll, so it only
      * launches: the preparing can take many seconds (a download, an ffmpeg build) and runs in its own coroutine, one at a time,
-     * so the poll keeps detecting the track end, the start failure and drift meanwhile (D-16).
+     * so the poll keeps detecting the track end, the start failure and drift meanwhile.
      * While a playlist refresh is in flight the queue's next is empty, so nothing is done then (it would read as end of queue).
      */
     private fun maintainNext() {
@@ -1116,7 +1116,7 @@ class Renderer(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // The track-end load still tries this video with its normal handling; only the poll backs off (D-06).
+            // The track-end load still tries this video with its normal handling; only the poll backs off.
             val delayMs = prefetchBackoff.failed(upcoming.id, deps.clock())
             note(
                 "warn",
@@ -1150,10 +1150,10 @@ class Renderer(
     }
 
     /**
-     * Hands the prepared [q] to the speaker as its next track (renderer.js `#sendNextToRenderer`, D-09): the speaker then plays on
-     * into it by itself and the poll follows. Needs prefetch and gapless (D-07) and a speaker not known to refuse. A refusal that
+     * Hands the prepared [q] to the speaker as its next track (renderer.js `#sendNextToRenderer`): the speaker then plays on
+     * into it by itself and the poll follows. Needs prefetch and gapless and a speaker not known to refuse. A refusal that
      * [isGaplessRefusal] names is remembered for this run and logged once; any other failure is only noted. NextURI and DIDL go
-     * through the same SOAP escaping as SetAVTransportURI (T-04-14); the URL is never logged (T-04-16).
+     * through the same SOAP escaping as SetAVTransportURI; the URL is never logged.
      */
     private suspend fun sendNextToRenderer(q: Queued) {
         if (!config.prefetch || !config.gapless || gaplessSupported == false || destroyed) return
@@ -1179,7 +1179,7 @@ class Renderer(
         } catch (e: UpnpError) {
             if (isGaplessRefusal(e)) {
                 learned = false
-                // A speaker that was believed to do gapless and now refuses is a contradiction (D-13): the answer flips.
+                // A speaker that was believed to do gapless and now refuses is a contradiction: the answer flips.
                 if (gaplessSupported != false) {
                     note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
                 }
@@ -1290,7 +1290,7 @@ class Renderer(
     /**
      * The offset a stream or file starts at: `floor(position)` when [offsetStart] and the position is above 1 s,
      * else 0. When the length is known it is clamped to one second before the end, so a seek past the end still
-     * yields a stream with something in it (T-03-30).
+     * yields a stream with something in it.
      */
     private fun restartOffset(position: Double, duration: Double, offsetStart: Boolean): Int {
         if (!offsetStart || position <= 1) return 0
@@ -1298,7 +1298,7 @@ class Renderer(
         return if (duration > 1) offset.coerceIn(0, maxOf(0, Math.floor(duration).toInt() - 1)) else maxOf(0, offset)
     }
 
-    /** Tells the media server the stream of [c] is no longer needed, so it drops what it holds in memory for it (plan 03-20). */
+    /** Tells the media server the stream of [c] is no longer needed, so it drops what it holds in memory for it. */
     private fun releaseStream(c: Current?) {
         val path = c?.streamPath ?: return
         try {
@@ -1420,7 +1420,7 @@ class Renderer(
     /**
      * A Play that follows a Seek made while paused can leave the speaker TRANSITIONING for seconds (Lamp, `direct`, 8.6 s,
      * device session D, 2026-10-22). Until the poll sees it PLAYING the sender is told buffering at the wanted position, on the
-     * same hold a Seek uses (plan 03-20): it replaces the Seek's own hold, which may still be pending or already settled.
+     * same hold a Seek uses: it replaces the Seek's own hold, which may still be pending or already settled.
      */
     private fun holdForPlayAfterPausedSeek(c: Current) {
         if (!c.seekedWhilePaused) return
@@ -1430,7 +1430,7 @@ class Renderer(
 
     /**
      * Stops the speaker and forgets the track. A plain Stop deliberately leaves the track loaded on the
-     * speaker, as after any stop; emptying it is [doClear] (CAST-06), which only a disconnect, a reset and the
+     * speaker, as after any stop; emptying it is [doClear], which only a disconnect, a reset and the
      * service Stop reach.
      */
     override suspend fun doStop(): Boolean {
@@ -1448,11 +1448,11 @@ class Renderer(
         stopPolling()
         expectStop = true
         advanced = switching
-        // T-03-58: the track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
+        // The track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
         // A speaker that holds nothing still gets it (harmless, as before). The switch shortcut comes before any speaker read.
         val stopped = if (destroyed) {
             // The registry's stopOne/clearOne already sent the Stop before the removal; the lounge shutdown that follows
-            // must not wait on a speaker that may never answer (plan 07-19, D-1).
+            // must not wait on a speaker that may never answer.
             true
         } else if (switching != null) {
             note("info", "stop not sent: the speaker already moved on to the queued track")
@@ -1468,7 +1468,7 @@ class Renderer(
     }
 
     /**
-     * CAST-06 / GUI-08: the last sender is gone. With the "clear the speaker when a cast ends" setting on, leave the speaker
+     * the last sender is gone. With the "clear the speaker when a cast ends" setting on, leave the speaker
      * with nothing loaded (see [clearSpeaker]); with it off (the default) the player has already stopped and stopped polling,
      * and the speaker keeps the track. Standard cast end only: a card's Clear button calls [clearSpeaker] directly and is not
      * gated by the setting.
@@ -1484,16 +1484,16 @@ class Renderer(
     /**
      * Stops the speaker and empties its transport URI, so the Sonos app has no track to resume. Only when this
      * app loaded something this session and the speaker's current URI is still one of this app's own streams
-     * (T-03-26: another source's playback is never touched). The prefix check ignores the scheme, so a speaker
-     * that rewrites it still matches. Bounded by [CLEAR_BUDGET_MS] (T-03-27), never throws, does nothing once
-     * destroyed. The outcome is written to the evidence log (T-03-28): an empty URI the speaker refuses is the
-     * evidence plan 03-14 needs to pick a Sonos-specific alternative. Only Stop and SetAVTransportURI are
+     * (another source's playback is never touched). The prefix check ignores the scheme, so a speaker
+     * that rewrites it still matches. Bounded by [CLEAR_BUDGET_MS], never throws, does nothing once
+     * destroyed. The outcome is written to the evidence log: an empty URI the speaker refuses is the
+     * evidence for choosing a Sonos-specific alternative. Only Stop and SetAVTransportURI are
      * sent, never a volume command.
      */
     override suspend fun clearSpeaker() {
         if (destroyed) return
         // A load still resolving or preparing is cancelled first, whatever the speaker holds: it must never reach the speaker
-        // after the sender is gone. The clear does not wait for the resolver (plan 03-22).
+        // after the sender is gone. The clear does not wait for the resolver.
         if (loadsBeforeUri.get() > 0) {
             loadSeq.incrementAndGet()
             pending = null
@@ -1566,9 +1566,9 @@ class Renderer(
     }
 
     /**
-     * T-03-58: true only when one GetMediaInfo positively reads a URI that is not one of this app's own streams (an empty URI
+     * True only when one GetMediaInfo positively reads a URI that is not one of this app's own streams (an empty URI
      * counts as not ours when [emptyCounts]). A speaker whose URI cannot be read is not "on another source": the command goes
-     * out as before (fail-open, T-03-59). Adds at most one read per command.
+     * out as before (fail-open). Adds at most one read per command.
      */
     private suspend fun onAnotherSource(emptyCounts: Boolean): Boolean {
         val uri = readCurrentUri() ?: return false
@@ -1583,9 +1583,9 @@ class Renderer(
     }
 
     /**
-     * True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches
-     * (T-03-26). Host, port and path prefix are matched from the start of the string, so a foreign URL that merely mentions
-     * ours in a query string is not ours (WR-08).
+     * True when [uri] is one of this app's own streams; the scheme is ignored so a speaker that rewrites it still matches.
+     * Host, port and path prefix are matched from the start of the string, so a foreign URL that merely mentions
+     * ours in a query string is not ours.
      */
     private fun isOurStream(uri: String): Boolean = isOwnStreamUri(uri, listOfNotNull(ip) + ownHosts, config.mediaPort)
 
@@ -1618,15 +1618,15 @@ class Renderer(
     /** The URI the speaker holds ("" when empty), or null when it could not be read. */
     private suspend fun readCurrentUri(): String? = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
 
-    /** The running slow-clear watch (plan 03-23), if any; a new clear replaces it and [destroy] cancels it. */
+    /** The running slow-clear watch, if any; a new clear replaces it and [destroy] cancels it. */
     @Volatile private var slowClearWatch: Job? = null
 
     /**
      * A clear gave up waiting for a SetAVTransportURI the speaker had not answered, so the stream may still land after the
      * clear. For at most [SLOW_CLEAR_WATCH_MS] the speaker's URI is read every [SLOW_CLEAR_WATCH_INTERVAL_MS]; if it becomes one
      * of our own streams, Stop and the empty URI are sent and the watch ends. It ends at once when a new load or clear moved
-     * [loadSeq], when the renderer is destroyed, and when the speaker is on another source (nothing is sent then, T-03-55).
-     * Runs in the renderer's own scope after the clear returned; the clear never waits for it (T-03-56).
+     * [loadSeq], when the renderer is destroyed, and when the speaker is on another source (nothing is sent then).
+     * Runs in the renderer's own scope after the clear returned; the clear never waits for it.
      */
     private fun startSlowClearWatch() {
         val seq = loadSeq.get()
@@ -1711,12 +1711,12 @@ class Renderer(
             if (onAnotherSource(emptyCounts = true)) return skipped("seek")
             val target = position - base
             if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
-                // The speaker took the Seek but may still be seeking: hold the target until it settles (plan 03-15).
+                // The speaker took the Seek but may still be seeking: hold the target until it settles.
                 pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
                 c.wantedAt = position
                 if (paused) c.seekedWhilePaused = true
                 // A speaker that has not played yet may spend long seeking: the start timeout is measured from the last
-                // command that can delay its first PLAYING (plan 03-17). [Current.startedAt] still bounds the whole wait.
+                // command that can delay its first PLAYING. [Current.startedAt] still bounds the whole wait.
                 if (!sawPlaying) c.loadedAt = deps.clock()
                 return true
             }
@@ -1732,7 +1732,7 @@ class Renderer(
     }
 
     /**
-     * The only place that changes the speaker's volume (PLAY-05, T-02-36): a sender asked for it. Nothing
+     * The only place that changes the speaker's volume: a sender asked for it. Nothing
      * in init, load, play, poll or stop sends SetVolume or SetMute.
      */
     override suspend fun doSetVolume(volume: Volume): Boolean {
@@ -1836,7 +1836,7 @@ class Renderer(
         if (p.id > seekSeqAtStart) return
         val now = deps.clock()
         if (!seekSettled(p, state, polledRaw, now)) return
-        // While the hold lasted a PLAYING player was reported to the sender as buffering (Player.getState, plan 03-20).
+        // While the hold lasted a PLAYING player was reported to the sender as buffering (Player.getState).
         val wasBuffering = status == PlayerStatus.PLAYING
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
@@ -1858,7 +1858,7 @@ class Renderer(
     }
 
     /**
-     * Drift check (plan 03-18). The sender's seekbar counts on from the last position it was sent ([senderPosition]) and
+     * Drift check. The sender's seekbar counts on from the last position it was sent ([senderPosition]) and
      * the app sends a position only when something changes, so anything that moves the speaker without a command from the
      * sender (a seek or scrub in the Sonos app, a stale reading, a stream restart) leaves the bar wrong. When the speaker's
      * polled position [polledRaw] differs from that count by more than [SEEK_CORRECTION_TOLERANCE_S] on [DRIFT_CONFIRM_POLLS]
@@ -1958,7 +1958,7 @@ class Renderer(
 
     private fun startPolling() {
         stopPolling()
-        // no poll while the phone has no network: a stream broken by the move must not be mirrored to the phone (plan 05-08)
+        // no poll while the phone has no network: a stream broken by the move must not be mirrored to the phone
         if (destroyed || networkDown) return
         synchronized(pollLock) {
             val gen = ++pollGen
@@ -2000,7 +2000,7 @@ class Renderer(
     @Volatile private var resetJob: Job? = null
 
     /**
-     * After a KEEP (plan 07.1-02): the loaded track and the deadline of the watch on it. A mid-track stop that the poll reads
+     * After a KEEP: the loaded track and the deadline of the watch on it. A mid-track stop that the poll reads
      * for this same track before the deadline is the speaker's buffer running dry, not a real stop, and is re-set once.
      */
     @Volatile private var resyncWatch: Pair<Current, Long>? = null
@@ -2027,7 +2027,7 @@ class Renderer(
         (status == PlayerStatus.LOADING && queue.current?.id != current?.video?.id)
 
     /**
-     * Follows what the speaker really does after the network came back (WIFI-02, RESEARCH Pitfall 1). Waits for a load in
+     * Follows what the speaker really does after the network came back. Waits for a load in
      * flight first (bounded by [NETWORK_RESET_WAIT_MS]), then reads the transport state and the TrackURI, at most
      * [RESYNC_READ_ATTEMPTS] times [Config.pollIntervalMs] apart, and acts on [resyncAction]:
      *  * KEEP: the speaker still plays our stream on the same address. Nothing is sent, polling resumes, and a watch of
@@ -2116,7 +2116,7 @@ class Renderer(
     }
 
     /**
-     * Sends the loaded track [c] to the speaker again from the current address at [from] seconds (D-07). [why] says where the
+     * Sends the loaded track [c] to the speaker again from the current address at [from] seconds. [why] says where the
      * position came from. The position is clamped inside the track; a playing track is re-set playing, a paused one paused.
      */
     private suspend fun resetLoaded(c: Current, from: Double, why: String) {
@@ -2163,7 +2163,7 @@ class Renderer(
         transport = state
         // The speaker's position as this poll read it, for the pending-Seek rule; null when not read or not our stream.
         var polledRaw: Double? = null
-        // Did this poll read a non-empty URI that is not ours while we hold a track? (plan 03-25; no extra SOAP call)
+        // Did this poll read a non-empty URI that is not ours while we hold a track? (no extra SOAP call)
         var foreign = false
         var foreignUri: String? = null
         if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
@@ -2225,13 +2225,13 @@ class Renderer(
                 // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
                 if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
-                // The speaker played on into the track it was given as next: follow it (D-09).
+                // The speaker played on into the track it was given as next: follow it.
                 val via = rendererAdvancedVia()
                 val queuedTrack = queued
                 if (via != null && queuedTrack != null && followQueuedTrack(queuedTrack, via)) {
                     return
                 }
-                // Last, and it only launches: the poll must not wait for a prepare (D-05, D-16).
+                // Last, and it only launches: the poll must not wait for a prepare.
                 if (c != null) maintainNext()
             }
             state == "PAUSED_PLAYBACK" -> {
@@ -2242,9 +2242,9 @@ class Renderer(
                 val ended = trackEnded(p, c?.startAt ?: 0)
                 val accepted = queued?.takeIf { it.sentToRenderer }
                 if (ended && accepted != null) {
-                    // The speaker took the queued track as its next one but did not play on into it (plan 04-06, D-13).
+                    // The speaker took the queued track as its next one but did not play on into it.
                     // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
-                    // the poll waits a few polls instead of reloading it (a reload would start the track twice, Pitfall 10).
+                    // the poll waits a few polls instead of reloading it (a reload would start the track twice).
                     if (stopGracePolls < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
                         if (destroyed || epoch != commandEpoch.get()) return
                         if (stopGracePolls == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
@@ -2265,7 +2265,7 @@ class Renderer(
                     note("info", "Track finished on renderer - advancing queue")
                     advanceAfterTrackEnd()
                 } else if (c != null && resyncWatch.let { it != null && it.first === c && deps.clock() < it.second }) {
-                    // The speaker was kept after the network returned and now stops mid-track: its buffer ran dry (plan 07.1-02).
+                    // The speaker was kept after the network returned and now stops mid-track: its buffer ran dry.
                     resyncWatch = null
                     note("info", "The speaker stopped after the network returned - re-setting at the last polled position")
                     val at = p?.rel ?: c.startAt.toDouble()
@@ -2299,10 +2299,10 @@ class Renderer(
     }
 
     /**
-     * Another source (Sonos radio, a line-in, another app) took the speaker over while a track of ours was loaded (plan 03-25,
-     * CAST-04, CAST-06). Our side is released without sending anything to the speaker: polling stops, the track is forgotten as
+     * Another source (Sonos radio, a line-in, another app) took the speaker over while a track of ours was loaded.
+     * Our side is released without sending anything to the speaker: polling stops, the track is forgotten as
      * a Stop would forget it, and the sender is told the player stopped, which also drops the speaker from the cast count. This
-     * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log (T-03-62).
+     * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log.
      */
     private fun releaseTakenOverSpeaker(uri: String?) {
         stopPolling()
@@ -2320,7 +2320,7 @@ class Renderer(
      * has not finished (a pending Seek, at most [SEEK_SETTLE_DEADLINE_MS]) also holds the verdict back: a speaker that is
      * busy seeking is not a speaker that cannot play the format (Lamp, 13 s near the end of a file, 2026-10-21 22:01).
      * [Current.startedAt] never moves and caps the whole wait at [START_HARD_CAP_FACTOR] times the start timeout, so a
-     * dead speaker that keeps taking Seeks is still given up on (T-03-47).
+     * dead speaker that keeps taking Seeks is still given up on.
      */
     private fun startTimedOut(c: Current, now: Long): Boolean {
         if (now - c.startedAt > config.startTimeoutMs * START_HARD_CAP_FACTOR) return true
@@ -2359,7 +2359,7 @@ class Renderer(
      * Moves the queue on after a track end. A playlist refresh in flight makes [next] a no-op, so the move waits
      * for it, bounded by [Config.queueSettleTimeoutMs] on the injected clock; a newer play, a stop or removal
      * that overtakes the wait ends it. When nothing could be advanced the player ends STOPPED, so the senders
-     * and the notification do not show a playing track that has silently stopped (T-03-29).
+     * and the notification do not show a playing track that has silently stopped.
      */
     private fun advanceAfterTrackEnd() {
         val seq = loadSeq.get()
@@ -2420,7 +2420,7 @@ class Renderer(
      * Moves the lounge queue on after the speaker played into the queued track by itself. Runs in its own coroutine because the
      * poll that found the switch is cancelled by [stopPolling]. Waits (bounded by [Config.queueSettleTimeoutMs]) for a playlist
      * refresh in flight, as [advanceAfterTrackEnd] does, then [next] reaches [doPlay], which adopts [advanced]; the Stop that
-     * `play()` sends first is skipped in [doStop] for this call only (D-16).
+     * `play()` sends first is skipped in [doStop] for this call only.
      */
     private fun handOffAfterGaplessSwitch(seq: Int) {
         scope.launch {
@@ -2502,7 +2502,7 @@ class Renderer(
             else -> null
         }
         // A remembered format that has played on this speaker in this session is working: a start failure of one track
-        // (or of another format) does not make the app forget it (plan 03-17, T-03-48). One that never played is cleared.
+        // (or of another format) does not make the app forget it. One that never played is cleared.
         val remembered = learnedFormat
         if (auto && !c.offsetOnly && remembered == c.format && remembered !in playedFormats) {
             learnedFormat = null
