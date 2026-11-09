@@ -2,6 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
+import dev.dialup.app.Failures
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -201,7 +202,8 @@ class AppUpdateModel(
         _state.update { it.copy(record = record) }
         try {
             save(record)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("app-update:save-record", e)
             // The record is a convenience; a failed write only means the next start checks again.
         }
         return outcome

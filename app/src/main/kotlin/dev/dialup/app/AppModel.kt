@@ -146,7 +146,8 @@ class AppModel private constructor(context: Context) {
             cast.value?.currentBridge()?.searchNow(trigger)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:refresh", e)
             // the list simply waits for the next periodic search
         }
     }
@@ -161,7 +162,8 @@ class AppModel private constructor(context: Context) {
             cast.value?.currentBridge()?.rediscover("ui")
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:rediscover", e)
             // the list simply waits for the next periodic search
         }
     }
@@ -188,7 +190,8 @@ class AppModel private constructor(context: Context) {
             if (bridge == null || !bridge.unhide(udn)) SpeakerStores.of(appContext).hidden.remove(udn)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:unhide", e)
             // the speaker stays hidden
         }
     }
@@ -211,7 +214,8 @@ class AppModel private constructor(context: Context) {
             stores.names.remove(udn)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:delete-manual", e)
             // the renderer stays listed
         }
     }
@@ -233,7 +237,8 @@ class AppModel private constructor(context: Context) {
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Failures.report("speaker:rename", e)
             // the renderer keeps its name
         }
     }
@@ -252,6 +257,7 @@ class AppModel private constructor(context: Context) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Failures.report("speaker:add-manual", e)
             ManualAddResult.NotUsable("Could not add the renderer: ${e.javaClass.simpleName}")
         }
     }
@@ -273,6 +279,7 @@ class AppModel private constructor(context: Context) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Failures.report("speaker:control", e)
             false
         }
 

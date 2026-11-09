@@ -172,17 +172,20 @@ class EvidenceLog(
         if (!closed.compareAndSet(false, true)) return
         try {
             executor.submit {}.get(2000, TimeUnit.MILLISECONDS)
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            warn("evidence close: drain", t)
         }
         executor.shutdown()
         try {
             if (!executor.awaitTermination(2000, TimeUnit.MILLISECONDS)) executor.shutdownNow()
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            warn("evidence close: terminate", t)
             executor.shutdownNow()
         }
         try {
             rotating.close()
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            warn("evidence close: file", t)
         }
     }
 
