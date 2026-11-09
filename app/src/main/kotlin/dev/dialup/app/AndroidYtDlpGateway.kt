@@ -20,12 +20,12 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * Facts from the 0.18.1 classes (javap on library-0.18.1.aar, which differs slightly from master):
  *  - `YoutubeDLRequest.buildCommand()` orders options, then custom commands, then URLs, so a `--`
- *    added with `addCommands` lands between the options and the URL (threat T-01-10).
+ *    added with `addCommands` lands between the options and the URL, so an option can never be read as a URL.
  *  - `execute()` adds `--js-runtimes quickjs:<libqjs.so>` and `--ffmpeg-location` itself, and adds
  *    `--no-cache-dir` unless the request carries a `--cache-dir` option.
  *  - `YoutubeDLRequest(List<String>)` accepts an empty list and `execute()` does not insist on a URL, so a
- *    [YtDlpCall] whose url is null (the `--load-info-json` download form, plan 03-07) runs without a URL and
- *    without the `--` marker. Its on-device behaviour is checked in plan 03-14.
+ *    [YtDlpCall] whose url is null (the `--load-info-json` download form) runs without a URL and
+ *    without the `--` marker. Its on-device behaviour is checked on a phone, not in the unit tests.
  *  - `execute()` throws [com.yausername.youtubedl_android.YoutubeDLException] on a non-zero exit
  *    (its message is the process stderr), so a failure arrives here as an exception, not an exit code.
  */

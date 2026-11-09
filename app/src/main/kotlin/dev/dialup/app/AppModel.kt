@@ -59,7 +59,7 @@ class AppModel private constructor(context: Context) {
 
     /**
      * Whether the phone has a Wi-Fi or hotspot address the bridge could bind to ([hasBindableNetwork]). The service stops itself
-     * on Wi-Fi loss (plan 07.1-01), so the UI reads presence itself instead of asking the service. It listens only while a
+     * on Wi-Fi loss, so the UI reads presence itself instead of asking the service. It listens only while a
      * screen collects it (WhileSubscribed): the network callback is unregistered when the last collector goes, and the 5 s
      * re-check (a hotspot starting or stopping raises no Wi-Fi callback) stops with it.
      */
@@ -93,7 +93,7 @@ class AppModel private constructor(context: Context) {
         }
     }
 
-    /** The cast feature while the service runs, else null (plan 07-03 reads speakers from it). */
+    /** The cast feature while the service runs, else null (the speaker list reads speakers from it). */
     val cast: StateFlow<CastFeature?> = ServiceHub.cast
 
     /** The running bridge's speakers with their live state; empty while the bridge is off and across a bridge rebuild. */
@@ -109,7 +109,7 @@ class AppModel private constructor(context: Context) {
         cast.flatMapLatest { it?.castCount?.map { c -> c.casting } ?: flowOf(0) }
             .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    /** The bridge card's state: bridge up or not, and the access mode (plan 07-04 words "Waiting for Wi-Fi"). */
+    /** The bridge card's state: bridge up or not, and the access mode (it words "Waiting for Wi-Fi"). */
     val status: StateFlow<BridgeStatus> =
         cast.flatMapLatest { it?.status ?: flowOf(BridgeStatus.OFF) }.stateIn(scope, SharingStarted.Eagerly, BridgeStatus.OFF)
 
@@ -117,7 +117,7 @@ class AppModel private constructor(context: Context) {
     val bridgeUp: StateFlow<Boolean> = status.map { it.running }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
-     * GUI-03: Hide from a card's menu, the only way to take a card off the list. The running bridge drops the speaker as a cast
+     * Hide from a card's menu, the only way to take a card off the list. The running bridge drops the speaker as a cast
      * target at once (stopping it first when it plays) and keeps it out; with no bridge, or when the bridge does not know the
      * speaker, it goes straight into the hidden store (this is how a saved renderer's greyed card is hidden with the bridge off;
      * the registry reads the same process-level store at the next start). Fire-and-forget: a failure is dropped, a tap must never
@@ -138,7 +138,7 @@ class AppModel private constructor(context: Context) {
     }
 
     /**
-     * GUI-14: one SSDP search through the running bridge, at once ([trigger] says who asked: `ui` or `foreground`). With no
+     * One SSDP search through the running bridge, at once ([trigger] says who asked: `ui` or `foreground`). With no
      * bridge nothing happens. Fire-and-forget: a failure is dropped, a tap must never crash the app.
      */
     fun refreshRenderers(trigger: String): Job = scope.launch {
@@ -171,17 +171,17 @@ class AppModel private constructor(context: Context) {
     private val foregroundThrottle = SearchThrottle({ SystemClock.elapsedRealtime() }, FOREGROUND_SEARCH_GAP_MS)
 
     /**
-     * GUI-14: the app came to the foreground: one [refreshRenderers] search, at most one per [FOREGROUND_SEARCH_GAP_MS]; null
+     * The app came to the foreground: one [refreshRenderers] search, at most one per [FOREGROUND_SEARCH_GAP_MS]; null
      * when the throttle holds it back. MainActivity.opens already skips the first start after a recreation, so a rotation does
      * not search.
      */
     fun searchOnForeground(): Job? = if (foregroundThrottle.tryAcquire()) refreshRenderers("foreground") else null
 
-    /** GUI-03: the hidden speakers; the store lives with the process, so the list is right while the bridge is off too. */
+    /** The hidden speakers; the store lives with the process, so the list is right while the bridge is off too. */
     val hidden: StateFlow<List<HiddenSpeaker>> = SpeakerStores.of(context).hidden.entries
 
     /**
-     * GUI-03: Restore. Through the running bridge when there is one, which also searches for the speaker at once; with the
+     * Restore. Through the running bridge when there is one, which also searches for the speaker at once; with the
      * bridge off straight on the store, and the bridge's next start finds the speaker. Fire-and-forget.
      */
     fun unhide(udn: String): Job = scope.launch {
@@ -196,11 +196,11 @@ class AppModel private constructor(context: Context) {
         }
     }
 
-    /** GUI-04, D-07: the speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
+    /** The speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
     val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
 
     /**
-     * Delete on the card (or the Hidden row) of a renderer saved by address (quick 261101-oib; only [dev.dialup.app.model.deleteOffered]
+     * Delete on the card (or the Hidden row) of a renderer saved by address (only [dev.dialup.app.model.deleteOffered]
      * cards have the item). Through the running bridge when there is one (it also takes the renderer out of the cast menus); with the bridge off, or
      * when the bridge does not know it, straight on the store. The UDN also leaves the hidden and name stores so nothing of the
      * renderer stays behind. Fire-and-forget: a failure leaves the renderer listed.
@@ -244,10 +244,10 @@ class AppModel private constructor(context: Context) {
     }
 
     /**
-     * GUI-04: Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
-     * sent (T-07-29); with no bridge the answer is [ManualAddResult.NotUsable], because the probe runs
+     * Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
+     * sent (the address must be a private LAN IPv4 literal); with no bridge the answer is [ManualAddResult.NotUsable], because the probe runs
      * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
-     * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added (plan 07-13).
+     * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added.
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null
@@ -268,7 +268,7 @@ class AppModel private constructor(context: Context) {
     /**
      * Runs a card [action] on the speaker [udn] of the running bridge and says whether the speaker did it. A command that
      * takes over [CONTROL_TIMEOUT_MS], a missing speaker or bridge, and any failure all answer false: a card tap must never
-     * crash the app (plan 07-08). Cancellation still propagates. There is no volume action (T-02-36).
+     * crash the app. Cancellation still propagates. There is no volume action.
      */
     suspend fun controlNow(udn: String, action: SpeakerAction): Boolean =
         try {

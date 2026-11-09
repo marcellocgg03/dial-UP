@@ -7,15 +7,14 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
- * Starts the bridge after a phone reboot (D-03), through the same gate as every other start: the author's
+ * Starts the bridge after a phone reboot, through the same gate as every other start: the author's
  * switch must be on and the battery exemption held ([bootStartDecision]). Without them it writes one logcat
- * line and starts nothing; the author is asked for the exemption the next time the app is opened (D-15, no
+ * line and starts nothing; the author is asked for the exemption the next time the app is opened (no
  * hint notification).
  *
- * The switch is persisted (plan 07-04, D-04), and a Stop from the notification, adb or the app turns it off,
- * so a Stop followed by a reboot leaves the bridge off. This reverses the Phase 5 note that a Stop followed
- * by a reboot starts the bridge again (Phase 5 Open Question 4, UI-06). A force-stopped app gets
- * no BOOT_COMPLETED until it is opened (D-01 accepts this). The receiver is not exported and ignores every
+ * The switch is persisted, and a Stop from the notification, adb or the app turns it off,
+ * so a Stop followed by a reboot leaves the bridge off. A force-stopped app gets
+ * no BOOT_COMPLETED until it is opened, which is accepted. The receiver is not exported and ignores every
  * action but BOOT_COMPLETED.
  *
  * BOOT_COMPLETED often comes before Wi-Fi associates. Without a bindable network (no Wi-Fi client address, no hotspot) the
