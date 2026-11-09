@@ -10,6 +10,7 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.parseIpv4Literal
+import dev.t2u.upnp.stringOrNull
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,8 +58,8 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
             val data = Json.parseToJsonElement(file.readText())
             if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
             for ((udn, value) in data) {
-                val name = stringField(value, "name")
-                val address = stringField(value, "address")
+                val name = (value as? JsonObject)?.stringOrNull("name")
+                val address = (value as? JsonObject)?.stringOrNull("address")
                 when {
                     name == null || address == null ->
                         warn("Ignoring entry '$udn' in $file: it needs a string name and a string address")
@@ -113,11 +114,6 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
         if (removed) persist()
         return removed
-    }
-
-    private fun stringField(entry: kotlinx.serialization.json.JsonElement, key: String): String? {
-        val field = (entry as? JsonObject)?.get(key) as? JsonPrimitive ?: return null
-        return if (field.isString) field.content else null
     }
 
     /** Call with [lock] held. */
@@ -179,9 +175,9 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
             val data = Json.parseToJsonElement(file.readText())
             if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
             for ((udn, value) in data) {
-                val ip = manualStringField(value, "ip")
-                val name = manualStringField(value, "name")
-                val location = manualStringField(value, "location")
+                val ip = (value as? JsonObject)?.stringOrNull("ip")
+                val name = (value as? JsonObject)?.stringOrNull("name")
+                val location = (value as? JsonObject)?.stringOrNull("location")
                 when {
                     ip == null || name == null || location == null || udn.isEmpty() || location.isEmpty() ->
                         warn("Ignoring entry '$udn' in $file: it needs a UDN and a string ip, name and location")
@@ -251,11 +247,6 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
         }
         if (removed) persist()
         return removed
-    }
-
-    private fun manualStringField(entry: kotlinx.serialization.json.JsonElement, key: String): String? {
-        val field = (entry as? JsonObject)?.get(key) as? JsonPrimitive ?: return null
-        return if (field.isString) field.content else null
     }
 
     /** Call with [lock] held. */
