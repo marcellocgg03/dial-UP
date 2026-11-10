@@ -14,3 +14,11 @@ internal class Outcome {
 
 /** One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw). */
 internal class PipeAttempt(val name: String, val input: suspend () -> List<String>)
+
+private const val MAX_NOTE = 400
+
+/** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host. */
+internal fun failureLine(name: String, detail: String, prefixed: Boolean): String {
+    val text = Resolver.redactUrls(detail).take(MAX_NOTE)
+    return if (prefixed) "$name: $text" else text
+}
