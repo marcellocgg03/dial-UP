@@ -46,136 +46,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-/** Where the bytes of a registered stream come from. */
-sealed interface StreamSource {
-    /**
-     * A complete file: HEAD, GET and Range with a Content-Length. [rebuild] builds the file again when it has vanished
-     * since registration (evicted, or reclaimed by Android) and returns the finished file; null for a plain file,
-     * which then answers 404 when it is gone.
-     */
-    data class FileSource(val file: File, val rebuild: (suspend () -> File)? = null) : StreamSource
-
-    /**
-     * An ffmpeg run: [inputArgs] are the input side only (`-i ... -vn`); the server appends the output side
-     * per format (adts: `-c:a copy -f adts pipe:1`, mp3: `-c:a libmp3lame -b:a 192k -f mp3 pipe:1`).
-     */
-    data class PipeSource(val inputArgs: List<String>) : StreamSource
-
-    /**
-     * A cast video: the server resolves [entry]'s ID through its [VideoResolver] when the speaker asks, and
-     * runs the attempt ladder (YouTube URL, then a fresh extraction) before answering 502.
-     */
-    data class VideoPipe(val entry: VideoEntry) : StreamSource
-
-    /**
-     * A cast video relayed from YouTube's own audio URL (format `direct`): the server resolves [entry]'s ID when
-     * the speaker asks and proxies the bytes through its [UpstreamFetcher], Range included.
-     */
-    data class DirectProxy(val entry: VideoEntry) : StreamSource
-}
-
-/**
- * A video to stream to a speaker. [format] is `adts` or `mp3` (ffmpeg pipes) or `direct` (a relay of YouTube's own
- * URL; then [ext] and [sourceMime] name the source container, e.g. `m4a` and `audio/mp4`). [startAt] is the offset in
- * seconds for streams the speaker cannot seek, [onRequest] runs once per GET (mediaServer.js `entry.onRequest`).
- */
-data class VideoEntry(
-    val videoId: String,
-    val format: String,
-    val startAt: Int = 0,
-    val ext: String? = null,
-    val sourceMime: String? = null,
-    val onRequest: (() -> Unit)? = null,
-)
-
-/** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
-interface MediaRegistrar {
-    /**
-     * Builds whatever [entry]'s format needs before the URL is handed to a speaker: the file formats (mp4)
-     * are downloaded and converted here. The renderer calls it before [registerVideo], so the speaker's start clock
-     * does not include the build. The default does nothing, so stubs that implement only [registerVideo] keep compiling.
-     */
-    suspend fun prepare(entry: VideoEntry) {}
-
-    /** Registers before preparing so file ownership survives cancellation and concurrent requests. */
-    suspend fun prepareAndRegister(entry: VideoEntry): String {
-        prepare(entry)
-        return registerVideo(entry)
-    }
-
-    /**
-     * The file formats already built and cached for [videoId], best first. Auto mode plays one of these (when the speaker takes
-     * it) instead of building the format the priority list would pick. The default is empty, for stubs.
-     */
-    fun cachedFormats(videoId: String): List<String> = emptyList()
-
-    /** @return `/stream/<token>.<ext>`. @throws IllegalArgumentException for an invalid ID or a non-pipe format. */
-    fun registerVideo(entry: VideoEntry): String
-
-    /**
-     * The renderer no longer needs the stream at [path] (a newer track replaced it, or the speaker was stopped or cleared):
-     * whatever the server holds for it in memory can go. The token itself stays registered, so a speaker that
-     * still asks for it is served. A file stream's file can be evicted by the cache from now on (the playing and the
-     * prefetched file are pinned from [registerVideo] until this call). The default does nothing, so stubs that implement
-     * only [registerVideo] keep compiling.
-     */
-    fun release(path: String) {}
-}
-
-/**
- * The input side of mediaServer.js `#urlInputArgs`: ffmpeg reads [info]'s URL itself with the headers yt-dlp
- * chose, reconnects on a dropped read, and (input-side `-ss`) range-requests from [startAt] instead of reading from 0.
- * [logLevel] is the `ffmpegLogLevel` config switch (a name from the validated whitelist).
- */
-fun urlInputArgs(info: ResolvedInfo, startAt: Int, logLevel: String = "error"): List<String> {
-    val hdrs = info.headers.entries.joinToString("") { (k, v) -> "$k: $v\r\n" }
-    val args = mutableListOf("-hide_banner", "-loglevel", logLevel)
-    if (hdrs.isNotEmpty()) args += listOf("-headers", hdrs)
-    args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
-    if (startAt > 0) args += listOf("-ss", startAt.toString())
-    args += listOf("-i", info.url, "-vn")
-    return args
-}
-
-/**
- * The input side of mediaServer.js `#fileInputArgs`: ffmpeg reads the downloaded file at [path], seeking on the
- * input side to [startAt] seconds when that is positive. [logLevel] is the `ffmpegLogLevel` config switch.
- */
-fun fileInputArgs(path: String, startAt: Int, logLevel: String = "error"): List<String> {
-    val args = mutableListOf("-hide_banner", "-loglevel", logLevel)
-    if (startAt > 0) args += listOf("-ss", startAt.toString())
-    args += listOf("-i", path, "-vn")
-    return args
-}
-
-/** A registered stream. [format] is a key of [FORMATS]; [label] only appears in the request log. */
-data class StreamEntry(val source: StreamSource, val format: String, val mime: String, val label: String)
-
-/**
- * One handled call, reported after the response was produced (404s included). [pipeMode] is `file`,
- * `chunked` (ffmpeg stdout streamed) or `buffered` (ffmpeg run to a temp file first, for HTTP/1.0 clients),
- * and null when no stream was involved. [note] carries ffmpeg's stderr tail on a failed start.
- */
-data class MediaRequest(
-    val method: String,
-    val uri: String,
-    val httpVersion: String,
-    val remoteHost: String,
-    val remotePort: Int,
-    val range: String?,
-    val userAgent: String?,
-    val status: Int,
-    val bytes: Long,
-    val pipeMode: String? = null,
-    val label: String? = null,
-    val note: String? = null,
-    /**
-     * What the direct proxy asked upstream for this request, as text with milliseconds to the first byte and to the end of
-     * each call and no URL, or `window hit` when the answer came from memory; null for every other source.
-     */
-    val upstream: String? = null,
-)
-
 /**
  * Token media server, a port of reference/tube2upnp/src/mediaServer.js.
  *
@@ -466,18 +336,6 @@ class MediaServer(
     /** Installs the handler into [app]; used by [start] and available to testApplication tests. */
     fun configure(app: Application) {
         app.intercept(ApplicationCallPipeline.Call) { handle(call) }
-    }
-
-    /** What one request did, filled in as the response is produced and reported in `finally`. */
-    private class Outcome {
-        var status: Int = 0
-        var bytes: Long = 0
-        var pipeMode: String? = null
-        var label: String? = null
-        var note: String? = null
-
-        /** The upstream calls of this request, for the log (direct only). */
-        val upstream = java.util.concurrent.CopyOnWriteArrayList<UpstreamTiming>()
     }
 
     private suspend fun handle(call: ApplicationCall) {
@@ -978,9 +836,6 @@ class MediaServer(
             runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
         }
     }
-
-    /** One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw). */
-    private class PipeAttempt(val name: String, val input: suspend () -> List<String>)
 
     /**
      * The ladder of mediaServer.js `#pipe`: a [StreamSource.PipeSource] has one attempt, a
