@@ -240,6 +240,7 @@ class BridgeCharacterizationTest {
             h.events.any { it.first == "manual-probe" && it.second["result"] == "Refused" && it.second["via"] == "http" }
         }
         assertEquals(0, h.fakeRenderer.descriptionRequests.get(), "no description was requested")
+        h.awaitUntil("the greyed card is listed") { bridge.speakers.value.isNotEmpty() }
         val card = bridge.speakers.value.single()
         assertEquals(HARNESS_RENDERER_UDN, card.udn)
         assertFalse(card.online, "a saved speaker nothing reached is a greyed card")
