@@ -456,7 +456,7 @@ class Renderer(
         dropAdvanced()
         current = null
         pending = null
-        stopPolling()
+        pollLoop.stop()
         slowClearWatch?.cancel()
         try {
             val rec = receiver
@@ -626,7 +626,7 @@ class Renderer(
         // the speaker's next slot after a load; the gapless hand-off does the same through the poll.
         val taken = prefetch.takeQueued()
         pending = null
-        stopPolling()
+        pollLoop.stop()
         loadsBeforeUri.incrementAndGet()
         var beforeUri = true
         var prepared: PreparedItem? = null
@@ -915,7 +915,7 @@ class Renderer(
         stopGracePolls = 0
         expectStop = false
         loadedThisSession = true
-        startPolling()
+        pollLoop.start()
     }
 
     /**
@@ -1029,7 +1029,7 @@ class Renderer(
         transport = "STOPPED"
         releaseStream(current)
         current = null
-        stopPolling()
+        pollLoop.stop()
         expectStop = true
         advanced = switching
         // The track and the polling are forgotten either way, but a speaker that plays another source gets no Stop.
@@ -1138,7 +1138,7 @@ class Renderer(
         pending = null
         awaitUriCalls(uriInFlight.toList(), run) // a load that began its URI call after clearSpeaker took its snapshot
         expectStop = true
-        stopPolling()
+        pollLoop.stop()
         soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
         val emptied = soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
         forgetTrack()
@@ -1490,43 +1490,16 @@ class Renderer(
 
     // Polling instead of GENA eventing: many cheap speakers have broken event subscriptions, and eventing
     // needs an inbound callback port. One sequential loop, so a slow speaker never stacks polls.
-    private val pollLock = Any()
-    private var pollJob: Job? = null
-    private var pollGen = 0
+    private val pollLoop = PollLoop(
+        scope = scope,
+        interval = { config.pollIntervalMs },
+        mayRun = { !(destroyed || networkDown) },
+        alive = { !destroyed },
+        tick = { poll() },
+        onError = { e -> note("debug", "Poll failed: ${e.message}") },
+    )
 
     @Volatile private var polls = 0
-
-    private fun startPolling() {
-        stopPolling()
-        // no poll while the phone has no network: a stream broken by the move must not be mirrored to the phone
-        if (destroyed || networkDown) return
-        synchronized(pollLock) {
-            val gen = ++pollGen
-            pollJob = scope.launch {
-                while (isActive && !destroyed && gen == pollGenSnapshot()) {
-                    delay(config.pollIntervalMs)
-                    if (gen != pollGenSnapshot()) break
-                    try {
-                        poll()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        note("debug", "Poll failed: ${e.message}")
-                    }
-                }
-            }
-        }
-    }
-
-    private fun pollGenSnapshot(): Int = synchronized(pollLock) { pollGen }
-
-    private fun stopPolling() {
-        synchronized(pollLock) {
-            pollGen++
-            pollJob?.cancel()
-            pollJob = null
-        }
-    }
 
     /** A lost connection pauses polling until the address is restored; playback state remains available for re-sync. */
     override suspend fun onNetworkLost() {
@@ -1534,7 +1507,7 @@ class Renderer(
         networkDown = true
         resetJob?.cancel() // a re-sync under way belongs to an address that is gone again
         resyncWatch = null
-        stopPolling()
+        pollLoop.stop()
     }
 
     @Volatile private var resetJob: Job? = null
@@ -1585,7 +1558,7 @@ class Renderer(
         if (destroyed) return
         if (loadInFlight()) {
             note("warn", "A load was still under way ${NETWORK_RESET_WAIT_MS / 1000}s after the address change - the track is not re-set")
-            if (current != null) startPolling()
+            if (current != null) pollLoop.start()
             return
         }
         var attempt = 0
@@ -1620,7 +1593,7 @@ class Renderer(
             attempt++
             when (resyncAction(holds, ipChanged, state, kind, attempt)) {
                 ResyncAction.NOTHING -> {
-                    if (current != null) startPolling()
+                    if (current != null) pollLoop.start()
                     return
                 }
                 ResyncAction.RETRY -> delay(config.pollIntervalMs)
@@ -1633,7 +1606,7 @@ class Renderer(
                         "state" to state,
                     )
                     resyncWatch = keep to (deps.clock() + RESYNC_WATCH_MS)
-                    startPolling()
+                    pollLoop.start()
                     return
                 }
                 ResyncAction.RELEASE_FOREIGN -> {
@@ -1674,7 +1647,7 @@ class Renderer(
         )
         if (!started) {
             note("warn", "Re-setting \"${c.video.id}\" after the address change failed")
-            if (!destroyed && current != null) startPolling() // the load stopped the polls; the mirror needs them
+            if (!destroyed && current != null) pollLoop.start() // the load stopped the polls; the mirror needs them
             return
         }
         // A stream that starts at 0 (direct) cannot be sought while paused: the speaker has no Play yet, so the Seek is owed.
@@ -1800,7 +1773,7 @@ class Renderer(
                 }
                 // The speaker stopped. Both the launched coroutines below run outside this one, because they
                 // stop and restart polling, which would cancel the poll in the middle of the call.
-                stopPolling()
+                pollLoop.stop()
                 if (ended) {
                     note("info", "Track finished on renderer - advancing queue")
                     advanceAfterTrackEnd()
@@ -1845,12 +1818,12 @@ class Renderer(
      * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log.
      */
     private fun releaseTakenOverSpeaker(uri: String?) {
-        stopPolling()
+        pollLoop.stop()
         foreignPolls = 0
         forgetTrack()
         val scheme = uri?.substringBefore(':', "")?.filter { it.isLetterOrDigit() || it == '-' || it == '+' || it == '.' }?.take(24).orEmpty()
         note("info", "the speaker was taken over by another source - released", "scheme" to scheme)
-        // Launched, because the poll that got here runs in the job stopPolling just cancelled.
+        // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled.
         scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
     }
 
@@ -1942,7 +1915,7 @@ class Renderer(
     private fun followQueuedTrack(candidate: Queued, via: String): Boolean {
         val taken = prefetch.takeIfQueued(candidate) ?: return false
         advanced = taken
-        stopPolling()
+        pollLoop.stop()
         note("info", "Renderer continued into the next track", "videoId" to taken.video.id, "via" to via)
         handOffAfterGaplessSwitch(loadSeq.get())
         return true
@@ -1956,7 +1929,7 @@ class Renderer(
 
     /**
      * Moves the lounge queue on after the speaker played into the queued track by itself. Runs in its own coroutine because the
-     * poll that found the switch is cancelled by [stopPolling]. Waits (bounded by [Config.queueSettleTimeoutMs]) for a playlist
+     * poll that found the switch is cancelled by [PollLoop.stop]. Waits (bounded by [Config.queueSettleTimeoutMs]) for a playlist
      * refresh in flight, as [advanceAfterTrackEnd] does, then [next] reaches [doPlay], which adopts [advanced]; the Stop that
      * `play()` sends first is skipped in [doStop] for this call only.
      */
@@ -2030,7 +2003,7 @@ class Renderer(
         formats.forgetUnproven(c)
         if (next != null) {
             note("warn", "Renderer did not start ${c.format} - trying $next")
-            stopPolling()
+            pollLoop.stop()
             // Where the speaker was last polled playing, if that is newer than the last load or Seek and off the start;
             // otherwise where this stream was meant to play from (the load position or the last accepted Seek).
             val polled = position?.takeIf { it.at >= c.loadedAt && it.rel - c.startAt >= 1 }?.rel
@@ -2049,7 +2022,7 @@ class Renderer(
             "error",
             lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
         )
-        stopPolling()
+        pollLoop.stop()
         // Nothing is left to try: the cast ends visibly. A Stop, a newer play or removal in between wins.
         val seq = loadSeq.get()
         scope.launch {
