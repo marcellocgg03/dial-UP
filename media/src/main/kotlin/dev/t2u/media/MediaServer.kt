@@ -19,7 +19,6 @@ import io.ktor.server.request.httpVersion
 import io.ktor.server.request.uri
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondBytesWriter
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
@@ -27,11 +26,8 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -770,14 +766,6 @@ class MediaServer(
         else -> null
     }
 
-    /** Kills [proc] and waits up to 2 s for it to be gone (Node `res.on('close', kill)`). */
-    private suspend fun killAndWait(proc: Process) {
-        withContext(NonCancellable + Dispatchers.IO) {
-            proc.destroyForcibly()
-            runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
-        }
-    }
-
     /**
      * The ladder of mediaServer.js `#pipe`: a [StreamSource.PipeSource] has one attempt, a
      * [StreamSource.VideoPipe] reads YouTube's URL and, when that fails, drops the cached resolve and reads a
@@ -821,29 +809,12 @@ class MediaServer(
         token: String,
     ) {
         out.pipeMode = "chunked"
-        val type = ContentType.parse(entry.mime)
-        val tail = outputArgs(entry.format)
         if (head) {
-            // Headers only, no process and no resolve (a HEAD must never start ffmpeg).
-            dlnaHeaders(call, entry)
-            // No length is known, so the answer is chunked, and CIO writes the terminator (0 CRLF CRLF) after the headers
-            // even though a HEAD answer has no body. On a kept-alive connection a client reads those bytes as the start
-            // of its next response (JDK client: Invalid status line "0"). CIO cannot send this answer without
-            // them (NoContent adds Content-Length: 0, which would say the track is empty; Transfer-Encoding is an
-            // engine-only header), so the answer ends its connection and the client opens a new one for its GET.
-            call.response.header(HttpHeaders.Connection, "close")
-            out.status = 200
-            call.respond(
-                object : OutgoingContent.WriteChannelContent() {
-                    override val status: HttpStatusCode = HttpStatusCode.OK
-                    override val contentType: ContentType = type
-
-                    override suspend fun writeTo(channel: ByteWriteChannel) {}
-                },
-            )
+            respondPipeHead(call, entry, out)
             return
         }
         val l = launcher
+        val tail = outputArgs(entry.format)
         val attempts = attemptsFor(src)
         if (l == null || tail == null || attempts == null) {
             out.status = 501
@@ -862,30 +833,79 @@ class MediaServer(
             serveBuffered(call, entry, attempts, l, tail, dir, out)
             return
         }
-
-        // A ranged GET on a video token whose first run completed is answered from that run's bytes,
-        // before anything is resolved or launched. A header parseRange rejects falls through to the live path.
         val cache = if (src is StreamSource.VideoPipe) rangeCache else null
-        val rangeHeader = call.request.headers[HttpHeaders.Range]
-        if (cache != null && rangeHeader != null) {
-            val cached = cache.lookup(token)
-            if (cached != null && cached.file.exists() && parseRange(rangeHeader, cached.size) != null) {
-                out.note = "range $rangeHeader of ${cached.size} bytes from the first run"
-                serveFile(call, entry, cached.file, false, out, "cached-range")
-                return
-            }
-            // No finished run for this token (the speaker hung up the first fetch, or this request overtook it).
-            // A resume-type Range is worth one bounded fill into a temp file: then 206 with the true total.
-            if (cached == null && isResumeRange(rangeHeader) && entry.format in COLD_FILL_FORMATS && !cache.isOversize(token)) {
-                val filled = coldFill(cache, token, attempts, l, tail, out)
-                if (filled != null) {
-                    out.note = "range $rangeHeader of ${filled.size} bytes from a bounded fill"
-                    serveFile(call, entry, filled.file, false, out, "range-fill")
-                    return
-                }
+        if (cache != null && serveFromRangeCache(call, entry, cache, token, attempts, l, tail, out)) return
+        serveLive(call, entry, cache, token, attempts, l, tail, out)
+    }
+
+    /** Headers only, no process and no resolve (a HEAD must never start ffmpeg). */
+    private suspend fun respondPipeHead(call: ApplicationCall, entry: StreamEntry, out: Outcome) {
+        val type = ContentType.parse(entry.mime)
+        dlnaHeaders(call, entry)
+        // No length is known, so the answer is chunked, and CIO writes the terminator (0 CRLF CRLF) after the headers
+        // even though a HEAD answer has no body. On a kept-alive connection a client reads those bytes as the start
+        // of its next response (JDK client: Invalid status line "0"). CIO cannot send this answer without
+        // them (NoContent adds Content-Length: 0, which would say the track is empty; Transfer-Encoding is an
+        // engine-only header), so the answer ends its connection and the client opens a new one for its GET.
+        call.response.header(HttpHeaders.Connection, "close")
+        out.status = 200
+        call.respond(
+            object : OutgoingContent.WriteChannelContent() {
+                override val status: HttpStatusCode = HttpStatusCode.OK
+                override val contentType: ContentType = type
+
+                override suspend fun writeTo(channel: ByteWriteChannel) {}
+            },
+        )
+    }
+
+    /**
+     * A ranged GET on a video token whose first run completed is answered from that run's bytes, before anything is
+     * resolved or launched; a token with no finished run may get one bounded fill. A header parseRange rejects falls
+     * through to the live path. True when the call was answered.
+     */
+    private suspend fun serveFromRangeCache(
+        call: ApplicationCall,
+        entry: StreamEntry,
+        cache: PipeRangeCache,
+        token: String,
+        attempts: List<PipeAttempt>,
+        l: PipeLauncher,
+        tail: List<String>,
+        out: Outcome,
+    ): Boolean {
+        val rangeHeader = call.request.headers[HttpHeaders.Range] ?: return false
+        val cached = cache.lookup(token)
+        if (cached != null && cached.file.exists() && parseRange(rangeHeader, cached.size) != null) {
+            out.note = "range $rangeHeader of ${cached.size} bytes from the first run"
+            serveFile(call, entry, cached.file, false, out, "cached-range")
+            return true
+        }
+        // No finished run for this token (the speaker hung up the first fetch, or this request overtook it).
+        // A resume-type Range is worth one bounded fill into a temp file: then 206 with the true total.
+        if (cached == null && isResumeRange(rangeHeader) && entry.format in COLD_FILL_FORMATS && !cache.isOversize(token)) {
+            val filled = coldFill(cache, token, attempts, l, tail, out)
+            if (filled != null) {
+                out.note = "range $rangeHeader of ${filled.size} bytes from a bounded fill"
+                serveFile(call, entry, filled.file, false, out, "range-fill")
+                return true
             }
         }
+        return false
+    }
 
+    /** The attempt ladder for a live GET: the first attempt that produces a byte answers; 502 with every failure otherwise. */
+    private suspend fun serveLive(
+        call: ApplicationCall,
+        entry: StreamEntry,
+        cache: PipeRangeCache?,
+        token: String,
+        attempts: List<PipeAttempt>,
+        l: PipeLauncher,
+        tail: List<String>,
+        out: Outcome,
+    ) {
+        val pipeTee = PipeTee(l)
         val failures = mutableListOf<String>()
         for (attempt in attempts) {
             val input = try {
@@ -901,85 +921,8 @@ class MediaServer(
             // response byte, so this only catches cancellation (engine stop). A hang-up during the lookup is caught by
             // the first write below, which fails and kills ffmpeg within a flush (MediaServerLadderTest).
             if (!currentCoroutineContext().isActive) return
-            val proc = withContext(Dispatchers.IO) { l.start(input + tail + "pipe:1") }
-            try {
-                val stdout = proc.inputStream
-                val buf = ByteArray(PIPE_CHUNK)
-                var watchdogNote: String? = null
-                // Wait for the first audio byte; headers go out only after it, so a dead start is a 502, not an empty 200.
-                val firstLen = coroutineScope {
-                    val watchdog = launch {
-                        delay(FIRST_BYTE_TIMEOUT_MS)
-                        watchdogNote = "no first byte after ${FIRST_BYTE_TIMEOUT_MS / 1000} s"
-                        proc.destroyForcibly()
-                    }
-                    try {
-                        withContext(Dispatchers.IO) { stdout.read(buf) }
-                    } finally {
-                        watchdog.cancel()
-                    }
-                }
-                if (firstLen <= 0) {
-                    withContext(Dispatchers.IO) { runCatching { proc.waitFor(2, TimeUnit.SECONDS) } }
-                    val err = withContext(Dispatchers.IO) { l.stderrTail(proc) }
-                    val detail = listOfNotNull(watchdogNote, err.takeIf { it.isNotEmpty() }).joinToString(" | ")
-                        .ifEmpty { "ffmpeg produced no output" }
-                    failures += failureLine(attempt.name, detail, attempts.size > 1)
-                    continue
-                }
-                val first = buf.copyOf(firstLen)
-                // The tee copies exactly what the client is sent, so a complete run is the byte total a later Range can use.
-                var tee: TeeFill? = cache?.openTee(token)
-                if (tee?.write(first, 0, first.size) == false) tee = null
-                dlnaHeaders(call, entry)
-                out.status = 200
-                try {
-                    call.respondBytesWriter(contentType = type, status = HttpStatusCode.OK) {
-                        try {
-                            writeFully(first, 0, first.size)
-                            out.bytes += first.size
-                            flush()
-                            while (true) {
-                                // file writes stay on the IO dispatcher, never on the Ktor event loop
-                                val n = withContext(Dispatchers.IO) {
-                                    val k = stdout.read(buf)
-                                    val t = tee
-                                    if (t != null) {
-                                        if (k > 0) {
-                                            if (!t.write(buf, 0, k)) tee = null
-                                        } else if (k < 0) {
-                                            // End of stream: register the complete run BEFORE the body ends, so a Range
-                                            // that follows the last byte already finds it. Only a clean exit counts.
-                                            val clean = runCatching { proc.waitFor(2, TimeUnit.SECONDS) && proc.exitValue() == 0 }
-                                                .getOrDefault(false)
-                                            if (clean) t.complete() else t.abort()
-                                            tee = null
-                                        }
-                                    }
-                                    k
-                                }
-                                if (n < 0) break
-                                writeFully(buf, 0, n)
-                                out.bytes += n
-                                flush()
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Throwable) {
-                            // a write failure is the client hanging up; the finally below kills ffmpeg
-                            out.note = "client closed: ${e.javaClass.simpleName}"
-                        } finally {
-                            tee?.abort()
-                            killAndWait(proc)
-                        }
-                    }
-                } finally {
-                    tee?.abort()
-                }
-                return
-            } finally {
-                killAndWait(proc)
-            }
+            val failure = pipeTee.serve(call, entry, out, cache, token, input + tail + "pipe:1") ?: return
+            failures += failureLine(attempt.name, failure, attempts.size > 1)
         }
         out.status = 502
         out.note = failures.joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
@@ -1110,9 +1053,7 @@ class MediaServer(
 
     companion object {
         const val MAX_TOKENS = 256
-        private const val PIPE_CHUNK = 16 * 1024
         private const val MP3_BITRATE = "192k"
-        private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
         private const val FILL_POLL_MS = 50L
 
         /** Formats a cold token may be filled for: their file output equals their pipe output (see [coldFill]). mp3's does not. */
