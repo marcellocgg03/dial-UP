@@ -634,79 +634,28 @@ class Renderer(
         var preparing = true
         var startingSpeaker = false
         try {
-            if (taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id) {
-                prepared = taken.item
-                note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
-            } else {
-                releaseStream(taken?.item?.current)
-                prepared = prepareItem(video, position, format, forceOffset, offsetOnly)
-            }
+            prepared = takePreparedOrPrepare(taken, video, position, format, forceOffset, offsetOnly)
             val item = prepared
             preparing = false
             if (superseded(seq)) return LoadResult.Superseded
-
             expectStop = true
             soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
             if (superseded(seq)) return LoadResult.Superseded
-            // From here the speaker may hold our stream, so a clear must act on it (the flag) and must wait for this call (the entry).
-            val sending = CompletableDeferred<Unit>()
-            uriInFlight.add(sending)
-            loadedThisSession = true
-            // Registered above, then the check: a clear either bumped loadSeq before this check (the load stops here) or it
-            // finds the entry and the flag after its own bump and waits for the call, so no ordering lets the song land.
+            val sending = registerUriSend()
             beforeUri = false
             loadsBeforeUri.decrementAndGet()
             startingSpeaker = true
-            try {
-                if (superseded(seq)) return LoadResult.Superseded
-                soap.call(
-                    AV_TRANSPORT,
-                    "SetAVTransportURI",
-                    "InstanceID" to 0,
-                    "CurrentURI" to item.url,
-                    "CurrentURIMetaData" to item.metadata,
-                )
-            } finally {
-                uriInFlight.remove(sending)
-                sending.complete(Unit)
-            }
+            if (sendUri(item, seq, sending)) return LoadResult.Superseded
             if (superseded(seq)) return LoadResult.Superseded
             if (startPlaying) {
-                soap.call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
-                item.current.playSent = true
-                if (superseded(seq)) return LoadResult.Superseded
+                if (sendPlay(item, seq)) return LoadResult.Superseded
                 startingSpeaker = false
-
-                if (position > 1 && item.current.startAt == 0) {
-                    soap.waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
-                    if (superseded(seq)) return LoadResult.Superseded
-                    if (soap.ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
-                        // The speaker took the Seek but may still be seeking: hold the target until it settles.
-                        pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
-                    } else {
-                        // A speaker still starting can refuse a Seek; the first PLAYING poll sends it again.
-                        item.current.owedSeek = position
-                        note("warn", "Seek to ${Math.floor(position).toInt()}s after Play was refused - sending it again once the speaker plays")
-                    }
-                    if (superseded(seq)) return LoadResult.Superseded
-                }
+                if (position > 1 && item.current.startAt == 0 && seekAfterPlay(item, position, seq)) return LoadResult.Superseded
             }
-
             startingSpeaker = false
             adopt(item)
             adopted = true
-            // Evidence for the missing-artist question (G3): what we sent, as lengths and flags only.
-            val sent = summarizeDidl(item.metadata)
-            note(
-                "info",
-                "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})",
-                "videoId" to video.id,
-                "playDeferred" to !startPlaying,
-                "artistChars" to (sent?.creator?.length ?: 0),
-                "albumChars" to (sent?.album?.length ?: 0),
-                "hasArt" to (sent?.albumArtUri?.isNotEmpty() == true),
-                "didlChars" to item.metadata.length,
-            )
+            noteSent(item, video, startPlaying)
             return LoadResult.Started
         } catch (e: CancellationException) {
             throw e
@@ -717,18 +666,110 @@ class Renderer(
                 prepared = null
                 return loadResult(video, position, "mp3", startPlaying, forceOffset, offsetOnly)
             }
-            lastError = e.message ?: e::class.java.simpleName
-            note("error", "Play ${video.id} failed: $lastError")
-            expectStop = false
-            return when {
-                !preparing -> LoadResult.SpeakerFailed(e)
-                superseded(seq) -> LoadResult.Superseded
-                else -> LoadResult.PrepareFailed(e)
-            }
+            return failedLoad(e, video, seq, preparing)
         } finally {
             if (beforeUri) loadsBeforeUri.decrementAndGet()
             // A prepared item this load did not adopt (superseded, or failed after preparing) must not stay pinned.
             if (!adopted) releaseStream(prepared?.current)
+        }
+    }
+
+    /** The slot's track when it is the video asked for as a plain start, else the slot's stream is freed and the video is prepared. */
+    private suspend fun takePreparedOrPrepare(
+        taken: Queued?,
+        video: Video,
+        position: Double,
+        format: String?,
+        forceOffset: Boolean,
+        offsetOnly: Boolean,
+    ): PreparedItem {
+        if (taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id) {
+            note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
+            return taken.item
+        }
+        releaseStream(taken?.item?.current)
+        return prepareItem(video, position, format, forceOffset, offsetOnly)
+    }
+
+    /**
+     * One entry per SetAVTransportURI a load is about to send; [sendUri] completes it. From here the speaker may hold our
+     * stream, so a clear must act on it (the flag) and must wait for this call (the entry).
+     */
+    private fun registerUriSend(): CompletableDeferred<Unit> {
+        val sending = CompletableDeferred<Unit>()
+        uriInFlight.add(sending)
+        loadedThisSession = true
+        return sending
+    }
+
+    /**
+     * SetAVTransportURI for [item]; true when a newer play, a stop or removal overtook the load before the call. The entry was
+     * registered before this check: a clear either bumped loadSeq before it (the load stops here) or it finds the entry and the
+     * flag after its own bump and waits for the call, so no ordering lets the song land.
+     */
+    private suspend fun sendUri(item: PreparedItem, seq: Int, sending: CompletableDeferred<Unit>): Boolean {
+        try {
+            if (superseded(seq)) return true
+            soap.call(
+                AV_TRANSPORT,
+                "SetAVTransportURI",
+                "InstanceID" to 0,
+                "CurrentURI" to item.url,
+                "CurrentURIMetaData" to item.metadata,
+            )
+        } finally {
+            uriInFlight.remove(sending)
+            sending.complete(Unit)
+        }
+        return false
+    }
+
+    /** Play for [item]; true when the load was overtaken meanwhile. */
+    private suspend fun sendPlay(item: PreparedItem, seq: Int): Boolean {
+        soap.call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+        item.current.playSent = true
+        return superseded(seq)
+    }
+
+    /** The seek owed to a stream that cannot start at an offset: wait for PLAYING, then Seek; true when the load was overtaken. */
+    private suspend fun seekAfterPlay(item: PreparedItem, position: Double, seq: Int): Boolean {
+        soap.waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
+        if (superseded(seq)) return true
+        if (soap.ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
+            // The speaker took the Seek but may still be seeking: hold the target until it settles.
+            pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
+        } else {
+            // A speaker still starting can refuse a Seek; the first PLAYING poll sends it again.
+            item.current.owedSeek = position
+            note("warn", "Seek to ${Math.floor(position).toInt()}s after Play was refused - sending it again once the speaker plays")
+        }
+        return superseded(seq)
+    }
+
+    /** Evidence for the missing-artist question (G3): what we sent, as lengths and flags only. */
+    private fun noteSent(item: PreparedItem, video: Video, startPlaying: Boolean) {
+        val sent = summarizeDidl(item.metadata)
+        note(
+            "info",
+            "Sent \"${item.title}\" to renderer as ${item.format} (${item.mime})",
+            "videoId" to video.id,
+            "playDeferred" to !startPlaying,
+            "artistChars" to (sent?.creator?.length ?: 0),
+            "albumChars" to (sent?.album?.length ?: 0),
+            "hasArt" to (sent?.albumArtUri?.isNotEmpty() == true),
+            "didlChars" to item.metadata.length,
+        )
+    }
+
+    /** Records the failure of a load and says which kind it was: a speaker call, an overtaken load, or the preparing. */
+    private fun failedLoad(e: Exception, video: Video, seq: Int, preparing: Boolean): LoadResult {
+        lastError = e.message ?: e::class.java.simpleName
+        note("error", "Play ${video.id} failed: $lastError")
+        expectStop = false
+        return when {
+            !preparing -> LoadResult.SpeakerFailed(e)
+            superseded(seq) -> LoadResult.Superseded
+            else -> LoadResult.PrepareFailed(e)
         }
     }
 
