@@ -14,7 +14,6 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverOptions
 import dev.t2u.lounge.Video
 import dev.t2u.lounge.Volume
-import dev.t2u.media.FALLBACK_CHAIN
 import dev.t2u.media.FILE_FORMATS
 import dev.t2u.media.FORMATS
 import dev.t2u.media.ResolvedInfo
@@ -23,7 +22,6 @@ import dev.t2u.media.dlnaFeatures
 import dev.t2u.media.mimeOf
 import dev.t2u.upnp.DeviceDescription
 import dev.t2u.upnp.DidlItem
-import dev.t2u.upnp.SinkProtocol
 import dev.t2u.upnp.UpnpError
 import dev.t2u.upnp.buildDidl
 import dev.t2u.upnp.fetchDescription
@@ -49,7 +47,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -147,13 +144,11 @@ class Renderer(
         note = { level, message -> note(level, message) },
     )
 
-    @Volatile private var protocols: List<SinkProtocol>? = null
-
-    /** The format that last reached PLAYING on this speaker (loaded from its store, see [confirmFormat]). */
-    @Volatile private var learnedFormat: String? = null
-
-    /** Formats that reached PLAYING on this speaker since this renderer started; a start failure never forgets one of these. */
-    private val playedFormats: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val formats = FormatLearner(
+        outputFormat = { config.outputFormat },
+        store = { store },
+        note = { level, message -> note(level, message) },
+    )
 
     @Volatile private var ip: String? = null
 
@@ -335,15 +330,13 @@ class Renderer(
         val displayName = shownRendererName(deps.userName(udn), described)
         name = displayName
 
-        soap.safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { protocols = parseSink(it["Sink"]) }
+        soap.safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { formats.setProtocols(parseSink(it["Sink"])) }
 
         ip = config.advertiseIp ?: withContext(Dispatchers.IO) { localAddressFor(address) }
 
         val store = RendererDataStore(config.dataDir, udn) { message, error -> note("warn", "$message: ${error.message}") }
         this.store = store
-        // A stored value counts only when it names a chain format.
-        learnedFormat = (store.get(LEARNED_FORMAT_KEY) as? JsonPrimitive)
-            ?.takeIf { it.isString }?.content?.takeIf { it in FALLBACK_CHAIN }
+        formats.load(store)
         // What this speaker answered to SetNextAVTransportURI in an earlier run. Another model's answer is dropped.
         model = speakerModel(desc.manufacturer, desc.modelName, desc.modelNumber)
         val storedGapless = store.get(LEARNED_GAPLESS_KEY)
@@ -918,11 +911,11 @@ class Renderer(
     ): PreparedItem {
         val info = deps.resolver.resolve(video.id)
         val address = checkNotNull(ip) { "renderer was not initialised" }
-        var fmt = format ?: chooseFormat(config.outputFormat, learnedFormat, protocols, info.mime)
+        var fmt = format ?: formats.choose(info.mime)
         if (fmt == "direct" && startsMidTrack(position)) {
             // The relayed YouTube file cannot start at an offset, and a speaker that seeks inside a large fragmented MP4 scans
             // it from the start (minutes on a long track), so the next format starts ffmpeg at the position instead.
-            val offsetFormat = nextFormat("direct", protocols, info.mime) ?: "mp3"
+            val offsetFormat = formats.offsetFormat(info.mime)
             note("info", "Starting at ${Math.floor(position).toInt()}s: direct cannot start mid-track, using $offsetFormat")
             fmt = offsetFormat
         }
@@ -932,11 +925,7 @@ class Renderer(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val next = when (config.outputFormat) {
-                    "auto" -> nextFormat(fmt, protocols, info.mime)
-                    "streaming" -> if (fmt == "adts") "mp3" else null
-                    else -> null
-                }
+                val next = formats.nextAfter(fmt, info.mime)
                 if (next == null) throw e
                 note("warn", "Preparing $fmt failed (${e.message}) - trying $next")
                 fmt = next
@@ -1025,7 +1014,7 @@ class Renderer(
         sawPlaying = alreadyPlaying
         if (alreadyPlaying) {
             item.current.playSent = true
-            playedFormats.add(item.current.format)
+            formats.markPlayed(item.current.format)
         }
         metaReported = false
         foreignPolls = 0
@@ -2135,14 +2124,7 @@ class Renderer(
      * A normal start proves the format works for future tracks. An offset stream may have been chosen
      * only to seek, so it must not replace the speaker's ordinary format preference.
      */
-    private suspend fun confirmFormat(c: Current) {
-        if (c.offsetOnly) return
-        playedFormats.add(c.format)
-        if (config.outputFormat != "auto" || learnedFormat == c.format) return
-        learnedFormat = c.format
-        note("info", "Format ${c.format} works on this speaker - remembered")
-        store?.set(LEARNED_FORMAT_KEY, JsonPrimitive(c.format))
-    }
+    private suspend fun confirmFormat(c: Current) = formats.confirm(c)
 
     /**
      * The speaker accepted the URL but never started playing (a refused upstream host, a format it cannot
@@ -2152,19 +2134,8 @@ class Renderer(
      * the chain, stop and say why.
      */
     private suspend fun handleStartFailure(c: Current) {
-        val auto = config.outputFormat == "auto"
-        val next = when (config.outputFormat) {
-            "auto" -> nextFormat(c.format, protocols, c.sourceMime)
-            "streaming" -> if (c.format == "adts") "mp3" else null
-            else -> null
-        }
-        // A remembered format that has played on this speaker in this session is working: a start failure of one track
-        // (or of another format) does not make the app forget it. One that never played is cleared.
-        val remembered = learnedFormat
-        if (auto && !c.offsetOnly && remembered == c.format && remembered !in playedFormats) {
-            learnedFormat = null
-            store?.set(LEARNED_FORMAT_KEY, null)
-        }
+        val next = formats.nextAfter(c.format, c.sourceMime)
+        formats.forgetUnproven(c)
         if (next != null) {
             note("warn", "Renderer did not start ${c.format} - trying $next")
             stopPolling()
