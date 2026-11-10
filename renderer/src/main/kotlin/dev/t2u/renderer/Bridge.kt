@@ -463,6 +463,23 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         // mediaPort 0 means "any free port" (tests); the Node range check applies to the real port below
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
         val wifi = net.wifiIp.hostAddress.orEmpty()
+        val media = startMediaServer(base, wifi)
+        val config = base.copy(mediaPort = media.resolvedPort())
+        effective = config
+
+        val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
+        accessPolicy = policy
+
+        responder = buildResponder(net, policy)
+
+        val reg = buildRegistry(config, media, policy)
+        startDiscovery(reg)
+        launchWatchers(reg)
+        emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
+    }
+
+    /** Builds and starts the media server for [base] on [wifi] and keeps it in [mediaServer]. */
+    private fun startMediaServer(base: Config, wifi: String): MediaServer {
         // File builds (mp4) need ffmpeg, a place to write and a way to download the source. The builder keeps its
         // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb`; it
         // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
@@ -498,52 +515,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         )
         media.start()
         mediaServer = media
-        val config = base.copy(mediaPort = media.resolvedPort())
-        effective = config
+        return media
+    }
 
-        val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
-        accessPolicy = policy
-
-        responder = buildResponder(net, policy)
-
-        // reads the field, so a receiver that outlives a move advertises on the responder of the new address
-        val advertiser = object : DialAdvertiser {
-            override fun advertise(device: SsdpDevice) {
-                advertisedDevices[device.uuid] = device
-                responder?.register(device)
-                responder?.announce()
-            }
-
-            override fun withdraw(uuid: String) {
-                advertisedDevices.remove(uuid)
-                responder?.withdraw(uuid)
-            }
-        }
-
+    /** Builds the registry over the saved ports and the receiver and renderer factories, and keeps it in [registry]. */
+    private fun buildRegistry(config: Config, media: MediaServer, policy: DialAccessPolicy): RendererRegistry {
         val ports = PortRegistry(config.dataDir, config.receiverBasePort) { line -> emit("ports", "warn" to line) }.load()
-        val receivers = ReceiverFactory { player, options ->
-            // a receiver built after a move binds the current address
-            val receiver = YouTubeCastReceiver(
-                player,
-                options,
-                ReceiverDeps(
-                    bindHost = net.wifiIp.hostAddress.orEmpty(),
-                    accessPolicy = policy::allowsHttp,
-                    advertiser = advertiser,
-                    serverHeader = deps.serverHeader,
-                    http = deps.http.newBuilder().build(),
-                    endpoints = deps.loungeEndpoints,
-                    sink = deps.events,
-                    scope = deps.scope,
-                    onDialRequest = { request ->
-                        repair.noteDial()
-                        deps.onDialRequest(request)
-                    },
-                ),
-            )
-            track(receiver)
-            receiver
-        }
+        val receivers = receiverFactory(policy)
         val factory = RendererFactory { udn, location, address, maxAge, port ->
             Renderer(
                 udn,
@@ -568,14 +546,61 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
         val reg = RendererRegistry(config, ports, factory, deps.events, hidden = { deps.hidden?.contains(it) == true })
         registry = reg
+        return reg
+    }
 
+    /** The factory that builds each speaker's cast receiver, advertising through the current responder. */
+    private fun receiverFactory(policy: DialAccessPolicy): ReceiverFactory {
+        // reads the field, so a receiver that outlives a move advertises on the responder of the new address
+        val advertiser = object : DialAdvertiser {
+            override fun advertise(device: SsdpDevice) {
+                advertisedDevices[device.uuid] = device
+                responder?.register(device)
+                responder?.announce()
+            }
+
+            override fun withdraw(uuid: String) {
+                advertisedDevices.remove(uuid)
+                responder?.withdraw(uuid)
+            }
+        }
+        return ReceiverFactory { player, options ->
+            // a receiver built after a move binds the current address
+            val receiver = YouTubeCastReceiver(
+                player,
+                options,
+                ReceiverDeps(
+                    bindHost = net.wifiIp.hostAddress.orEmpty(),
+                    accessPolicy = policy::allowsHttp,
+                    advertiser = advertiser,
+                    serverHeader = deps.serverHeader,
+                    http = deps.http.newBuilder().build(),
+                    endpoints = deps.loungeEndpoints,
+                    sink = deps.events,
+                    scope = deps.scope,
+                    onDialRequest = { request ->
+                        repair.noteDial()
+                        deps.onDialRequest(request)
+                    },
+                ),
+            )
+            track(receiver)
+            receiver
+        }
+    }
+
+    /** Starts the SSDP client over [reg], keeps it in [ssdp], and probes and watches the saved manual speakers. */
+    private fun startDiscovery(reg: RendererRegistry) {
         val client = Ssdp(listOf(net.wifiIp), clientEvents(reg), net.ssdpSearchTarget)
         client.start()
         ssdp = client
         val probesSentAt = System.currentTimeMillis()
         manual.probeSavedSpeakers(client, reg)
         manual.watchManualSpeakers(reg, probesSentAt)
+    }
 
+    /** Starts the count and speaker flows, the discovery schedules and the housekeeping timer on the handler scope. */
+    private fun launchWatchers(reg: RendererRegistry) {
         handlerScope.launch { countFlow(reg).collect { _castCount.value = it } }
         handlerScope.launch { visibleCountFlow(reg).collect { _visibleCastCount.value = it } }
         handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
@@ -587,7 +612,6 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 housekeeping("timer")
             }
         }
-        emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
     }
 
     // ------------------------------------------------------------------------------------------ SSDP wiring
