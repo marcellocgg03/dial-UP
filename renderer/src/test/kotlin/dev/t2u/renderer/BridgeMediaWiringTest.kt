@@ -161,7 +161,8 @@ class BridgeMediaWiringTest {
         val bridge = castMp4(h.testConfig(outputFormat = "mp4").copy(cacheMb = 64))
         val cache = cacheOf(bridge)
         assertEquals(64L * 1_048_576L, cache["limitBytes"]!!.jsonPrimitive.long)
-        assertTrue(cache["files"]!!.jsonPrimitive.int >= 2, "the built file and its source: $cache")
+        // The downloaded source is dropped once the build has succeeded, so only the built file is left.
+        assertEquals(1, cache["files"]!!.jsonPrimitive.int, "the built file: $cache")
         assertTrue(cache["bytes"]!!.jsonPrimitive.long > 0, "$cache")
     }
 
