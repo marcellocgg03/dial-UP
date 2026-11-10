@@ -264,13 +264,18 @@ class MediaServerCharacterizationTest {
     @DisplayName("direct: an upstream body that fails mid-transfer ends the connection and notes 'transfer ended'")
     fun aFailingUpstreamBodyEndsTheTransfer() {
         val chunk = payload(4096)
+        // The upstream fails only once the client has the response head: failing at once races the server's first flush.
+        val headSeen = java.util.concurrent.CountDownLatch(1)
         val failing = object : InputStream() {
             private var sent = false
 
             override fun read(): Int = throw UnsupportedOperationException()
 
             override fun read(b: ByteArray, off: Int, len: Int): Int {
-                if (sent) throw IOException("upstream reset")
+                if (sent) {
+                    headSeen.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                    throw IOException("upstream reset")
+                }
                 sent = true
                 chunk.copyInto(b, off)
                 return chunk.size
@@ -288,6 +293,7 @@ class MediaServerCharacterizationTest {
             val input = s.getInputStream().buffered()
             val (status, _) = RawHttp.readHead(input)
             assertEquals(200, status)
+            headSeen.countDown()
             try {
                 input.readBytes()
             } catch (_: IOException) {
