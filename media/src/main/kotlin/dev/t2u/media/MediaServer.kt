@@ -37,7 +37,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.io.RandomAccessFile
 import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -101,6 +100,7 @@ class MediaServer(
     /** Windows read ahead for `direct` tokens; bounded by [READ_AHEAD_TOTAL_BYTES]. */
     private val readAhead = ReadAheadStore(READ_AHEAD_TOTAL_BYTES)
     private val scans = ConcurrentHashMap<String, DirectScan>()
+    private val byteRanges = ByteRangeResponder()
 
     /** Finished runs of video pipe tokens, for ranged GETs; null when disabled or without a [bufferDir]. */
     private val rangeCache: PipeRangeCache? =
@@ -402,12 +402,6 @@ class MediaServer(
         }
     }
 
-    private fun dlnaHeaders(call: ApplicationCall, entry: StreamEntry) {
-        call.response.header("transferMode.dlna.org", "Streaming")
-        call.response.header("contentFeatures.dlna.org", dlnaFeatures(entry.format))
-        call.response.header(HttpHeaders.CacheControl, "no-store")
-    }
-
     // ------------------------------------------------------------------------------------ file
 
     private suspend fun serveFile(
@@ -468,60 +462,7 @@ class MediaServer(
             file = rebuilt
             out.note = "rebuilt"
         }
-        val size = file.length()
-        val rangeHeader = call.request.headers[HttpHeaders.Range]
-        val range = if (rangeHeader != null) parseRange(rangeHeader, size) else null
-        if (range is ByteRange.Unsatisfiable) {
-            out.status = 416
-            call.response.header(HttpHeaders.ContentRange, "bytes */$size")
-            call.respond(HttpStatusCode.RequestedRangeNotSatisfiable)
-            return
-        }
-        val span = range as? ByteRange.Span ?: ByteRange.Span(0, size - 1)
-        val length = if (size == 0L) 0 else span.end - span.start + 1
-        val partial = range is ByteRange.Span
-        val status = if (partial) HttpStatusCode.PartialContent else HttpStatusCode.OK
-
-        dlnaHeaders(call, entry)
-        call.response.header(HttpHeaders.AcceptRanges, "bytes")
-        if (partial) call.response.header(HttpHeaders.ContentRange, "bytes ${span.start}-${span.end}/$size")
-        out.status = status.value
-        val type = ContentType.parse(entry.mime)
-
-        if (head) {
-            call.respond(
-                object : OutgoingContent.NoContent() {
-                    override val status: HttpStatusCode = status
-                    override val contentType: ContentType = type
-                    override val contentLength: Long = length
-                },
-            )
-            return
-        }
-        call.respond(
-            object : OutgoingContent.WriteChannelContent() {
-                override val status: HttpStatusCode = status
-                override val contentType: ContentType = type
-                override val contentLength: Long = length
-
-                override suspend fun writeTo(channel: ByteWriteChannel) {
-                    withContext(Dispatchers.IO) {
-                        RandomAccessFile(file, "r").use { raf ->
-                            raf.seek(span.start)
-                            var left = length
-                            val buf = ByteArray(FILE_CHUNK)
-                            while (left > 0) {
-                                val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-                                if (n < 0) break
-                                channel.writeFully(buf, 0, n)
-                                out.bytes += n
-                                left -= n
-                            }
-                        }
-                    }
-                }
-            },
-        )
+        byteRanges.respond(call, entry, file, head, out)
     }
 
     // ------------------------------------------------------------------------------------ direct
@@ -1169,7 +1110,6 @@ class MediaServer(
 
     companion object {
         const val MAX_TOKENS = 256
-        private const val FILE_CHUNK = 64 * 1024
         private const val PIPE_CHUNK = 16 * 1024
         private const val MP3_BITRATE = "192k"
         private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
