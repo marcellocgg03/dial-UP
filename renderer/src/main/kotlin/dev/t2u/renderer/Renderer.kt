@@ -24,7 +24,6 @@ import dev.t2u.media.mimeOf
 import dev.t2u.upnp.DeviceDescription
 import dev.t2u.upnp.DidlItem
 import dev.t2u.upnp.SinkProtocol
-import dev.t2u.upnp.SoapClient
 import dev.t2u.upnp.UpnpError
 import dev.t2u.upnp.buildDidl
 import dev.t2u.upnp.fetchDescription
@@ -140,7 +139,13 @@ class Renderer(
 
     val ui: StateFlow<SpeakerUi> = liveUi
 
-    private val soap = SoapClient(deps.http)
+    private val soap = SoapTransport(
+        deps.http,
+        description = { description },
+        destroyed = { destroyed },
+        clock = deps.clock,
+        note = { level, message -> note(level, message) },
+    )
 
     @Volatile private var protocols: List<SinkProtocol>? = null
 
@@ -330,7 +335,7 @@ class Renderer(
         val displayName = shownRendererName(deps.userName(udn), described)
         name = displayName
 
-        safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { protocols = parseSink(it["Sink"]) }
+        soap.safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { protocols = parseSink(it["Sink"]) }
 
         ip = config.advertiseIp ?: withContext(Dispatchers.IO) { localAddressFor(address) }
 
@@ -646,7 +651,7 @@ class Renderer(
             if (superseded(seq)) return LoadResult.Superseded
 
             expectStop = true
-            safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+            soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
             if (superseded(seq)) return LoadResult.Superseded
             // From here the speaker may hold our stream, so a clear must act on it (the flag) and must wait for this call (the entry).
             val sending = CompletableDeferred<Unit>()
@@ -659,7 +664,7 @@ class Renderer(
             startingSpeaker = true
             try {
                 if (superseded(seq)) return LoadResult.Superseded
-                call(
+                soap.call(
                     AV_TRANSPORT,
                     "SetAVTransportURI",
                     "InstanceID" to 0,
@@ -672,15 +677,15 @@ class Renderer(
             }
             if (superseded(seq)) return LoadResult.Superseded
             if (startPlaying) {
-                call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+                soap.call(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
                 item.current.playSent = true
                 if (superseded(seq)) return LoadResult.Superseded
                 startingSpeaker = false
 
                 if (position > 1 && item.current.startAt == 0) {
-                    waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
+                    soap.waitForState("PLAYING", SEEK_AFTER_PLAY_WAIT_MS)
                     if (superseded(seq)) return LoadResult.Superseded
-                    if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
+                    if (soap.ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(position))) {
                         // The speaker took the Seek but may still be seeking: hold the target until it settles.
                         pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
                     } else {
@@ -792,7 +797,7 @@ class Renderer(
             // Nothing upcoming any more: a track the speaker holds as its next one is taken back (renderer.js line 441).
             val dropped = dropQueued()
             if (dropped?.sentToRenderer == true) {
-                safeCall(AV_TRANSPORT, "SetNextAVTransportURI", "InstanceID" to 0, "NextURI" to "", "NextURIMetaData" to "")
+                soap.safeCall(AV_TRANSPORT, "SetNextAVTransportURI", "InstanceID" to 0, "NextURI" to "", "NextURIMetaData" to "")
             }
             return
         }
@@ -859,7 +864,7 @@ class Renderer(
         // What the speaker answered; the in-memory flag and the store are updated after the call, outside its try.
         var learned: Boolean? = null
         try {
-            call(
+            soap.call(
                 AV_TRANSPORT,
                 "SetNextAVTransportURI",
                 "InstanceID" to 0,
@@ -1054,12 +1059,12 @@ class Renderer(
         if (c != null && c.playSent) {
             val budget = minOf(config.startTimeoutMs, PAUSE_START_WAIT_MS)
             val remaining = budget - (deps.clock() - c.loadedAt)
-            if (remaining > 0 && transportState() != "PLAYING") {
-                waitForState("PLAYING", remaining)
+            if (remaining > 0 && soap.transportState() != "PLAYING") {
+                soap.waitForState("PLAYING", remaining)
             }
             if (superseded(seq)) return false
         }
-        return ok(AV_TRANSPORT, "Pause", "InstanceID" to 0)
+        return soap.ok(AV_TRANSPORT, "Pause", "InstanceID" to 0)
     }
 
     /**
@@ -1086,7 +1091,7 @@ class Renderer(
             c.startedAt = c.loadedAt
             sawPlaying = false
             note("info", "Play sent for the stream loaded while paused", "startAt" to c.startAt)
-            val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+            val played = soap.ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
             if (played) c.playSent = true
             if (played) holdForPlayAfterPausedSeek(c)
             return played
@@ -1108,7 +1113,7 @@ class Renderer(
             c.startedAt = c.loadedAt
             note("info", "Start clock restarted at Play (speaker not yet seen playing)")
         }
-        val played = ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
+        val played = soap.ok(AV_TRANSPORT, "Play", "InstanceID" to 0, "Speed" to 1)
         if (played && c != null) holdForPlayAfterPausedSeek(c)
         return played
     }
@@ -1157,7 +1162,7 @@ class Renderer(
             note("info", "stop skipped: the speaker is on another source")
             true
         } else {
-            ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+            soap.ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
         }
         nowPlaying = null
         return stopped
@@ -1241,7 +1246,7 @@ class Renderer(
     }
 
     private suspend fun clearNow(run: ClearRun) {
-        val uri = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.get("CurrentURI").orEmpty()
+        val uri = soap.safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.get("CurrentURI").orEmpty()
         if (uri.isEmpty() || !isOurStream(uri)) {
             note("info", "clear skipped: the speaker is on another source")
             return
@@ -1251,8 +1256,8 @@ class Renderer(
         awaitUriCalls(uriInFlight.toList(), run) // a load that began its URI call after clearSpeaker took its snapshot
         expectStop = true
         stopPolling()
-        safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
-        val emptied = ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
+        soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+        val emptied = soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
         forgetTrack()
         if (!emptied) {
             note("warn", "the speaker refused an empty transport URI")
@@ -1297,7 +1302,7 @@ class Renderer(
             first.isEmpty() -> note("info", "Cleared the speaker: confirmed empty")
             !isOurStream(first) -> note("info", "Cleared the speaker: confirmed empty of our stream (the speaker is on another source now, left alone)")
             else -> {
-                if (!ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")) {
+                if (!soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")) {
                     note("warn", "clear: still ours after retry - the speaker still holds one of our streams and refused the second empty URI")
                     return
                 }
@@ -1312,7 +1317,7 @@ class Renderer(
     }
 
     /** The URI the speaker holds ("" when empty), or null when it could not be read. */
-    private suspend fun readCurrentUri(): String? = safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
+    private suspend fun readCurrentUri(): String? = soap.safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
 
     /** The running slow-clear watch, if any; a new clear replaces it and [destroy] cancels it. */
     @Volatile private var slowClearWatch: Job? = null
@@ -1348,8 +1353,8 @@ class Renderer(
             if (uri.isNullOrEmpty()) continue
             if (!isOurStream(uri)) return "the speaker is on another source, left alone"
             expectStop = true
-            safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
-            val emptied = ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
+            soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+            val emptied = soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
             return if (emptied) "emptied a stream that landed after the clear" else "found a stream that landed after the clear, the speaker refused the empty URI"
         }
     }
@@ -1406,7 +1411,7 @@ class Renderer(
         if (!before) {
             if (onAnotherSource(emptyCounts = true)) return skipped("seek")
             val target = position - base
-            if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
+            if (soap.ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(target))) {
                 // The speaker took the Seek but may still be seeking: hold the target until it settles.
                 pending = PendingSeek(seekSeq.incrementAndGet(), position, deps.clock())
                 c.wantedAt = position
@@ -1433,7 +1438,7 @@ class Renderer(
      */
     override suspend fun doSetVolume(volume: Volume): Boolean {
         if (destroyed) return false
-        val levelSet = ok(
+        val levelSet = soap.ok(
             RENDERING_CONTROL,
             "SetVolume",
             "InstanceID" to 0,
@@ -1441,13 +1446,13 @@ class Renderer(
             "DesiredVolume" to volume.level,
         )
         // SetMute is optional in RenderingControl; do not fail the whole call if it is absent.
-        safeCall(RENDERING_CONTROL, "SetMute", "InstanceID" to 0, "Channel" to "Master", "DesiredMute" to if (volume.muted) 1 else 0)
+        soap.safeCall(RENDERING_CONTROL, "SetMute", "InstanceID" to 0, "Channel" to "Master", "DesiredMute" to if (volume.muted) 1 else 0)
         return levelSet
     }
 
     override suspend fun doGetVolume(): Volume {
-        val level = safeCall(RENDERING_CONTROL, "GetVolume", "InstanceID" to 0, "Channel" to "Master")
-        val mute = safeCall(RENDERING_CONTROL, "GetMute", "InstanceID" to 0, "Channel" to "Master")
+        val level = soap.safeCall(RENDERING_CONTROL, "GetVolume", "InstanceID" to 0, "Channel" to "Master")
+        val mute = soap.safeCall(RENDERING_CONTROL, "GetMute", "InstanceID" to 0, "Channel" to "Master")
         return Volume(
             level = if (level != null) level["CurrentVolume"]?.trim()?.toIntOrNull() ?: 0 else 50,
             muted = mute?.get("CurrentMute")?.trim()?.lowercase() in listOf("1", "true"),
@@ -1468,7 +1473,7 @@ class Renderer(
         // A stream loaded while paused has not been played: the speaker's RelTime belongs to the previous one.
         if (current?.playSent == false) return offset.toDouble()
         val p = pending ?: return speakerPosition() ?: offset.toDouble()
-        val state = transportState()
+        val state = soap.transportState()
         val raw = speakerPosition()
         val now = deps.clock()
         val holding = !seekSettled(p, state, raw, now)
@@ -1481,7 +1486,7 @@ class Renderer(
     /** The speaker's position with our offset added; null when it cannot be read or names another stream. */
     private suspend fun speakerPosition(): Double? {
         val offset = current?.startAt ?: 0
-        val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+        val r = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
         // Right after a track change some speakers still report the previous track for a moment. If the
         // speaker names a different stream than ours, its numbers are not ours.
         if (r == null || isOnOtherStream(r["TrackURI"])) return null
@@ -1588,7 +1593,7 @@ class Renderer(
         // yt-dlp's duration is the video's real length. The speaker's TrackDuration can be the previous
         // track's, the remaining part of an offset stream, or missing, so it is only a fallback.
         nowPlaying?.duration?.takeIf { it != 0.0 }?.let { return it }
-        val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+        val r = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
         return if (r != null && !isOnOtherStream(r["TrackURI"])) parseHms(r["TrackDuration"]) else 0.0
     }
 
@@ -1599,50 +1604,6 @@ class Renderer(
     }
 
     // ------------------------------------------------------------------------------------- internals
-
-    private suspend fun call(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String> {
-        val service = description?.services?.get(SERVICE_ID_PREFIX + svc)
-            ?: throw UpnpError("$svc service not provided", "ENOSERVICE")
-        // A destroyed Renderer sends no more SOAP: the lounge shutdown that follows destroy() reads the position and the
-        // volume for its last state report, and a speaker that never answers would hold it for the SOAP timeout per call.
-        if (destroyed) throw UpnpError("the renderer was destroyed", "EDESTROYED")
-        return soap.callAction(service, action, params.toList())
-    }
-
-    /** A command whose failure the caller reports (false) but that must not throw. */
-    private suspend fun ok(svc: String, action: String, vararg params: Pair<String, Any?>): Boolean =
-        try {
-            call(svc, action, *params)
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            note("warn", "$action failed: ${e.message}")
-            false
-        }
-
-    /** A call whose failure is ignored (null). */
-    private suspend fun safeCall(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String>? =
-        try {
-            call(svc, action, *params)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            note("debug", "$action failed (ignored): ${e.message}")
-            null
-        }
-
-    private suspend fun transportState(): String? =
-        safeCall(AV_TRANSPORT, "GetTransportInfo", "InstanceID" to 0)?.get("CurrentTransportState")
-
-    private suspend fun waitForState(state: String, timeoutMs: Long): Boolean {
-        val end = deps.clock() + timeoutMs
-        while (deps.clock() < end) {
-            if (transportState() == state) return true
-            delay(TRANSPORT_WAIT_STEP_MS)
-        }
-        return false
-    }
 
     // Polling instead of GENA eventing: many cheap speakers have broken event subscriptions, and eventing
     // needs an inbound callback port. One sequential loop, so a slow speaker never stacks polls.
@@ -1753,9 +1714,9 @@ class Renderer(
             var reading: Map<String, String>? = null
             var kind = UriKind.UNREAD
             if (holds) {
-                state = transportState()
+                state = soap.transportState()
                 if (state != null) {
-                    reading = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+                    reading = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
                     val trackUri = reading?.get("TrackURI")
                     kind = when {
                         reading == null -> UriKind.UNREAD
@@ -1854,7 +1815,7 @@ class Renderer(
         polls++
         val epoch = commandEpoch.get()
         val seekSeqAtStart = seekSeq.get()
-        val state = transportState()
+        val state = soap.transportState()
         if (state == null || destroyed) return
         transport = state
         // The speaker's position as this poll read it, for the pending-Seek rule; null when not read or not our stream.
@@ -1863,7 +1824,7 @@ class Renderer(
         var foreign = false
         var foreignUri: String? = null
         if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
-            val r = safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+            val r = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
             if (r != null) {
                 val uri = r["TrackURI"]
                 val startAt = current?.startAt ?: 0
@@ -2033,7 +1994,7 @@ class Renderer(
     private suspend fun sendOwedSeek(c: Current) {
         val owed = c.owedSeek ?: return
         c.owedSeek = null
-        if (ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(owed - c.startAt))) {
+        if (soap.ok(AV_TRANSPORT, "Seek", "InstanceID" to 0, "Unit" to "REL_TIME", "Target" to seekHms(owed - c.startAt))) {
             pending = PendingSeek(seekSeq.incrementAndGet(), owed, deps.clock())
             note("info", "Seek to ${Math.floor(owed).toInt()}s sent once the speaker played")
         } else {
@@ -2140,7 +2101,7 @@ class Renderer(
             when (status) {
                 // Queue over (the stop inside next() skipped the speaker): stop the track it played on into.
                 PlayerStatus.STOPPED -> {
-                    ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
+                    soap.ok(AV_TRANSPORT, "Stop", "InstanceID" to 0)
                     note("info", "Queue over after a gapless switch - stopped the speaker")
                 }
                 // next() could not run (a refresh that never finished): the speaker plays something the phone does not know about.
