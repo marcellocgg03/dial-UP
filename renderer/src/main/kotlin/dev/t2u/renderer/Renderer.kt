@@ -226,21 +226,28 @@ class Renderer(
     @Volatile private var metaReported = false
 
     /**
-     * The upcoming track, prepared in the background while the current one plays. Taken by [load] when it is
-     * the video asked for; every other fate (replaced, dropped, not adopted) releases its stream. Guarded by [queueLock].
+     * The prepared next track, the prefetch that fills it and what is known about gapless support. Taken by [load] when the
+     * slot holds the video asked for; every other fate (replaced, dropped, not adopted) releases its stream.
      */
-    @Volatile private var queued: Queued? = null
-
-    private val queueLock = Any()
-
-    /**
-     * Does this speaker take SetNextAVTransportURI? Null until a send has been answered; false after a refusal that
-     * [isGaplessRefusal] names. Read from the speaker's store at [init] and written back when it changes.
-     */
-    @Volatile private var gaplessSupported: Boolean? = null
+    private val prefetch = PrefetchCoordinator(
+        scope = scope,
+        configSource = { config },
+        clock = deps.clock,
+        loadSeq = { loadSeq.get() },
+        currentSource = { current },
+        destroyedSource = { destroyed },
+        queueUpdating = { queue.isUpdating },
+        upcomingVideo = { getUpcomingVideo() },
+        prepareItem = { video, position, format -> prepareItem(video, position, format) },
+        releaseStream = { releaseStream(it) },
+        soap = soap,
+        storeSource = { store },
+        modelSource = { model },
+        emit = { level, message, fields -> note(level, message, *fields) },
+    )
 
     /** Whether the speaker is known to take SetNextAVTransportURI: null while unknown (tests and the cast state read it). */
-    internal val gaplessSupport: Boolean? get() = gaplessSupported
+    internal val gaplessSupport: Boolean? get() = prefetch.gaplessSupported
 
     /** The identity a stored gapless answer belongs to ([speakerModel] of the description), set in [init]. */
     @Volatile private var model: String = ""
@@ -259,11 +266,6 @@ class Renderer(
 
     /** True only while the hand-off's own [next] runs: the one Stop that may be skipped because the speaker already moved on. */
     @Volatile private var handingOff = false
-
-    private val prefetchBackoff = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
-
-    /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one. */
-    private val prefetching = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** This speaker's persistent store, created in [init] and shared with the cast receiver. */
     @Volatile private var store: RendererDataStore? = null
@@ -340,7 +342,7 @@ class Renderer(
         // What this speaker answered to SetNextAVTransportURI in an earlier run. Another model's answer is dropped.
         model = speakerModel(desc.manufacturer, desc.modelName, desc.modelNumber)
         val storedGapless = store.get(LEARNED_GAPLESS_KEY)
-        gaplessSupported = readGaplessMemory(storedGapless, model, deps.clock())
+        prefetch.gaplessSupported = readGaplessMemory(storedGapless, model, deps.clock())
         val storedModel = gaplessMemoryModel(storedGapless)
         if (storedModel != null && storedModel != model) store.set(LEARNED_GAPLESS_KEY, null)
         val options = ReceiverOptions(
@@ -450,7 +452,7 @@ class Renderer(
         terminatedAt = null
         loadSeq.incrementAndGet()
         releaseStream(current)
-        dropQueued()
+        prefetch.dropQueued()
         dropAdvanced()
         current = null
         pending = null
@@ -622,7 +624,7 @@ class Renderer(
         val seq = loadSeq.incrementAndGet()
         // Taken after the bump: a prefetch that finishes later sees the new loadSeq and releases its item itself. Node re-sends
         // the speaker's next slot after a load; the gapless hand-off does the same through the poll.
-        val taken = synchronized(queueLock) { queued.also { queued = null } }
+        val taken = prefetch.takeQueued()
         pending = null
         stopPolling()
         loadsBeforeUri.incrementAndGet()
@@ -741,160 +743,11 @@ class Renderer(
         return state.next ?: if (autoplayMode == AutoplayMode.ENABLED) state.autoplay else null
     }
 
-    /** Takes the prepared next track out of the slot and frees its stream; returns it. */
-    private fun dropQueued(): Queued? {
-        val q = synchronized(queueLock) { queued.also { queued = null } }
-        releaseStream(q?.item?.current)
-        return q
-    }
-
     /** Forgets the track the speaker played on into and frees its stream. */
     private fun dropAdvanced() {
         val a = advanced
         advanced = null
         releaseStream(a?.item?.current)
-    }
-
-    /**
-     * Keeps the next track prepared while this one plays (renderer.js `#maintainNext`). Called from the poll, so it only
-     * launches: the preparing can take many seconds (a download, an ffmpeg build) and runs in its own coroutine, one at a time,
-     * so the poll keeps detecting the track end, the start failure and drift meanwhile.
-     * While a playlist refresh is in flight the queue's next is empty, so nothing is done then (it would read as end of queue).
-     */
-    private fun maintainNext() {
-        if (!config.prefetch || destroyed || current == null || queue.isUpdating) return
-        if (!prefetching.compareAndSet(false, true)) return
-        val seq = loadSeq.get()
-        val currentId = current?.video?.id
-        if (currentId == null) {
-            prefetching.set(false)
-            return
-        }
-        scope.launch {
-            try {
-                prefetchOnce(seq, currentId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                note("debug", "Prefetch failed: ${e.message ?: e::class.java.simpleName}")
-            } finally {
-                prefetching.set(false)
-            }
-        }
-    }
-
-    private suspend fun prefetchOnce(seq: Int, currentId: String) {
-        val upcoming = getUpcomingVideo()
-        if (queue.isUpdating) return // a refresh began since the poll looked: the empty next is not the end of the queue
-        if (upcoming == null || upcoming.id == currentId) {
-            // Nothing upcoming any more: a track the speaker holds as its next one is taken back (renderer.js line 441).
-            val dropped = dropQueued()
-            if (dropped?.sentToRenderer == true) {
-                soap.safeCall(AV_TRANSPORT, "SetNextAVTransportURI", "InstanceID" to 0, "NextURI" to "", "NextURIMetaData" to "")
-            }
-            return
-        }
-        val held = queued
-        if (held?.video?.id == upcoming.id) {
-            // An unclear SetNextAVTransportURI failure (a bare 500, a timeout) is tried again from the next polls, at most 3
-            // attempts per queued track. A classified refusal made gaplessSupported false, so it is not retried.
-            if (!held.sentToRenderer && held.sendAttempts < 3 && config.prefetch && config.gapless && gaplessSupported != false) {
-                sendNextToRenderer(held)
-            }
-            return
-        }
-        if (prefetchBackoff.blockedUntil(upcoming.id) > deps.clock()) return
-        val t0 = deps.clock()
-        val item = try {
-            prepareItem(upcoming, 0.0, null)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // The track-end load still tries this video with its normal handling; only the poll backs off.
-            val delayMs = prefetchBackoff.failed(upcoming.id, deps.clock())
-            note(
-                "warn",
-                "Preparing next track ${upcoming.id} failed: ${e.message ?: e::class.java.simpleName} - next try in ${Math.round(delayMs / 1000.0)} s",
-            )
-            return
-        }
-        prefetchBackoff.succeeded(upcoming.id)
-        var queuedNow: Queued? = null
-        synchronized(queueLock) {
-            // The world may have moved on while this prepared: a newer load, a removal, another track, another next video.
-            val stillWanted = !destroyed && loadSeq.get() == seq && current?.video?.id == currentId &&
-                getUpcomingVideo()?.id == upcoming.id && !queue.isUpdating
-            if (!stillWanted) {
-                releaseStream(item.current)
-                return
-            }
-            val old = queued
-            queuedNow = Queued(upcoming, item)
-            queued = queuedNow
-            releaseStream(old?.item?.current)
-        }
-        note(
-            "info",
-            "Prepared next track \"${item.title}\" (${item.format})",
-            "videoId" to upcoming.id,
-            "format" to item.format,
-            "ms" to (deps.clock() - t0),
-        )
-        queuedNow?.let { sendNextToRenderer(it) }
-    }
-
-    /**
-     * Hands the prepared [q] to the speaker as its next track (renderer.js `#sendNextToRenderer`): the speaker then plays on
-     * into it by itself and the poll follows. Needs prefetch and gapless and a speaker not known to refuse. A refusal that
-     * [isGaplessRefusal] names is remembered for this run and logged once; any other failure is only noted. NextURI and DIDL go
-     * through the same SOAP escaping as SetAVTransportURI; the URL is never logged.
-     */
-    private suspend fun sendNextToRenderer(q: Queued) {
-        if (!config.prefetch || !config.gapless || gaplessSupported == false || destroyed) return
-        // Taken by a load, or replaced, while this was on its way: nothing to hand over.
-        if (synchronized(queueLock) { queued } !== q) return
-        q.sendAttempts++
-        // What the speaker answered; the in-memory flag and the store are updated after the call, outside its try.
-        var learned: Boolean? = null
-        try {
-            soap.call(
-                AV_TRANSPORT,
-                "SetNextAVTransportURI",
-                "InstanceID" to 0,
-                "NextURI" to q.item.url,
-                "NextURIMetaData" to q.item.metadata,
-            )
-            q.sentToRenderer = true
-            note("info", "Queued the next track on the speaker", "videoId" to q.video.id, "format" to q.item.format)
-            if (gaplessSupported != true) note("info", "Renderer supports gapless playback (SetNextAVTransportURI)")
-            learned = true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: UpnpError) {
-            if (isGaplessRefusal(e)) {
-                learned = false
-                // A speaker that was believed to do gapless and now refuses is a contradiction: the answer flips.
-                if (gaplessSupported != false) {
-                    note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
-                }
-            } else {
-                note("debug", "SetNextAVTransportURI failed: ${e.message}")
-            }
-        } catch (e: Exception) {
-            note("debug", "SetNextAVTransportURI failed: ${e.message ?: e::class.java.simpleName}")
-        }
-        when (learned) {
-            true -> {
-                val before = gaplessSupported
-                gaplessSupported = true
-                if (before != true) store?.set(LEARNED_GAPLESS_KEY, gaplessMemory(true, model, deps.clock()))
-            }
-            false -> {
-                gaplessSupported = false
-                store?.set(LEARNED_GAPLESS_KEY, gaplessMemory(false, model, deps.clock()))
-            }
-            null -> Unit
-        }
     }
 
     /**
@@ -1351,7 +1204,7 @@ class Renderer(
     private fun forgetTrack() {
         resyncWatch = null
         releaseStream(current)
-        dropQueued()
+        prefetch.dropQueued()
         dropAdvanced()
         current = null
         nowPlaying = null
@@ -1873,12 +1726,12 @@ class Renderer(
                 if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
                 // The speaker played on into the track it was given as next: follow it.
                 val via = rendererAdvancedVia()
-                val queuedTrack = queued
+                val queuedTrack = prefetch.queued
                 if (via != null && queuedTrack != null && followQueuedTrack(queuedTrack, via)) {
                     return
                 }
                 // Last, and it only launches: the poll must not wait for a prepare.
-                if (c != null) maintainNext()
+                if (c != null) prefetch.maintainNext()
             }
             state == "PAUSED_PLAYBACK" -> {
                 if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
@@ -1886,7 +1739,7 @@ class Renderer(
             (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING -> {
                 val p = position
                 val ended = trackEnded(p, c?.startAt ?: 0)
-                val accepted = queued?.takeIf { it.sentToRenderer }
+                val accepted = prefetch.queued?.takeIf { it.sentToRenderer }
                 if (ended && accepted != null) {
                     // The speaker took the queued track as its next one but did not play on into it.
                     // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
@@ -1900,7 +1753,7 @@ class Renderer(
                     if (destroyed || epoch != commandEpoch.get()) return
                     // It stopped instead of switching, or held the stream and never played it: what it was believed to do is wrong.
                     stopGracePolls = 0
-                    gaplessSupported = null
+                    prefetch.gaplessSupported = null
                     store?.set(LEARNED_GAPLESS_KEY, null)
                     note("info", "Speaker stopped at the end instead of playing the queued track - gapless support forgotten")
                 }
@@ -2025,7 +1878,7 @@ class Renderer(
      * `contains(streamPath)`, never equality: speakers rewrite host or escaping. The URI itself is never returned.
      */
     private suspend fun rendererAdvancedVia(): String? {
-        val q = queued
+        val q = prefetch.queued
         val path = q?.item?.current?.streamPath
         if (q == null || !q.sentToRenderer || path == null) return null
         val fromPosition = position?.uri
@@ -2036,7 +1889,7 @@ class Renderer(
 
     private fun queuedTrackFor(uri: String?): Queued? {
         if (uri.isNullOrEmpty()) return null
-        val candidate = queued ?: return null
+        val candidate = prefetch.queued ?: return null
         val path = candidate.item.current.streamPath ?: return null
         return candidate.takeIf { it.sentToRenderer && uri.contains(path) }
     }
@@ -2046,9 +1899,7 @@ class Renderer(
      * queue hand-off as a polled transition instead of reloading the previous track during rebind.
      */
     private fun followQueuedTrack(candidate: Queued, via: String): Boolean {
-        val taken = synchronized(queueLock) {
-            if (queued !== candidate) null else queued.also { queued = null }
-        } ?: return false
+        val taken = prefetch.takeIfQueued(candidate) ?: return false
         advanced = taken
         stopPolling()
         note("info", "Renderer continued into the next track", "videoId" to taken.video.id, "via" to via)
