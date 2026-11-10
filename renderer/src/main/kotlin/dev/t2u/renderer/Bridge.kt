@@ -108,11 +108,20 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     /** Serialises whole housekeeping passes, so two triggers never run one after the other's half-finished state. */
     private val housekeepingLock = Mutex()
 
-    /** What the repair class reads and replaces; every member goes to the field at the moment of use. */
-    private val repairHost = object : BridgeRepairHost {
+    /** What the repair and rebind classes read and replace; every member goes to the field at the moment of use. */
+    private val repairHost = object : NetworkRebinderHost {
+        override val started get() = this@Bridge.started
         override val stopped get() = this@Bridge.stopped
-        override val networkDown get() = this@Bridge.networkDown
-        override val net get() = this@Bridge.net
+        override var networkDown: Boolean
+            get() = this@Bridge.networkDown
+            set(value) {
+                this@Bridge.networkDown = value
+            }
+        override var net: BridgeNetwork
+            get() = this@Bridge.net
+            set(value) {
+                this@Bridge.net = value
+            }
         override val registry get() = this@Bridge.registry
         override val accessPolicy get() = this@Bridge.accessPolicy
         override val mediaServer get() = this@Bridge.mediaServer
@@ -135,6 +144,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
         override suspend fun multicastSearch(trigger: String, client: Ssdp) = this@Bridge.multicastSearch(trigger, client)
 
+        override suspend fun multicastSearch(trigger: String) = this@Bridge.multicastSearch(trigger)
+
         override suspend fun step(name: String, phase: String, block: suspend () -> Unit) = this@Bridge.step(name, phase, block)
 
         override fun emit(kind: String, vararg fields: Pair<String, Any?>) = this@Bridge.emit(kind, *fields)
@@ -144,6 +155,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /** Housekeeping's probe and repair step; it runs under [netLock], the same Mutex [networkLost] and [rebindNetwork] take. */
     private val repair = BridgeRepair(repairHost, deps, netLock)
+
+    /** Losing and regaining the network; it takes the same [netLock] as [repair]. */
+    private val rebinder = NetworkRebinder(repairHost, deps, netLock)
 
     /**
      * Wall-clock time the last run that completed started; null before the first. A run that failed or was cancelled stamps
@@ -809,16 +823,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * The phone lost its Wi-Fi: marks the network down and stops nothing. Housekeeping skips (network-down) until the next
      * [rebindNetwork]. Ignored unless the bridge is running.
      */
-    suspend fun networkLost() {
-        netLock.withLock {
-            if (!started.get() || stopped.get()) return
-            networkDown = true
-            emit("bridge", "event" to "network-lost")
-            for (tracked in receiverList.toList()) tracked.receiver.onNetworkLost()
-            // polls pause on every renderer: what a broken stream does on the speaker is not mirrored to the phone
-            for (r in registry?.renderers().orEmpty()) step("renderer", "network-lost") { r.onNetworkLost() }
-        }
-    }
+    suspend fun networkLost() = rebinder.networkLost()
 
     /**
      * Moves the running bridge to [newNet] in place: a new SSDP responder and client on the new
@@ -830,90 +835,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * again after [BridgeDeps.mediaRebindBackoffMs], and a media server that is still down afterwards is rebound by
      * housekeeping ([repairMedia]).
      */
-    suspend fun rebindNetwork(newNet: BridgeNetwork) {
-        netLock.withLock {
-            if (!started.get() || stopped.get()) return
-            val oldIp = net.wifiIp.hostAddress.orEmpty()
-            val newIp = newNet.wifiIp.hostAddress.orEmpty()
-            val policy = accessPolicy
-            val reg = registry
-            val oldResponder = responder
-            val oldClient = ssdp
-
-            // Same-address returns need no listener restart; stopping its HTTP engine would break active stream connections.
-            if (oldIp != newIp || mediaServer?.isListening() == false) {
-                step("media", "rebind") { rebindMedia(newIp) }
-            }
-            // a stopped responder is never left installed: the field is cleared as soon as the old one is stopped, and only a
-            // replacement that started is assigned; housekeeping rebuilds what a failed step leaves missing
-            step("responder-stop", "rebind") {
-                try {
-                    withContext(Dispatchers.IO) { oldResponder?.stop() }
-                } finally {
-                    responder = null
-                }
-            }
-            // the old listeners are closed before the new ones open, so a same-address move never fights itself for the socket
-            net = newNet
-            if (policy != null) {
-                step("responder-start", "rebind") {
-                    responder = withContext(Dispatchers.IO) { buildResponder(newNet, policy) }
-                }
-            }
-            step("ssdp-client", "rebind") {
-                try {
-                    withContext(Dispatchers.IO) { oldClient?.stop() }
-                } finally {
-                    ssdp = null
-                }
-                if (reg != null) {
-                    val fresh = Ssdp(listOf(newNet.wifiIp), clientEvents(reg), newNet.ssdpSearchTarget)
-                    withContext(Dispatchers.IO) { fresh.start() }
-                    // start() reports a failed bind through onError and does not throw: a deaf client is not installed
-                    if (fresh.isBound()) ssdp = fresh else withContext(Dispatchers.IO) { fresh.stop() }
-                }
-            }
-            var moved = 0
-            for (tracked in receiverList.toList()) {
-                val receiver = tracked.receiver
-                val running = receiver.status == "running"
-                step("dial", "rebind") { receiver.rebindDial(newIp) }
-                if (running) moved++
-            }
-            // the renderers learn the new address (they re-set the loaded track in their own scopes, one slow speaker holds up no other)
-            for (r in registry?.renderers().orEmpty()) step("renderer", "rebind") { r.onNetworkChanged(newIp) }
-            for (tracked in receiverList.toList()) tracked.receiver.onNetworkReturned()
-            networkDown = false
-            step("search", "rebind") { multicastSearch("rebind") }
-            emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
-        }
-    }
-
-    /**
-     * Moves the media server to [host], trying again after each [BridgeDeps.mediaRebindBackoffMs] delay when the bind
-     * fails. One `media-rebind` event per attempt. The last failure is rethrown, so [step] logs it as before. The caller holds
-     * [netLock], which a retry holds for the length of the waits.
-     */
-    private suspend fun rebindMedia(host: String) {
-        val media = mediaServer ?: return
-        val waits = deps.mediaRebindBackoffMs
-        var attempt = 0
-        while (true) {
-            attempt++
-            try {
-                withContext(Dispatchers.IO) { media.rebindHost(host) }
-                emit("media-rebind", "attempt" to attempt, "ok" to true)
-                return
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                emit("media-rebind", "attempt" to attempt, "ok" to false, "error" to t.javaClass.simpleName)
-                if (attempt > waits.size || stopped.get()) throw t
-                delay(waits[attempt - 1])
-                if (stopped.get()) return
-            }
-        }
-    }
+    suspend fun rebindNetwork(newNet: BridgeNetwork) = rebinder.rebindNetwork(newNet)
 
     /** Tests only: the current SSDP client, so a test can break it the way a failed rebind step or bind does. */
     internal fun ssdpClientForTest(): Ssdp? = ssdp
