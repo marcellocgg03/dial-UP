@@ -1553,79 +1553,96 @@ class Renderer(
      * Nothing here touches the volume.
      */
     private suspend fun resyncAfterNetworkReturn(ipChanged: Boolean) {
-        val deadline = deps.clock() + NETWORK_RESET_WAIT_MS
-        while (!destroyed && loadInFlight() && deps.clock() < deadline) delay(NETWORK_RESET_STEP_MS)
-        if (destroyed) return
-        if (loadInFlight()) {
-            note("warn", "A load was still under way ${NETWORK_RESET_WAIT_MS / 1000}s after the address change - the track is not re-set")
-            if (current != null) pollLoop.start()
-            return
-        }
+        if (resyncWaitedOutLoad()) return
         var attempt = 0
         while (true) {
             if (destroyed || networkDown) return
             val c = current
             val holds = c != null && status in RESET_STATUSES
-            var state: String? = null
-            var reading: Map<String, String>? = null
-            var kind = UriKind.UNREAD
-            if (holds) {
-                state = soap.transportState()
-                if (state != null) {
-                    reading = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
-                    val trackUri = reading?.get("TrackURI")
-                    kind = when {
-                        reading == null -> UriKind.UNREAD
-                        trackUri.isNullOrEmpty() -> UriKind.EMPTY
-                        isOurStream(trackUri) -> UriKind.OURS
-                        else -> UriKind.FOREIGN
-                    }
-                }
-                // the player may have been stopped, or another track loaded, while the speaker was read
-                if (destroyed || networkDown || current !== c) return
-            }
-            if (state == "PLAYING") {
-                val handedOff = queuedTrackFor(reading?.get("TrackURI"))?.let { queuedTrack ->
+            val read = readSpeakerForResync(c, holds) ?: return
+            if (read.state == "PLAYING") {
+                val handedOff = queuedTrackFor(read.reading?.get("TrackURI"))?.let { queuedTrack ->
                     followQueuedTrack(queuedTrack, "rebind")
                 } == true
                 if (handedOff) return
             }
             attempt++
-            when (resyncAction(holds, ipChanged, state, kind, attempt)) {
-                ResyncAction.NOTHING -> {
-                    if (current != null) pollLoop.start()
-                    return
-                }
-                ResyncAction.RETRY -> delay(config.pollIntervalMs)
-                ResyncAction.KEEP -> {
-                    val keep = c ?: return
-                    note(
-                        "info",
-                        "Kept \"${nowPlaying?.title ?: keep.video.id}\" after the network returned: the speaker still plays it",
-                        "videoId" to keep.video.id,
-                        "state" to state,
-                    )
-                    resyncWatch = keep to (deps.clock() + RESYNC_WATCH_MS)
-                    pollLoop.start()
-                    return
-                }
-                ResyncAction.RELEASE_FOREIGN -> {
-                    releaseTakenOverSpeaker(reading?.get("TrackURI"))
-                    return
-                }
-                ResyncAction.RESET_AT_SPEAKER -> {
-                    val keep = c ?: return
-                    val at = reading?.get("RelTime")?.let { parseHms(it) + keep.startAt } ?: position?.rel ?: keep.startAt.toDouble()
-                    resetLoaded(keep, at, "speaker")
-                    return
-                }
-                ResyncAction.RESET_AT_LAST_POLLED -> {
-                    val keep = c ?: return
-                    resetLoaded(keep, position?.rel ?: keep.startAt.toDouble(), "last-polled")
-                    return
+            if (!actOnResync(resyncAction(holds, ipChanged, read.state, read.kind, attempt), c, read)) return
+        }
+    }
+
+    /** What the speaker answered to a re-sync read: the transport state, the GetPositionInfo reading and what its TrackURI is. */
+    private class ResyncReading(val state: String?, val reading: Map<String, String>?, val kind: UriKind)
+
+    /** Waits for a load in flight (bounded by [NETWORK_RESET_WAIT_MS]). True when the re-sync is over: destroyed, or the load never finished. */
+    private suspend fun resyncWaitedOutLoad(): Boolean {
+        val deadline = deps.clock() + NETWORK_RESET_WAIT_MS
+        while (!destroyed && loadInFlight() && deps.clock() < deadline) delay(NETWORK_RESET_STEP_MS)
+        if (destroyed) return true
+        if (loadInFlight()) {
+            note("warn", "A load was still under way ${NETWORK_RESET_WAIT_MS / 1000}s after the address change - the track is not re-set")
+            if (current != null) pollLoop.start()
+            return true
+        }
+        return false
+    }
+
+    /** Reads the speaker when [holds]; null when the player changed while it was read (the re-sync is over). */
+    private suspend fun readSpeakerForResync(c: Current?, holds: Boolean): ResyncReading? {
+        var state: String? = null
+        var reading: Map<String, String>? = null
+        var kind = UriKind.UNREAD
+        if (holds) {
+            state = soap.transportState()
+            if (state != null) {
+                reading = soap.safeCall(AV_TRANSPORT, "GetPositionInfo", "InstanceID" to 0)
+                val trackUri = reading?.get("TrackURI")
+                kind = when {
+                    reading == null -> UriKind.UNREAD
+                    trackUri.isNullOrEmpty() -> UriKind.EMPTY
+                    isOurStream(trackUri) -> UriKind.OURS
+                    else -> UriKind.FOREIGN
                 }
             }
+            // the player may have been stopped, or another track loaded, while the speaker was read
+            if (destroyed || networkDown || current !== c) return null
         }
+        return ResyncReading(state, reading, kind)
+    }
+
+    /** Carries out the decided [action]. True when the re-sync reads the speaker again (RETRY), false when it is over. */
+    private suspend fun actOnResync(action: ResyncAction, c: Current?, read: ResyncReading): Boolean {
+        when (action) {
+            ResyncAction.NOTHING -> {
+                if (current != null) pollLoop.start()
+            }
+            ResyncAction.RETRY -> {
+                delay(config.pollIntervalMs)
+                return true
+            }
+            ResyncAction.KEEP -> {
+                val keep = c ?: return false
+                note(
+                    "info",
+                    "Kept \"${nowPlaying?.title ?: keep.video.id}\" after the network returned: the speaker still plays it",
+                    "videoId" to keep.video.id,
+                    "state" to read.state,
+                )
+                resyncWatch = keep to (deps.clock() + RESYNC_WATCH_MS)
+                pollLoop.start()
+            }
+            ResyncAction.RELEASE_FOREIGN -> releaseTakenOverSpeaker(read.reading?.get("TrackURI"))
+            ResyncAction.RESET_AT_SPEAKER -> {
+                val keep = c ?: return false
+                val at = read.reading?.get("RelTime")?.let { parseHms(it) + keep.startAt } ?: position?.rel ?: keep.startAt.toDouble()
+                resetLoaded(keep, at, "speaker")
+            }
+            ResyncAction.RESET_AT_LAST_POLLED -> {
+                val keep = c ?: return false
+                resetLoaded(keep, position?.rel ?: keep.startAt.toDouble(), "last-polled")
+            }
+        }
+        return false
     }
 
     /**
@@ -1674,9 +1691,43 @@ class Renderer(
         val state = soap.transportState()
         if (state == null || destroyed) return
         transport = state
-        // The speaker's position as this poll read it, for the pending-Seek rule; null when not read or not our stream.
+        val read = readPollPosition(state)
+        if (destroyed) return
+        // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
+        if (epoch != commandEpoch.get()) return
+
+        if (countForeignPoll(read.foreign) && current != null) {
+            releaseTakenOverSpeaker(read.foreignUri)
+            return
+        }
+
+        settlePendingSeek(state, read.polledRaw, seekSeqAtStart)
+        // A poll that began before a Seek was sent read the speaker from before it: its position proves nothing.
+        checkDrift(state, if (seekSeqAtStart == seekSeq.get()) read.polledRaw else null)
+
+        val c = current
+        if (startFailedByTimeout(state, c)) return
+
+        when {
+            state == "PLAYING" -> if (pollPlaying(c)) return
+            state == "PAUSED_PLAYBACK" -> {
+                if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
+            }
+            (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING ->
+                pollStopped(c, epoch)
+        }
+    }
+
+    /**
+     * What one poll read from GetPositionInfo. [polledRaw] is the speaker's position for the pending-Seek rule (null when not
+     * read or not our stream). [foreign] is true when it read a non-empty URI that is not ours while we hold a track
+     * (no extra SOAP call); [foreignUri] is that URI.
+     */
+    private class PollRead(val polledRaw: Double?, val foreign: Boolean, val foreignUri: String?)
+
+    /** Reads the speaker's position while it plays or is paused, and stores it as the poll position. */
+    private suspend fun readPollPosition(state: String): PollRead {
         var polledRaw: Double? = null
-        // Did this poll read a non-empty URI that is not ours while we hold a track? (no extra SOAP call)
         var foreign = false
         var foreignUri: String? = null
         if (state == "PLAYING" || state == "PAUSED_PLAYBACK") {
@@ -1704,95 +1755,85 @@ class Renderer(
                 }
             }
         }
-        if (destroyed) return
-        // A Pause or Play of ours finished while this poll was reading: what it read is from before that command.
-        if (epoch != commandEpoch.get()) return
+        return PollRead(polledRaw, foreign, foreignUri)
+    }
 
-        if (countForeignPoll(foreign) && current != null) {
-            releaseTakenOverSpeaker(foreignUri)
-            return
-        }
-
-        settlePendingSeek(state, polledRaw, seekSeqAtStart)
-        // A poll that began before a Seek was sent read the speaker from before it: its position proves nothing.
-        checkDrift(state, if (seekSeqAtStart == seekSeq.get()) polledRaw else null)
-
-        // If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream.
-        val c = current
+    /** If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream. True when it gave up on [c]. */
+    private suspend fun startFailedByTimeout(state: String, c: Current?): Boolean {
         if (!sawPlaying && state != "PLAYING" && c != null && status == PlayerStatus.PLAYING &&
             startTimedOut(c, deps.clock())
         ) {
             handleStartFailure(c)
-            return
+            return true
         }
+        return false
+    }
 
-        when {
-            state == "PLAYING" -> {
-                stopGracePolls = 0
-                if (!sawPlaying) {
-                    sawPlaying = true
-                    if (c != null) confirmFormat(c)
-                }
-                if (c != null) c.seekedWhilePaused = false // the speaker plays: nothing is owed to a Play after a paused Seek
-                if (c != null && c === current) sendOwedSeek(c)
-                // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
-                if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
-                if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
-                // The speaker played on into the track it was given as next: follow it.
-                val via = rendererAdvancedVia()
-                val queuedTrack = prefetch.queued
-                if (via != null && queuedTrack != null && followQueuedTrack(queuedTrack, via)) {
-                    return
-                }
-                // Last, and it only launches: the poll must not wait for a prepare.
-                if (c != null) prefetch.maintainNext()
+    /** The speaker reads PLAYING. True when the poll is over (it followed the queued track). */
+    private suspend fun pollPlaying(c: Current?): Boolean {
+        stopGracePolls = 0
+        if (!sawPlaying) {
+            sawPlaying = true
+            if (c != null) confirmFormat(c)
+        }
+        if (c != null) c.seekedWhilePaused = false // the speaker plays: nothing is owed to a Play after a paused Seek
+        if (c != null && c === current) sendOwedSeek(c)
+        // Play pressed in the Sonos app for a stream loaded while paused: stop answering startAt only.
+        if (c != null && !c.playSent && !isOnOtherStream(position?.uri)) c.playSent = true
+        if (status == PlayerStatus.PAUSED) notifyExternalStateChange(PlayerStatus.PLAYING)
+        // The speaker played on into the track it was given as next: follow it.
+        val via = rendererAdvancedVia()
+        val queuedTrack = prefetch.queued
+        if (via != null && queuedTrack != null && followQueuedTrack(queuedTrack, via)) {
+            return true
+        }
+        // Last, and it only launches: the poll must not wait for a prepare.
+        if (c != null) prefetch.maintainNext()
+        return false
+    }
+
+    /** The speaker reads STOPPED while we were playing: wait out a gapless switch, advance the queue, re-set a dry buffer, or mirror the stop. */
+    private suspend fun pollStopped(c: Current?, epoch: Int) {
+        val p = position
+        val ended = trackEnded(p, c?.startAt ?: 0)
+        val accepted = prefetch.queued?.takeIf { it.sentToRenderer }
+        if (ended && accepted != null) {
+            // The speaker took the queued track as its next one but did not play on into it.
+            // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
+            // the poll waits a few polls instead of reloading it (a reload would start the track twice).
+            if (stopGracePolls < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
+                if (destroyed || epoch != commandEpoch.get()) return
+                if (stopGracePolls == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
+                stopGracePolls++
+                return
             }
-            state == "PAUSED_PLAYBACK" -> {
-                if (status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.PAUSED)
-            }
-            (state == "STOPPED" || state == "NO_MEDIA_PRESENT") && sawPlaying && status == PlayerStatus.PLAYING -> {
-                val p = position
-                val ended = trackEnded(p, c?.startAt ?: 0)
-                val accepted = prefetch.queued?.takeIf { it.sentToRenderer }
-                if (ended && accepted != null) {
-                    // The speaker took the queued track as its next one but did not play on into it.
-                    // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
-                    // the poll waits a few polls instead of reloading it (a reload would start the track twice).
-                    if (stopGracePolls < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
-                        if (destroyed || epoch != commandEpoch.get()) return
-                        if (stopGracePolls == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
-                        stopGracePolls++
-                        return
-                    }
-                    if (destroyed || epoch != commandEpoch.get()) return
-                    // It stopped instead of switching, or held the stream and never played it: what it was believed to do is wrong.
-                    stopGracePolls = 0
-                    prefetch.gaplessSupported = null
-                    store?.set(LEARNED_GAPLESS_KEY, null)
-                    note("info", "Speaker stopped at the end instead of playing the queued track - gapless support forgotten")
-                }
-                // The speaker stopped. Both the launched coroutines below run outside this one, because they
-                // stop and restart polling, which would cancel the poll in the middle of the call.
-                pollLoop.stop()
-                if (ended) {
-                    note("info", "Track finished on renderer - advancing queue")
-                    advanceAfterTrackEnd()
-                } else if (c != null && resyncWatch.let { it != null && it.first === c && deps.clock() < it.second }) {
-                    // The speaker was kept after the network returned and now stops mid-track: its buffer ran dry.
-                    resyncWatch = null
-                    note("info", "The speaker stopped after the network returned - re-setting at the last polled position")
-                    val at = p?.rel ?: c.startAt.toDouble()
-                    resetJob = scope.launch { resetLoaded(c, at, "stopped-after-keep") }
-                } else {
-                    // Stop pressed on the speaker, or a stream that died early: mirror it, do not skip the song.
-                    // The track stays loaded (clearing is only for a disconnect and the service Stop).
-                    note(
-                        "info",
-                        "Track stopped on the speaker at ${p?.rel?.toInt()} of ${p?.dur?.toInt()} s - mirroring the stop, not advancing",
-                    )
-                    scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
-                }
-            }
+            if (destroyed || epoch != commandEpoch.get()) return
+            // It stopped instead of switching, or held the stream and never played it: what it was believed to do is wrong.
+            stopGracePolls = 0
+            prefetch.gaplessSupported = null
+            store?.set(LEARNED_GAPLESS_KEY, null)
+            note("info", "Speaker stopped at the end instead of playing the queued track - gapless support forgotten")
+        }
+        // The speaker stopped. Both the launched coroutines below run outside this one, because they
+        // stop and restart polling, which would cancel the poll in the middle of the call.
+        pollLoop.stop()
+        if (ended) {
+            note("info", "Track finished on renderer - advancing queue")
+            advanceAfterTrackEnd()
+        } else if (c != null && resyncWatch.let { it != null && it.first === c && deps.clock() < it.second }) {
+            // The speaker was kept after the network returned and now stops mid-track: its buffer ran dry.
+            resyncWatch = null
+            note("info", "The speaker stopped after the network returned - re-setting at the last polled position")
+            val at = p?.rel ?: c.startAt.toDouble()
+            resetJob = scope.launch { resetLoaded(c, at, "stopped-after-keep") }
+        } else {
+            // Stop pressed on the speaker, or a stream that died early: mirror it, do not skip the song.
+            // The track stays loaded (clearing is only for a disconnect and the service Stop).
+            note(
+                "info",
+                "Track stopped on the speaker at ${p?.rel?.toInt()} of ${p?.dur?.toInt()} s - mirroring the stop, not advancing",
+            )
+            scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
         }
     }
 
