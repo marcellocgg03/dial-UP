@@ -9,13 +9,11 @@ package dev.t2u.lounge
 
 import dev.t2u.upnp.EventSink
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -23,7 +21,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -142,7 +139,7 @@ class Session(
                 }
             }
         }
-        ofs = 0
+        sendQueue.resetOffset()
         establish(screenFromStore)
         if (dataStore != null) {
             try {
@@ -195,10 +192,10 @@ class Session(
             refreshTimer?.cancel()
             rpc?.close()
             rpc = null
-            clearQueuedSends()
+            sendQueue.clearQueuedSends()
             try {
                 withTimeoutOrNull(FAREWELL_TIMEOUT_MS) {
-                    sendLock.withLock { postMessages(SendTask(listOf(OutgoingMessage.loungeScreenDisconnected()), epoch, CompletableDeferred())) }
+                    sendQueue.withSendLock { sendQueue.postUnqueued(listOf(OutgoingMessage.loungeScreenDisconnected())) }
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -224,7 +221,7 @@ class Session(
             refreshTimer?.cancel()
             val old = rpc
             try {
-                sendLock.withLock {
+                sendQueue.withSendLock {
                     bind.reset()
                     try {
                         connect(useStore = false)
@@ -240,7 +237,7 @@ class Session(
                 throw e
             }
             old?.close()
-            epoch++
+            sendQueue.nextEpoch()
             if (status == SessionStatus.REFRESHING) status = SessionStatus.RUNNING else rpc?.close()
         } finally {
             refreshMutex.unlock()
@@ -292,30 +289,15 @@ class Session(
 
     // ---- sending
 
-    private class SendTask(
-        val messages: List<OutgoingMessage>,
-        val epoch: Int,
-        val result: CompletableDeferred<Boolean>,
-        val deferKey: String? = null,
-    )
-
-    private class DeferredSend(val task: SendTask, var job: Job? = null)
-
-    private val sendChannel = Channel<SendTask>(Channel.UNLIMITED)
-    private val sendLock = Mutex()
     private val refreshMutex = Mutex()
-    private val deferred = HashMap<String, DeferredSend>()
 
-    @Volatile
-    private var epoch = 0
-
-    private var ofs = 0
-
-    private val sendConsumer: Job by lazy {
-        scope.launch {
-            for (task in sendChannel) process(task)
-        }
-    }
+    private val sendQueue = SessionSendQueue(
+        scope, endpoints, bind, log, formType,
+        execute = ::execute,
+        canSend = { status == SessionStatus.RUNNING || status == SessionStatus.REFRESHING },
+        refreshToken = ::refreshLoungeToken,
+        endSession = { end(it) },
+    )
 
     /**
      * Sends [messages] in queue order. With [deferKey], the send waits [deferMs]; a later call with the same key
@@ -326,111 +308,10 @@ class Session(
         messages: List<OutgoingMessage>,
         deferKey: String? = null,
         deferMs: Long = LoungeConstants.VOLUME_DEFER_MS,
-    ): Boolean {
-        if (status != SessionStatus.RUNNING && status != SessionStatus.REFRESHING) return false
-        sendConsumer.isActive // starts the consumer
-        val task = SendTask(messages, epoch, CompletableDeferred(), deferKey)
-        if (deferKey == null) {
-            sendChannel.trySend(task)
-        } else {
-            synchronized(deferred) {
-                cancelDeferredSendLocked(deferKey)
-                val pending = DeferredSend(task)
-                deferred[deferKey] = pending
-                if (deferMs <= 0) {
-                    sendChannel.trySend(task)
-                } else {
-                    pending.job = scope.launch {
-                        delay(deferMs)
-                        synchronized(deferred) {
-                            if (deferred[deferKey]?.task === task) sendChannel.trySend(task)
-                        }
-                    }
-                }
-            }
-        }
-        return task.result.await()
-    }
+    ): Boolean = sendQueue.sendMessage(messages, deferKey, deferMs)
 
     /** Discards a deferred send or its retry; an HTTP request already in flight cannot be recalled. */
-    fun cancelDeferredSend(key: String) {
-        synchronized(deferred) { cancelDeferredSendLocked(key) }
-    }
-
-    private fun cancelDeferredSendLocked(key: String) {
-        deferred.remove(key)?.let {
-            it.job?.cancel()
-            it.task.result.complete(false)
-        }
-    }
-
-    private suspend fun process(task: SendTask) {
-        var attempt = 0
-        while (true) {
-            try {
-                sendLock.withLock {
-                    if (task.deferKey != null) {
-                        val current = synchronized(deferred) {
-                            deferred[task.deferKey]?.task === task
-                        }
-                        if (!current) return
-                    }
-                    postMessages(task)
-                }
-                if (task.deferKey != null) {
-                    synchronized(deferred) {
-                        if (deferred[task.deferKey]?.task === task) deferred.remove(task.deferKey)
-                    }
-                }
-                task.result.complete(true)
-                return
-            } catch (e: CancellationException) {
-                task.result.complete(false)
-                throw e
-            } catch (e: Exception) {
-                attempt++
-                if (attempt >= 2) {
-                    // the retry after a token refresh failed as well
-                    task.result.complete(false)
-                    end(e)
-                    return
-                }
-                try {
-                    refreshLoungeToken()
-                } catch (r: Exception) {
-                    if (r is CancellationException) throw r
-                    task.result.complete(false)
-                    return
-                }
-            }
-        }
-    }
-
-    /** One message POST. Not queued: callers hold [sendLock]. */
-    private suspend fun postMessages(task: SendTask) {
-        val aid = if (task.epoch == epoch) task.messages.firstOrNull()?.aid else null
-        val url = endpoints.bind + "?" + bind.toQueryString(BindType.SEND_MESSAGE, aid)
-        val pairs = sendMessagePostData(task.messages, ofs)
-        ofs += task.messages.size
-        log.tx(task.messages)
-        val request = Request.Builder().url(url).header("User-Agent", LoungeConstants.USER_AGENT)
-            .post(formEncode(pairs).toRequestBody(formType)).build()
-        execute(request).use { checkOk(it, request) }
-    }
-
-    private fun clearQueuedSends() {
-        synchronized(deferred) {
-            deferred.values.forEach {
-                it.job?.cancel()
-                it.task.result.complete(false)
-            }
-            deferred.clear()
-        }
-        while (true) {
-            val task = sendChannel.tryReceive().getOrNull() ?: break
-            task.result.complete(false)
-        }
-    }
+    fun cancelDeferredSend(key: String) = sendQueue.cancelDeferredSend(key)
 
     // ---- lounge HTTP
 
@@ -664,10 +545,10 @@ class Session(
         bind.secrets().forEach { log.addSecret(it) }
         log.addSecret(screenId)
     }
+}
 
-    private fun checkOk(response: Response, request: Request) {
-        if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)
-    }
+internal fun checkOk(response: Response, request: Request) {
+    if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)
 }
 
 /** Awaits an OkHttp call; cancelling the coroutine cancels the call. */
