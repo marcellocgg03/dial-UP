@@ -32,9 +32,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -43,23 +40,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
 import java.net.Inet4Address
-
-/** Process-level handle so the command receiver can reach the running service. */
-object ServiceHub {
-    private val serviceState = MutableStateFlow<BridgeService?>(null)
-
-    /** The running service as a flow, so the GUI follows it live. */
-    val serviceFlow: StateFlow<BridgeService?> = serviceState.asStateFlow()
-
-    var service: BridgeService?
-        get() = serviceState.value
-        set(value) {
-            serviceState.value = value
-        }
-
-    /** The cast feature once the service has started its features; null otherwise. */
-    val cast = MutableStateFlow<CastFeature?>(null)
-}
 
 /**
  * The bridge's foreground service (type connectedDevice). Holds a MulticastLock for its whole
@@ -604,14 +584,4 @@ class BridgeService : Service(), SpikeHost {
         const val NOTIFICATION_ID = 1
         const val HEARTBEAT_MS = 30_000L
     }
-}
-
-/** Tiny helper kept out of the service body so BuildConfig (disabled) is not needed. */
-internal object BuildConfigFacts {
-    fun versionName(context: Context): String? =
-        try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        } catch (_: Throwable) {
-            null
-        }
 }
