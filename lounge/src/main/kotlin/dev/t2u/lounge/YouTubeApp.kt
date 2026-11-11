@@ -422,158 +422,197 @@ class YouTubeApp(
         }
     }
 
+    /**
+     * Hands a message to the function of its family and posts the replies it returns, once. A family that has nothing
+     * to answer returns no replies; a message ignored on an inactive session answers nothing.
+     */
     private suspend fun handleIncomingMessage(message: IncomingMessage, session: Session) {
         val aid = message.aid
         val payload = message.payload as? JsonObject
         val isActive = session === activeSession
         val client = session.client
-        val send = ArrayList<OutgoingMessage>()
-        when (message.name) {
-            "getNowPlaying" -> send.add(OutgoingMessage.nowPlaying(aid, if (isActive) player.getState() else null))
-
-            "loungeStatus" -> send.addAll(handleLoungeStatus(aid, payload, session, isActive))
-
-            "setPlaylist", "updatePlaylist" -> {
-                if (!isActive) return
-                if (payload == null) {
-                    note("malformed", "name" to message.name, "reason" to "payload is not an object")
-                    return
-                }
-                send.addAll(handlePlaylistMessage(message.name, aid, payload, session, client))
-            }
-
-            "next" -> {
-                if (!isActive) return
-                player.next(aid)
-            }
-
-            "previous" -> {
-                if (!isActive) return
-                player.previous(aid)
-            }
-
-            "pause" -> {
-                if (!isActive) return
-                player.pause(aid)
-            }
-
-            "stopVideo" -> {
-                if (!isActive) return
-                player.stop(aid)
-            }
-
-            "seekTo" -> {
-                if (!isActive) return
-                val target = jsParseInt(payload.text("newTime"))
-                if (target == null) {
-                    note("malformed", "name" to message.name, "reason" to "newTime is not a number")
-                    return
-                }
-                player.seek(target.toDouble())
-            }
-
-            "getVolume" -> {
-                session.cancelDeferredSend(VOLUME_SEND_KEY)
-                postVolume(session, aid, player.getVolume(), defer = false)
-            }
-
-            "setVolume" -> {
-                if (!isActive) return
-                val level = jsParseInt(payload.text("volume"))
-                if (level == null) {
-                    note("malformed", "name" to message.name, "reason" to "volume is not a number")
-                    return
-                }
-                val delta = if (payload?.containsKey("delta") == true) {
-                    jsParseInt(payload.text("delta")) ?: run {
-                        note("malformed", "name" to message.name, "reason" to "delta is not a number")
-                        return
-                    }
-                } else {
-                    null
-                }
-                val muted = when (val m = payload?.get("muted")) {
-                    is JsonPrimitive -> if (m.isString) m.content.lowercase().trim() == "true" else m.booleanOrNull == true
-                    else -> false
-                }
-                session.cancelDeferredSend(VOLUME_SEND_KEY)
-                val current = player.getVolume()
-                // Button requests carry an absolute target and a directional delta. The target can be based on
-                // an older sender state; never let a volume-down request raise the speaker, or vice versa.
-                val directedLevel = when {
-                    delta != null && delta < 0 -> minOf(level, current.level)
-                    delta != null && delta > 0 -> maxOf(level, current.level)
-                    else -> level
-                }
-                if (directedLevel != level) {
-                    note("volumeDirectionConflict", "requested" to level, "current" to current.level, "delta" to delta)
-                }
-                val wanted = Volume(directedLevel, muted)
-                if (wanted == current) {
-                    postVolume(session, aid, current, defer = false)
-                } else {
-                    player.applyVolume(wanted)
-                    postVolume(session, aid, player.getVolume(), defer = false)
-                }
-            }
-
-            "play" -> {
-                if (!isActive) return
-                player.resume(aid)
-            }
-
-            "setAutoplayMode" -> {
-                if (!isActive) return
-                val mode = AutoplayMode.entries.firstOrNull { it.name == payload.text("autoplayMode") }
-                if (mode == null) {
-                    note("malformed", "name" to message.name, "reason" to "unknown autoplayMode")
-                    return
-                }
-                setAutoplayMode(aid, mode)
-            }
-
-            else -> note("notHandled", "theme" to client.theme, "aid" to aid, "name" to message.name.take(64))
+        val replies = when (message.name) {
+            "getNowPlaying", "loungeStatus" -> handleStatusMessage(message.name, aid, payload, session, isActive)
+            "setPlaylist", "updatePlaylist" -> handlePlaylistRequest(message.name, aid, payload, session, isActive, client)
+            "next", "previous", "pause", "stopVideo", "play" -> handleTransportMessage(message.name, aid, isActive)
+            "seekTo" -> handleSeekMessage(message.name, payload, isActive)
+            "getVolume" -> handleGetVolume(aid, session)
+            "setVolume" -> handleSetVolume(message.name, aid, payload, session, isActive)
+            "setAutoplayMode" -> handleAutoplayMessage(message.name, aid, payload, isActive)
+            else -> unhandledMessage(message.name, aid, client)
         }
-        if (send.isNotEmpty()) post(session, send)
+        if (replies.isNotEmpty()) post(session, replies)
+    }
+
+    private suspend fun handleStatusMessage(name: String, aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> =
+        if (name == "loungeStatus") {
+            handleLoungeStatus(aid, payload, session, isActive)
+        } else {
+            listOf(OutgoingMessage.nowPlaying(aid, if (isActive) player.getState() else null))
+        }
+
+    private suspend fun handlePlaylistRequest(
+        name: String,
+        aid: Int,
+        payload: JsonObject?,
+        session: Session,
+        isActive: Boolean,
+        client: Client,
+    ): List<OutgoingMessage> {
+        if (!isActive) return emptyList()
+        if (payload == null) {
+            note("malformed", "name" to name, "reason" to "payload is not an object")
+            return emptyList()
+        }
+        return handlePlaylistMessage(name, aid, payload, session, client)
+    }
+
+    private suspend fun handleTransportMessage(name: String, aid: Int, isActive: Boolean): List<OutgoingMessage> {
+        if (!isActive) return emptyList()
+        when (name) {
+            "next" -> player.next(aid)
+            "previous" -> player.previous(aid)
+            "pause" -> player.pause(aid)
+            "stopVideo" -> player.stop(aid)
+            "play" -> player.resume(aid)
+        }
+        return emptyList()
+    }
+
+    private suspend fun handleSeekMessage(name: String, payload: JsonObject?, isActive: Boolean): List<OutgoingMessage> {
+        if (!isActive) return emptyList()
+        val target = jsParseInt(payload.text("newTime"))
+        if (target == null) {
+            note("malformed", "name" to name, "reason" to "newTime is not a number")
+            return emptyList()
+        }
+        player.seek(target.toDouble())
+        return emptyList()
+    }
+
+    /** Answered on an inactive session too, as yt-cast-receiver does. */
+    private suspend fun handleGetVolume(aid: Int, session: Session): List<OutgoingMessage> {
+        session.cancelDeferredSend(VOLUME_SEND_KEY)
+        postVolume(session, aid, player.getVolume(), defer = false)
+        return emptyList()
+    }
+
+    private suspend fun handleSetVolume(name: String, aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> {
+        if (!isActive) return emptyList()
+        val level = jsParseInt(payload.text("volume"))
+        if (level == null) {
+            note("malformed", "name" to name, "reason" to "volume is not a number")
+            return emptyList()
+        }
+        val delta = if (payload?.containsKey("delta") == true) {
+            jsParseInt(payload.text("delta")) ?: run {
+                note("malformed", "name" to name, "reason" to "delta is not a number")
+                return emptyList()
+            }
+        } else {
+            null
+        }
+        session.cancelDeferredSend(VOLUME_SEND_KEY)
+        val current = player.getVolume()
+        val directed = directVolume(level, delta, current.level)
+        if (directed.conflicted) {
+            note("volumeDirectionConflict", "requested" to level, "current" to current.level, "delta" to delta)
+        }
+        val wanted = Volume(directed.level, requestedMute(payload))
+        if (wanted == current) {
+            postVolume(session, aid, current, defer = false)
+        } else {
+            player.applyVolume(wanted)
+            postVolume(session, aid, player.getVolume(), defer = false)
+        }
+        return emptyList()
+    }
+
+    /** The `muted` flag of a setVolume payload: a boolean, or the text "true"; anything else is not muted. */
+    private fun requestedMute(payload: JsonObject?): Boolean = when (val m = payload?.get("muted")) {
+        is JsonPrimitive -> if (m.isString) m.content.lowercase().trim() == "true" else m.booleanOrNull == true
+        else -> false
+    }
+
+    private suspend fun handleAutoplayMessage(name: String, aid: Int, payload: JsonObject?, isActive: Boolean): List<OutgoingMessage> {
+        if (!isActive) return emptyList()
+        val mode = AutoplayMode.entries.firstOrNull { it.name == payload.text("autoplayMode") }
+        if (mode == null) {
+            note("malformed", "name" to name, "reason" to "unknown autoplayMode")
+            return emptyList()
+        }
+        setAutoplayMode(aid, mode)
+        return emptyList()
+    }
+
+    private fun unhandledMessage(name: String, aid: Int, client: Client): List<OutgoingMessage> {
+        note("notHandled", "theme" to client.theme, "aid" to aid, "name" to name.take(64))
+        return emptyList()
     }
 
     private suspend fun handleLoungeStatus(aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> {
-        val client = session.client
-        var devicesParsed = true
-        val devices: List<JsonElement> = try {
-            (Json.parseToJsonElement(payload.text("devices") ?: "") as JsonArray).toList()
-        } catch (e: Exception) {
-            note("malformed", "name" to "loungeStatus", "reason" to "devices is not a JSON array", "theme" to client.theme)
-            devicesParsed = false
-            emptyList()
-        }
-        val senders = devices.mapNotNull { it as? JsonObject }
-            .filter { it.text("type") == "REMOTE_CONTROL" }
-            .mapNotNull { data ->
-                try {
-                    Sender.parse(data)
-                } catch (e: Exception) {
-                    problem("sender", e)
-                    null
-                }
-            }
+        val devices = parseLoungeDevices(payload, session.client)
+        val senders = parseRemoteControls(devices ?: emptyList())
+        if (state == AppState.STARTING) return takeOverSenders(senders, session, aid)
+
         val out = ArrayList<OutgoingMessage>()
-
-        if (state == AppState.STARTING) {
-            // The session was just opened: senders already connected to this screen are taken over.
-            if (senders.isNotEmpty()) {
-                connected.clear()
-                connected.addAll(senders)
-                note("sendersRestored", "count" to senders.size, "theme" to client.theme)
-                activeSession = session
-                setAutoplayModeBySenderCapabilities(aid)
-                enforceMutePolicy(aid)
-                out.add(navMessage(aid))
-                out.add(OutgoingMessage.nowPlaying(aid, null))
-            }
-            return out
+        if (!applyConnectionEvent(payload, senders, session, aid, out)) {
+            // The inactive session is answered with a null availability and does not touch lastNav.
+            val nav = if (isActive) player.getNavInfo() else null
+            out.add(if (nav != null) navMessage(aid, nav) else OutgoingMessage.onHasPreviousNextChanged(aid, null))
+            out.add(OutgoingMessage.onAutoplayModeChanged(aid, nav?.autoplayMode))
         }
+        if (devices != null && session === activeSession) {
+            val listedIds = remoteControls(devices).mapNotNull { it.text("id") }.toSet()
+            dropSendersNotListed(listedIds, session, aid)
+        }
+        return out
+    }
 
+    /** The `devices` list of a loungeStatus, or null (after a note) when it is not a JSON array. */
+    private fun parseLoungeDevices(payload: JsonObject?, client: Client): List<JsonElement>? = try {
+        (Json.parseToJsonElement(payload.text("devices") ?: "") as JsonArray).toList()
+    } catch (e: Exception) {
+        note("malformed", "name" to "loungeStatus", "reason" to "devices is not a JSON array", "theme" to client.theme)
+        null
+    }
+
+    private fun remoteControls(devices: List<JsonElement>): List<JsonObject> =
+        devices.mapNotNull { it as? JsonObject }.filter { it.text("type") == "REMOTE_CONTROL" }
+
+    private fun parseRemoteControls(devices: List<JsonElement>): List<Sender> = remoteControls(devices).mapNotNull { data ->
+        try {
+            Sender.parse(data)
+        } catch (e: Exception) {
+            problem("sender", e)
+            null
+        }
+    }
+
+    /** The session was just opened: senders already connected to this screen are taken over. */
+    private suspend fun takeOverSenders(senders: List<Sender>, session: Session, aid: Int): List<OutgoingMessage> {
+        val out = ArrayList<OutgoingMessage>()
+        if (senders.isNotEmpty()) {
+            connected.clear()
+            connected.addAll(senders)
+            note("sendersRestored", "count" to senders.size, "theme" to session.client.theme)
+            activeSession = session
+            setAutoplayModeBySenderCapabilities(aid)
+            enforceMutePolicy(aid)
+            out.add(navMessage(aid))
+            out.add(OutgoingMessage.nowPlaying(aid, null))
+        }
+        return out
+    }
+
+    /** Handles the sender that connected or disconnected, if the status names one; true when it did. */
+    private suspend fun applyConnectionEvent(
+        payload: JsonObject?,
+        senders: List<Sender>,
+        session: Session,
+        aid: Int,
+        out: MutableList<OutgoingMessage>,
+    ): Boolean {
         val details: JsonObject? = payload.text("connectionEventDetails")?.let {
             try {
                 Json.parseToJsonElement(it) as? JsonObject
@@ -596,20 +635,7 @@ class YouTubeApp(
                 handled = true
             }
         }
-        if (!handled) {
-            // The inactive session is answered with a null availability and does not touch lastNav.
-            val nav = if (isActive) player.getNavInfo() else null
-            out.add(if (nav != null) navMessage(aid, nav) else OutgoingMessage.onHasPreviousNextChanged(aid, null))
-            out.add(OutgoingMessage.onAutoplayModeChanged(aid, nav?.autoplayMode))
-        }
-        if (devicesParsed && session === activeSession) {
-            val listedIds = devices.mapNotNull { it as? JsonObject }
-                .filter { it.text("type") == "REMOTE_CONTROL" }
-                .mapNotNull { it.text("id") }
-                .toSet()
-            dropSendersNotListed(listedIds, session, aid)
-        }
-        return out
+        return handled
     }
 
     /**
