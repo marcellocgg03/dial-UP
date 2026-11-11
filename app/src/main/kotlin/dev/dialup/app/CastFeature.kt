@@ -680,11 +680,3 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         const val DENIED_LOG_WINDOW_NS = 60_000_000_000L
     }
 }
-
-/** Android can reclaim this directory, and its Clear cache action removes it. Move the old persistent files once. */
-@Synchronized
-internal fun mediaBufferDir(context: android.content.Context): File {
-    val dir = File(context.cacheDir, "media-buffer")
-    dev.t2u.media.migrateMediaBufferDir(File(context.filesDir, "media-buffer"), dir)
-    return dir
-}
