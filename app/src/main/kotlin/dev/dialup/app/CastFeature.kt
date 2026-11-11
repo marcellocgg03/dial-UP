@@ -24,7 +24,6 @@ import dev.t2u.upnp.ListenSpec
 import dev.t2u.upnp.lanHttpClient
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,7 +38,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -520,78 +518,45 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
 
     /** Call with the lifecycle lock held, after the debounce. A burst of events reaches here once, with the last reason. */
     private suspend fun applyRebind(h: SpikeHost, reason: String) {
-        val oldIp = lastIp
-        when (rebindAction(reason, bridge != null, h.wifiIpv4()?.hostAddress)) {
-            RebindAction.MARK_LOST_ONLY -> {
-                // no Wi-Fi address now: the bridge stays, frozen, and the next address change moves it
-                networkUpState.value = false
-                h.evidence.event("net", mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp))
+        RebindApplier(RebindHost(h)).apply(reason)
+    }
+
+    /** [RebindTarget] over this feature's bridge and lifecycle members; a private inner class because [CastFeature] is public. */
+    private inner class RebindHost(private val h: SpikeHost) : RebindTarget {
+        override val hasBridge: Boolean get() = bridge != null
+        override var lastIp: String?
+            get() = this@CastFeature.lastIp
+            set(value) {
+                this@CastFeature.lastIp = value
             }
 
-            RebindAction.START -> {
-                // a move is never cut in half by a newer event; that one waits for the lock instead
-                val ok = withContext(NonCancellable) { startBridgeGuarded(h, reason) }
-                if (ok) {
-                    h.evidence.event("net", mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
-                } else {
-                    h.evidence.event("net", mapOf("rebind" to false, "mode" to "start-failed", "reason" to reason, "oldIp" to oldIp))
-                    scheduleStartRetry(h)
-                }
-            }
+        override fun wifiIp(): String? = h.wifiIpv4()?.hostAddress
 
-            RebindAction.RESTART -> {
-                val ok = withContext(NonCancellable) {
-                    stopBridge(clearSpeakers = false)
-                    startBridgeGuarded(h, reason)
-                }
-                if (ok) {
-                    h.evidence.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to lastIp))
-                } else {
-                    h.evidence.event("net", mapOf("rebind" to false, "mode" to "restart-failed", "reason" to reason, "oldIp" to oldIp))
-                    scheduleStartRetry(h)
-                }
-            }
-
-            // only the retry reason gets here: a bridge exists (done) or there is still no Wi-Fi (look again later)
-            RebindAction.NOTHING -> if (bridge == null) {
-                // no start was tried, so a bind failure from an earlier one must not keep the quick retry going
-                lastStartBindFailure = false
-                consecutiveBindFailures = 0
-                scheduleStartRetry(h)
-            }
-
-            RebindAction.REBIND_IN_PLACE -> {
-                val started = System.nanoTime()
-                val validated = monitor?.awaitValidated(VALIDATED_WAIT_MS) ?: false
-                val waitedMs = (System.nanoTime() - started) / 1_000_000L
-                // the network may be gone again after the wait: then the bridge stays frozen until the next address
-                val network = bridgeNetwork(h)
-                val b = bridge
-                if (network == null || b == null) {
-                    networkUpState.value = false
-                    h.evidence.event(
-                        "net",
-                        mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp, "validated" to validated, "waitedMs" to waitedMs),
-                    )
-                    return
-                }
-                withContext(NonCancellable) { b.rebindNetwork(network) }
-                lastIp = network.wifiIp.hostAddress
-                networkUpState.value = true
-                h.evidence.event(
-                    "net",
-                    mapOf(
-                        "rebind" to true,
-                        "mode" to "in-place",
-                        "reason" to reason,
-                        "oldIp" to oldIp,
-                        "newIp" to lastIp,
-                        "validated" to validated,
-                        "waitedMs" to waitedMs,
-                    ),
-                )
-            }
+        override fun markNetworkUp(up: Boolean) {
+            networkUpState.value = up
         }
+
+        override suspend fun startGuarded(reason: String): Boolean = startBridgeGuarded(h, reason)
+
+        override suspend fun stopKeepingSpeakers() = stopBridge(clearSpeakers = false)
+
+        override fun scheduleStartRetry() = scheduleStartRetry(h)
+
+        override fun resetBindFailures() {
+            lastStartBindFailure = false
+            consecutiveBindFailures = 0
+        }
+
+        override suspend fun awaitValidated(): Boolean = monitor?.awaitValidated(VALIDATED_WAIT_MS) ?: false
+
+        override fun currentNetwork(): BridgeNetwork? = bridgeNetwork(h)
+
+        override fun inPlaceRebind(): (suspend (BridgeNetwork) -> Unit)? {
+            val b = bridge ?: return null
+            return { network -> b.rebindNetwork(network) }
+        }
+
+        override fun event(kind: String, fields: Map<String, Any?>) = h.evidence.event(kind, fields)
     }
 
     // ----- evidence mapping ----------------------------------------------------------------------
