@@ -32,24 +32,6 @@ import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
-/**
- * What the app needs to know about its speaker. [dataStore] holds the DIAL pid and the two sessions' identities;
- * without one nothing survives a restart. The policies default to the yt-cast-receiver defaults.
- */
-data class AppOptions(
-    val screenName: String,
-    val brand: String,
-    val model: String,
-    val dataStore: DataStore?,
-    val mutePolicy: MutePolicy = MutePolicy.AUTO,
-    val resetPlayerOnDisconnect: ResetPlayerOnDisconnectPolicy = ResetPlayerOnDisconnectPolicy.ALL_DISCONNECTED,
-)
-
-/** The app could not start; the cause carries the detail. */
-class AppException(message: String, cause: Throwable? = null) : Exception(message, cause)
-
-enum class AppState { STOPPED, STARTING, RUNNING, STOPPING }
-
 private val SAFE_PID = Regex("^[A-Za-z0-9-]{1,64}$")
 internal const val NETWORK_SENDER_RECOVERY_MS = 30_000L
 private const val VOLUME_SEND_KEY = "onVolumeChanged"
