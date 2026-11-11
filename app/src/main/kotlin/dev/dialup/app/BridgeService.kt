@@ -80,8 +80,20 @@ class BridgeService : Service(), SpikeHost {
 
     override fun onCreate() {
         super.onCreate()
-        // an exception nobody handles on this scope would end the process; log it instead. The scope
-        // exists before the evidence log does, so a failure in that window goes to logcat.
+        createScope()
+        // Channel first, startForeground before anything slow. A refusal is logged
+        // and stops the service instead of crashing it.
+        val foregroundError = startForegroundCapturingFailure()
+        openEvidence()
+        scope.launch { removeLegacyLogs() }
+        if (foregroundError != null) reportForegroundFailure(foregroundError)
+    }
+
+    /**
+     * An exception nobody handles on this scope would end the process; log it instead. The scope
+     * exists before the evidence log does, so a failure in that window goes to logcat.
+     */
+    private fun createScope() {
         scope = CoroutineScope(
             SupervisorJob() + Dispatchers.IO + loggingExceptionHandler { where, t ->
                 if (::evidence.isInitialized) {
@@ -91,16 +103,19 @@ class BridgeService : Service(), SpikeHost {
                 }
             },
         )
+    }
 
-        // Channel first, startForeground before anything slow. A refusal is logged
-        // and stops the service instead of crashing it.
-        var foregroundError: Throwable? = null
+    /** The channel and the first foreground start; the refusal, if any, is returned for [reportForegroundFailure]. */
+    private fun startForegroundCapturingFailure(): Throwable? =
         try {
             notifier.startForeground()
+            null
         } catch (t: Throwable) {
-            foregroundError = t
+            t
         }
 
+    /** The evidence directories, the shared event log and its level from config.json. */
+    private fun openEvidence() {
         evidenceDir = File(filesDir, "evidence").also { it.mkdirs() }
         spikeDir = File(filesDir, "spike").also { it.mkdirs() }
         // The rotating event log is app-private (filesDir/evidence), one shared writer for the process.
@@ -110,15 +125,15 @@ class BridgeService : Service(), SpikeHost {
         // The level from config.json applies from the first event (loadAppConfig never throws, reads at most 64 KiB).
         evidence.setLevel(logLevelOf(loadAppConfig(filesDir).config.logLevel))
         logDirFact = logDir
-        scope.launch { removeLegacyLogs() }
-        if (foregroundError != null) {
-            startForegroundFailed = true
-            evidence.event(
-                "feature-error",
-                mapOf("where" to "startForeground", "error" to foregroundError.javaClass.name, "message" to foregroundError.message),
-            )
-            stopSelf()
-        }
+    }
+
+    private fun reportForegroundFailure(error: Throwable) {
+        startForegroundFailed = true
+        evidence.event(
+            "feature-error",
+            mapOf("where" to "startForeground", "error" to error.javaClass.name, "message" to error.message),
+        )
+        stopSelf()
     }
 
     /**
