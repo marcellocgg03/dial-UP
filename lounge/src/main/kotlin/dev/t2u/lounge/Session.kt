@@ -48,21 +48,10 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-enum class SessionStatus { STOPPED, STARTING, RUNNING, REFRESHING, STOPPING }
-
-/** A lounge endpoint answered with a status other than 2xx. [path] has no query (it would hold credentials). */
-class LoungeHttpException(val status: Int, val path: String) : IOException("HTTP $status from $path")
-
-/** The session could not be established or kept; the message names the client, the cause carries the detail. */
-class SessionException(message: String, cause: Throwable? = null) : Exception(message, cause)
-
 /**
  * One lounge session. [begin] performs generate_screen_id (unless a screen id is stored), get_lounge_token_batch,
  * the bind init POST and opens the RPC long-poll; incoming messages go to [onMessages], one batch at a time, in order.
  */
-private const val FAREWELL_TIMEOUT_MS = 2000L
-private const val MIN_STREAM_MS = 1000L
-
 class Session(
     val client: Client,
     private val screenName: String,
