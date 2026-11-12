@@ -33,6 +33,18 @@ class DialAccessPolicy(
         return addr in phoneAddresses().map(::normalise)
     }
 
+    /**
+     * True when [remote] is served only because the mode is [DialAccessMode.LAN]: another device on the network, not this
+     * phone's own address and not loopback. In [DialAccessMode.PHONE] nobody is a guest (other devices are refused).
+     */
+    fun isGuest(remote: String): Boolean {
+        if (mode() != DialAccessMode.LAN) return false
+        val addr = normalise(remote)
+        if (addr.isEmpty()) return false
+        if (LOOPBACK_V4.matches(addr) || addr == "::1" || addr == "0:0:0:0:0:0:0:1") return false
+        return addr !in phoneAddresses().map(::normalise)
+    }
+
     /** True when an SSDP datagram from [address] may be answered. */
     fun allowsSsdp(address: InetAddress): Boolean = allowsHttp(address.hostAddress.orEmpty())
 

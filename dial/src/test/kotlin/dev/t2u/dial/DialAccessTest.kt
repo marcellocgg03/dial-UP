@@ -49,6 +49,18 @@ class DialAccessTest {
     }
 
     @Test
+    fun onlyAnotherDeviceInLanModeIsAGuest() {
+        val lan = policy(DialAccessMode.LAN)
+        assertTrue(lan.isGuest("192.168.50.45"))
+        assertTrue(lan.isGuest("::ffff:192.168.50.45"))
+        for (own in listOf("192.168.50.38", "::ffff:192.168.50.38", "127.0.0.1", "::1", "[::1]", "")) {
+            assertFalse(lan.isGuest(own), "'$own' is not a guest")
+        }
+        val phone = policy(DialAccessMode.PHONE)
+        assertFalse(phone.isGuest("192.168.50.45"), "phone mode never has guests")
+    }
+
+    @Test
     fun phoneModeAllowsOnlyThePhonesOwnAddresses() {
         val p = policy(DialAccessMode.PHONE)
         for (ok in listOf("192.168.50.38", "::ffff:192.168.50.38", "::FFFF:192.168.50.38", "127.0.0.1", "127.5.5.5", "::1", "[::1]", "0:0:0:0:0:0:0:1")) {

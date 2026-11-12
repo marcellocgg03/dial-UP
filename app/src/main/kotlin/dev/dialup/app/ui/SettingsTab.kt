@@ -139,6 +139,14 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         )
         HorizontalDivider()
         SwitchRow(
+            title = "Notify when another device casts",
+            support = "Show a notification each time another device on the LAN starts a cast on a renderer (LAN server mode only)",
+            checked = ui.notifyGuests,
+            onChange = { presenter.setNotifyGuests(it) },
+            tag = "setting-notify-guests",
+        )
+        HorizontalDivider()
+        SwitchRow(
             title = "Clear the renderer when a cast ends",
             support = "When a cast is manually disconnected, empty the renderer's queue",
             checked = ui.clearOnCastEnd,

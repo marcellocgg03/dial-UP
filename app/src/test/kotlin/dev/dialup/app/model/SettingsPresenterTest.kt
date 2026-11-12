@@ -234,6 +234,20 @@ class SettingsPresenterTest {
     }
 
     @Test
+    fun `the guest notice is on by default, saves, and needs no restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val bridge = FakeBridgePort()
+        val p = presenter(settings, bridge)
+        assertTrue(p.state.value.notifyGuests)
+        assertFalse(p.setNotifyGuests(false))
+        runCurrent()
+        assertFalse(settings.data.value.notifyGuests)
+        assertFalse(p.state.value.notifyGuests)
+        assertFalse(p.restart.visible.value)
+        assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
     fun `clear when a cast ends defaults off and saves`() = runTest {
         val settings = FakeSettingsPort()
         val p = presenter(settings)

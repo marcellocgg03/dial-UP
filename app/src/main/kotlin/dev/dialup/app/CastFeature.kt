@@ -451,6 +451,10 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 bufferDir = mediaBufferDir(h.context),
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
+                // another device started a cast: tell the author, unless the Settings switch is off
+                onGuestLaunch = { speaker, remote ->
+                    if (appSettings.data.value.notifyGuests) GuestNotifier(h.context).notify(speaker, remote)
+                },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
                 // Housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
                 // changed address; a supplier that throws counts as no Wi-Fi

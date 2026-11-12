@@ -232,4 +232,34 @@ class DialServerTest {
             server.stop()
         }
     }
+
+    // ----- guest launches ---------------------------------------------------------------------
+
+    @Test
+    fun aGuestLaunchIsReportedOncePerLaunchAndNotForOtherCalls() {
+        val guests = CopyOnWriteArrayList<String>()
+        dialTest(config.copy(isGuest = { true }, onGuestLaunch = { guests.add(it) })) {
+            get("/ytcr/ssdp/device-desc.xml")
+            get("/ytcr/apps/YouTube")
+            assertEquals(0, guests.size, "reads alone do not notify")
+            repeat(2) {
+                val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
+                assertEquals(HttpStatusCode.OK, r.status)
+            }
+        }
+        assertEquals(2, guests.size, "every launch notifies, with no cooldown")
+    }
+
+    @Test
+    fun aLaunchFromTheOwnerIsNotReportedAndAThrowingCallbackDoesNotChangeTheAnswer() {
+        val guests = CopyOnWriteArrayList<String>()
+        dialTest(config.copy(isGuest = { false }, onGuestLaunch = { guests.add(it) })) {
+            client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
+        }
+        assertEquals(0, guests.size)
+        dialTest(config.copy(isGuest = { true }, onGuestLaunch = { error("boom") })) {
+            val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
+            assertEquals(HttpStatusCode.OK, r.status)
+        }
+    }
 }

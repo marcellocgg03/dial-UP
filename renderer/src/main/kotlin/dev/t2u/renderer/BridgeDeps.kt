@@ -62,6 +62,8 @@ data class BridgeDeps(
     val loungeEndpoints: LoungeEndpoints = LoungeEndpoints(),
     val onMediaRequest: (MediaRequest) -> Unit = {},
     val onDialRequest: (DialRequest) -> Unit = {},
+    /** Another device on the LAN started a cast launch on the speaker named first, from the address named second. */
+    val onGuestLaunch: (speaker: String, remote: String) -> Unit = { _, _ -> },
     val innerTubeEndpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
     val sourceDownloader: SourceDownloader? = null,
     val upstreamPolicy: UpstreamPolicy = UpstreamPolicy.GOOGLEVIDEO,
