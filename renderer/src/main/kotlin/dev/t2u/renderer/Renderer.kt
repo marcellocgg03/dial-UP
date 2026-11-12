@@ -857,10 +857,18 @@ class Renderer(
         val startAt = restartOffset(position, info.duration, offsetStart)
         val cur = Current(video, fmt, startAt, info.mime, offsetOnly || offsetStart)
         cur.wantedAt = position
-        val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
-            if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
-            cur.fetched = true
-        }
+        val entry = VideoEntry(
+            video.id,
+            fmt,
+            startAt,
+            ext = info.ext,
+            sourceMime = info.mime,
+            onRequest = {
+                if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
+                cur.fetched = true
+            },
+            onFailure = { cur.streamFailed = true },
+        )
         val streamPath = deps.media.prepareAndRegister(entry)
         cur.streamPath = streamPath
         val url = "http://$address:${config.mediaPort}$streamPath"
@@ -1794,10 +1802,13 @@ class Renderer(
         return PollRead(polledRaw, foreign, foreignUri)
     }
 
-    /** If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream. True when it gave up on [c]. */
+    /**
+     * If the speaker has not reached PLAYING well after Play, or the media server already failed to produce the stream
+     * (a 5xx on its request), assume it cannot handle the stream. True when it gave up on [c].
+     */
     private suspend fun startFailedByTimeout(state: String, c: Current?): Boolean {
         if (!sawPlaying && state != "PLAYING" && c != null && status == PlayerStatus.PLAYING &&
-            startTimedOut(c, deps.clock())
+            (c.streamFailed || startTimedOut(c, deps.clock()))
         ) {
             handleStartFailure(c)
             return true

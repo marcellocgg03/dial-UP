@@ -71,6 +71,23 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("a stream the media server failed to produce steps to the next format at once, not after the start timeout")
+    fun streamFailureFallsBackWithoutWaitingForTheTimeout() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        val longTimeout = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, nameSuffix = "", outputFormat = "streaming", prefetch = false)
+        }
+        RendererHarness(fake, config = longTimeout).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            assertEquals(listOf("adts"), h.formats())
+            checkNotNull(h.registered.first().onFailure).invoke()
+            waitUntil { h.renderer.nowPlaying?.format == "mp3" && h.renderer.status == PlayerStatus.PLAYING }
+            assertEquals(listOf("adts", "mp3"), h.formats())
+        }
+    }
+
+    @Test
     fun streamingFallbackAfterSeekKeepsTheRequestedOffset() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         val adtsPlays = AtomicInteger()
         fake.onAction = { action ->

@@ -4,6 +4,8 @@ package dev.t2u.media
  * A video to stream to a speaker. [format] is `adts` or `mp3` (ffmpeg pipes) or `direct` (a relay of YouTube's own
  * URL; then [ext] and [sourceMime] name the source container, e.g. `m4a` and `audio/mp4`). [startAt] is the offset in
  * seconds for streams the speaker cannot seek, [onRequest] runs once per GET (mediaServer.js `entry.onRequest`).
+ * [onFailure] runs when a GET of this entry is answered with a 5xx (every ffmpeg attempt or the upstream fetch failed),
+ * so the renderer can step to the next format without waiting out the start timeout.
  */
 data class VideoEntry(
     val videoId: String,
@@ -12,6 +14,7 @@ data class VideoEntry(
     val ext: String? = null,
     val sourceMime: String? = null,
     val onRequest: (() -> Unit)? = null,
+    val onFailure: (() -> Unit)? = null,
 )
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
