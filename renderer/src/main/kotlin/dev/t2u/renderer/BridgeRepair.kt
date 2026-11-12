@@ -351,7 +351,7 @@ internal class BridgeRepair(private val host: BridgeRepairHost, private val deps
         val host = net.wifiIp.hostAddress.orEmpty()
         var error: String? = null
         try {
-            withContext(Dispatchers.IO) { media.rebindHost(host) }
+            withContext(Dispatchers.IO) { media.rebindHostSuspending(host) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
