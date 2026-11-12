@@ -7,6 +7,8 @@ package dev.t2u.media
 
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -53,7 +55,13 @@ class FileCache(
     private fun loadTransient(): MutableSet<String> {
         if (!transientManifest.isFile) return mutableSetOf()
         return try {
-            transientManifest.readLines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
+            // strict decoding: readLines would quietly replace bytes that are not UTF-8, hiding a damaged file
+            val text = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(Files.readAllBytes(transientManifest.toPath())))
+                .toString()
+            text.lines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
         } catch (e: IOException) {
             emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
             mutableSetOf()
