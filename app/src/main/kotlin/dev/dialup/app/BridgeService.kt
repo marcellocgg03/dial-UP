@@ -34,15 +34,15 @@ import java.net.Inet4Address
 
 /**
  * The bridge's foreground service (type connectedDevice). Holds a MulticastLock for its whole
- * lifetime and a WifiLock and a timed partial WakeLock while casting ([LockPolicy]), writes a heartbeat every 30 s and a state.json snapshot
- * that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
+ * lifetime and a WifiLock and a timed partial WakeLock while casting ([LockPolicy]), writes a heartbeat every 30 s and a
+ * state.json snapshot that `tools/spike.sh dump-state` reads. The event log goes to the app external files dir
  * (`files/logs/`, `tools/pull-logs.sh`); state.json stays in the internal evidence dir.
  *
  * Sticky on purpose: a system kill shows as an exit-info entry followed by
  * `service-start reason=sticky`. The notification Stop action and a denied start return
  * START_NOT_STICKY, so they are not restarted; Stop also persists the switch off. A denied start
- * (no battery exemption, or the switch off) shows as `service-gate denied` and nothing else: no lock, no feature, no socket. The work starts
- * from the first onStartCommand, which knows the start reason ([startReasonOf]).
+ * (no battery exemption, or the switch off) shows as `service-gate denied` and nothing else: no lock, no feature, no socket.
+ * The work starts from the first onStartCommand, which knows the start reason ([startReasonOf]).
  */
 class BridgeService : Service(), SpikeHost {
     override lateinit var scope: CoroutineScope
@@ -304,12 +304,18 @@ class BridgeService : Service(), SpikeHost {
         if (hold) {
             if (!wifiLock.isHeld) {
                 wifiLock.acquire()
-                evidence.event("lock", mapOf("name" to "t2u:wifi", "mode" to wifiLockMode, "isHeld" to wifiLock.isHeld, "reason" to "casting"))
+                evidence.event(
+                    "lock",
+                    mapOf("name" to "t2u:wifi", "mode" to wifiLockMode, "isHeld" to wifiLock.isHeld, "reason" to "casting"),
+                )
             }
             val wakeWasHeld = wakeLock.isHeld
             wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
             if (!wakeWasHeld) {
-                evidence.event("lock", mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld, "reason" to "casting"))
+                evidence.event(
+                    "lock",
+                    mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld, "reason" to "casting"),
+                )
             }
         } else if (wifiLock.isHeld || wakeLock.isHeld) {
             releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() }, "idle-grace")
@@ -485,7 +491,9 @@ class BridgeService : Service(), SpikeHost {
                     .distinctUntilChanged()
             }
         var lastCount: CastCount? = null
-        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, unavailable -> count to unavailable }.collect { (count, unavailable) ->
+        combine(sumCastCounts(features.filterIsInstance<CastCountSource>()), noNetwork) { count, unavailable ->
+            count to unavailable
+        }.collect { (count, unavailable) ->
             if (count != lastCount) {
                 lastCount = count
                 casting = count.casting

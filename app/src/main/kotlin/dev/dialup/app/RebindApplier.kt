@@ -70,7 +70,10 @@ internal class RebindApplier(private val target: RebindTarget) {
                 // a move is never cut in half by a newer event; that one waits for the lock instead
                 val ok = withContext(NonCancellable) { target.startGuarded(reason) }
                 if (ok) {
-                    target.event("net", mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to target.lastIp))
+                    target.event(
+                        "net",
+                        mapOf("rebind" to true, "mode" to "start", "reason" to reason, "oldIp" to oldIp, "newIp" to target.lastIp),
+                    )
                 } else {
                     target.event("net", mapOf("rebind" to false, "mode" to "start-failed", "reason" to reason, "oldIp" to oldIp))
                     target.scheduleStartRetry()
@@ -83,7 +86,10 @@ internal class RebindApplier(private val target: RebindTarget) {
                     target.startGuarded(reason)
                 }
                 if (ok) {
-                    target.event("net", mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to target.lastIp))
+                    target.event(
+                        "net",
+                        mapOf("rebind" to true, "mode" to "restart", "reason" to reason, "oldIp" to oldIp, "newIp" to target.lastIp),
+                    )
                 } else {
                     target.event("net", mapOf("rebind" to false, "mode" to "restart-failed", "reason" to reason, "oldIp" to oldIp))
                     target.scheduleStartRetry()
@@ -112,7 +118,14 @@ internal class RebindApplier(private val target: RebindTarget) {
             target.markNetworkUp(false)
             target.event(
                 "net",
-                mapOf("rebind" to false, "mode" to "lost-kept", "reason" to reason, "oldIp" to oldIp, "validated" to validated, "waitedMs" to waitedMs),
+                mapOf(
+                    "rebind" to false,
+                    "mode" to "lost-kept",
+                    "reason" to reason,
+                    "oldIp" to oldIp,
+                    "validated" to validated,
+                    "waitedMs" to waitedMs,
+                ),
             )
             return
         }

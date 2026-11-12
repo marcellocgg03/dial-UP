@@ -78,7 +78,9 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         override val casting: StateFlow<Int> = model.casting
 
         override suspend fun clearCache(): Int? = withContext(Dispatchers.IO) {
-            model.cast.value?.clearCache() ?: offlineCache().clear().also { evidence()?.event("cache-clear", mapOf("cleared" to it, "source" to "ui-offline")) }
+            model.cast.value?.clearCache() ?: offlineCache().clear().also {
+                evidence()?.event("cache-clear", mapOf("cleared" to it, "source" to "ui-offline"))
+            }
         }
 
         // Not through the service intent: with the bridge off that would run the start gate and log a denied start.
@@ -93,7 +95,8 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             }
         }
 
-        override suspend fun cacheInfo(): CacheInfo? = withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
+        override suspend fun cacheInfo(): CacheInfo? =
+            withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
 
         override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offlineUpdater.updateNow()
 

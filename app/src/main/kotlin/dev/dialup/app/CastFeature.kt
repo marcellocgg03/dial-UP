@@ -73,7 +73,10 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     private var rebindJob: Job? = null
     private var retryJob: Job? = null
 
-    /** The last start failed on a busy port; with [consecutiveBindFailures] it picks the retry delay. Read and written under the lifecycle lock. */
+    /**
+     * The last start failed on a busy port; with [consecutiveBindFailures] it picks the retry delay. Read and written under
+     * the lifecycle lock.
+     */
     @Volatile private var lastStartBindFailure = false
     private var consecutiveBindFailures = 0
     private var countJob: Job? = null
@@ -212,7 +215,9 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 if (level != LogLevel.OFF) host.evidence.event("settings", mapOf("logEnabled" to enabled, "source" to "change"))
             }
         }
-        val mon = NetworkMonitor(host.context, host.evidence, { selectTether(tetherCandidates())?.ipv4 }) { reason -> onNetworkChange(reason) }
+        val mon = NetworkMonitor(host.context, host.evidence, { selectTether(tetherCandidates())?.ipv4 }) { reason ->
+            onNetworkChange(reason)
+        }
         monitor = mon
         mon.seed(host.wifiIpv4()?.hostAddress)
         wifiPresentState.value = mon.currentIp() != null
@@ -437,7 +442,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 manual = SpeakerStores.of(h.context).manual,
                 // The author's renderer names, applied when a renderer is set up and live on a rename
                 names = SpeakerStores.of(h.context).names,
-                serverHeader = "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 DialUP/${BuildConfigFacts.versionName(h.context) ?: "0"}",
+                serverHeader =
+                    "Linux/${System.getProperty("os.version").orEmpty()} UPnP/1.1 DialUP/${BuildConfigFacts.versionName(h.context) ?: "0"}",
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,
                 bufferDir = mediaBufferDir(h.context),

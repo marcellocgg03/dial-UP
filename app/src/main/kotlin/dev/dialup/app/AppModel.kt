@@ -201,9 +201,9 @@ class AppModel private constructor(context: Context) {
 
     /**
      * Delete on the card (or the Hidden row) of a renderer saved by address (only [dev.dialup.app.model.deleteOffered]
-     * cards have the item). Through the running bridge when there is one (it also takes the renderer out of the cast menus); with the bridge off, or
-     * when the bridge does not know it, straight on the store. The UDN also leaves the hidden and name stores so nothing of the
-     * renderer stays behind. Fire-and-forget: a failure leaves the renderer listed.
+     * cards have the item). Through the running bridge when there is one (it also takes the renderer out of the cast menus);
+     * with the bridge off, or when the bridge does not know it, straight on the store. The UDN also leaves the hidden and name
+     * stores so nothing of the renderer stays behind. Fire-and-forget: a failure leaves the renderer listed.
      */
     fun deleteManual(udn: String): Job = scope.launch {
         try {
@@ -220,7 +220,10 @@ class AppModel private constructor(context: Context) {
         }
     }
 
-    /** GUI rename: the names the author gave the renderers, by UDN; the store lives with the process, so it is readable while the bridge is off too. */
+    /**
+     * GUI rename: the names the author gave the renderers, by UDN; the store lives with the process, so it is readable while
+     * the bridge is off too.
+     */
     val names: StateFlow<Map<String, String>> = SpeakerStores.of(context).names.entries
 
     /**
@@ -245,9 +248,10 @@ class AppModel private constructor(context: Context) {
 
     /**
      * Add speaker by the IPv4 address in [text]. Null means the text is not a private LAN IPv4 address and nothing was
-     * sent (the address must be a private LAN IPv4 literal); with no bridge the answer is [ManualAddResult.NotUsable], because the probe runs
-     * from the bridge's SSDP client. Otherwise the running bridge probes the address and says what came of it. A failure is
-     * reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker that was added.
+     * sent (the address must be a private LAN IPv4 literal); with no bridge the answer is [ManualAddResult.NotUsable],
+     * because the probe runs from the bridge's SSDP client. Otherwise the running bridge probes the address and says what
+     * came of it. A failure is reported as [ManualAddResult.NotUsable]; cancellation propagates. The bridge saves a speaker
+     * that was added.
      */
     suspend fun addManual(text: String): ManualAddResult? {
         val ip = parseManualIp(text) ?: return null
