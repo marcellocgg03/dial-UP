@@ -23,6 +23,7 @@ import dev.t2u.media.CacheInfo
 import dev.t2u.media.FileBuilder
 import dev.t2u.media.MediaServer
 import dev.t2u.upnp.RENDERER_ST
+import dev.t2u.upnp.RecentLanSources
 import dev.t2u.upnp.Ssdp
 import dev.t2u.upnp.SsdpClientEvents
 import dev.t2u.upnp.SsdpDevice
@@ -98,6 +99,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /** The access policy the responder and the receivers share; housekeeping reads it to decide whether to announce. */
     @Volatile private var accessPolicy: DialAccessPolicy? = null
+
+    /** The other devices on the LAN that searched for or called a receiver lately; the receivers and the responder feed it. */
+    @Volatile private var recentSources: RecentLanSources? = null
 
     /**
      * Serialises everything that changes the sockets: the probe and repair step of housekeeping, [networkLost] and
@@ -496,6 +500,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             },
         )
         accessPolicy = policy
+        // the phone's own addresses and loopback never qualify, in either access mode
+        recentSources = RecentLanSources(accept = policy::isGuest)
 
         responder = buildResponder(net, policy)
 
@@ -601,8 +607,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 ReceiverDeps(
                     bindHost = net.wifiIp.hostAddress.orEmpty(),
                     accessPolicy = policy::allowsHttp,
-                    isGuest = policy::isGuest,
-                    onGuestLaunch = deps.onGuestLaunch,
+                    onCaller = { remote -> recentSources?.note(remote) },
+                    onSenderConnected = { speaker, sender ->
+                        deps.onSenderConnected(speaker, sender.name, recentSources?.mostRecent())
+                    },
                     advertiser = advertiser,
                     serverHeader = deps.serverHeader,
                     http = deps.http.newBuilder().build(),
@@ -661,6 +669,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         responderEvents(),
         replyPolicy = policy::allowsSsdp,
         announcePolicy = policy::announceAllowed,
+        onSearchSource = { src -> recentSources?.note(src) },
         notifyTarget = network.notifyTarget,
     )
 

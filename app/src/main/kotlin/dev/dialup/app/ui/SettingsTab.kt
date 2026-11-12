@@ -140,7 +140,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         HorizontalDivider()
         SwitchRow(
             title = "Notify when another device casts",
-            support = "Show a notification each time another device on the LAN starts a cast on a renderer (LAN server mode only)",
+            support = "Show a notification when another device joins a renderer through YouTube, named by its device name",
             checked = ui.notifyGuests,
             onChange = { presenter.setNotifyGuests(it) },
             tag = "setting-notify-guests",

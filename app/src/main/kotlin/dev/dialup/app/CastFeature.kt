@@ -4,6 +4,7 @@ package dev.dialup.app
 // foreground service: every speaker found on the Wi-Fi becomes a cast target in YouTube and YouTube Music.
 // GPL-3.0-only.
 
+import android.os.Build
 import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.RestartFields
@@ -176,6 +177,9 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             combine(bridgeState, s.dialAccess) { b, mode -> BridgeStatus(b != null, mode) }
         }
     }
+
+    /** Once per device name per 30 s across bridge restarts: a guest that drops and reconnects is announced once. */
+    private val guestNoticeGate = GuestNoticeGate()
 
     private val warmed = AtomicBoolean(false)
     private val denied = AtomicInteger()
@@ -429,6 +433,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             verbose = loaded.config.ytdlpVerbose,
         )
         this.resolver = resolver
+        // read at connect time, so the Settings switch applies to the running bridge
+        val guestNotices = GuestNoticeDecider(OwnDevice(Build.MANUFACTURER, Build.MODEL), { appSettings.data.value.notifyGuests }, guestNoticeGate)
         val b = Bridge(
             network,
             BridgeDeps(
@@ -456,9 +462,13 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 bufferDir = mediaBufferDir(h.context),
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
-                // another device started a cast: tell the author, unless the Settings switch is off
-                onGuestLaunch = { speaker, remote ->
-                    if (guestNoticeFor(appSettings.data.value.notifyGuests, remote, speaker) != null) GuestNotifier(h.context).notify(speaker, remote)
+                // a lounge sender connected: another device's cast is told to the author, unless the Settings switch is off
+                onSenderConnected = { speaker, senderName, recentGuest ->
+                    val notice = guestNotices.decide(speaker, senderName, recentGuest)
+                    if (notice != null) {
+                        h.evidence.event("guest-notice", mapOf("speaker" to speaker, "basis" to if (notice.seenOnLan) "lan-address" else "name-only"))
+                        GuestNotifier(h.context).notify(speaker, senderName)
+                    }
                 },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
                 // Housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a

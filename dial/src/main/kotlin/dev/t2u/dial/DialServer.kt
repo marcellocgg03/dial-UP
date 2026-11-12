@@ -55,17 +55,11 @@ data class DialConfig(
     val pid: String? = null,
     /** Decides per request, from the remote address string, whether a call is served. */
     val accessPolicy: (String) -> Boolean = { true },
-    /** True for a caller that is served only because the LAN is allowed (another device, not the phone). */
-    val isGuest: (String) -> Boolean = { false },
     /**
-     * Called with the caller's address after a cast launch from a guest was accepted (the launch callback returned a pid), at
-     * most once per address per [guestNoticeIntervalMs]. Must not throw; a throw is dropped.
+     * Told the address of every caller before the access decision, so the owner can tell who has been talking to this receiver
+     * lately. Must not throw; a throw is dropped.
      */
-    val onGuestLaunch: ((remote: String) -> Unit)? = null,
-    /** Minimum time between two [onGuestLaunch] calls for the same remote address. */
-    val guestNoticeIntervalMs: Long = 30_000L,
-    /** Monotonic milliseconds; replaceable so tests need not wait. */
-    val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
+    val onCaller: (String) -> Unit = {},
 )
 
 /** One handled HTTP call, reported after the response was produced (404s included). */
@@ -195,6 +189,11 @@ class DialServer(
 
         // Plugins runs before routing: a refused call never reads its body and never reaches onLaunch.
         app.intercept(ApplicationCallPipeline.Plugins) {
+            try {
+                config.onCaller(call.request.local.remoteAddress)
+            } catch (_: Exception) {
+                // a note about the caller never changes the answer
+            }
             if (!config.accessPolicy(call.request.local.remoteAddress) || !originAllowed(call.request.headers[HttpHeaders.Origin])) {
                 sendStatus(call, HttpStatusCode.Forbidden)
                 finish()
@@ -248,15 +247,6 @@ class DialServer(
                                 return@post
                             }
                         }
-                        val caller = call.request.local.remoteAddress
-                        // only an accepted launch (the callback returned a pid) is worth a notice, and one per address per window
-                        if (!locationPid.isNullOrEmpty() && config.isGuest(caller) && guestNoticeDue(caller)) {
-                            try {
-                                config.onGuestLaunch?.invoke(caller)
-                            } catch (_: Exception) {
-                                // a notice never changes the answer to the caller
-                            }
-                        }
                         if (!locationPid.isNullOrEmpty()) call.response.header("LOCATION", "${baseUrl(call)}/apps/$APP/$locationPid")
                         sendStatus(call, if (state == "stopped") HttpStatusCode.Created else HttpStatusCode.OK)
                     }
@@ -286,23 +276,6 @@ class DialServer(
 
     /** DIAL asks a receiver to refuse browsers: a request with an Origin is served only for an app origin (`package:...`). */
     private fun originAllowed(origin: String?): Boolean = origin == null || origin.startsWith("package:")
-
-    private val lastGuestNotice = HashMap<String, Long>()
-
-    /** True when [remote] has not been reported within [DialConfig.guestNoticeIntervalMs]; records the report. */
-    private fun guestNoticeDue(remote: String): Boolean = synchronized(lastGuestNotice) {
-        val now = config.clockMs()
-        val last = lastGuestNotice[remote]
-        if (last != null && now - last < config.guestNoticeIntervalMs) return false
-        if (lastGuestNotice.size >= MAX_GUEST_ENTRIES) {
-            lastGuestNotice.values.removeAll { now - it >= config.guestNoticeIntervalMs }
-            if (lastGuestNotice.size >= MAX_GUEST_ENTRIES) {
-                lastGuestNotice.entries.minByOrNull { it.value }?.let { lastGuestNotice.remove(it.key) }
-            }
-        }
-        lastGuestNotice[remote] = now
-        true
-    }
 
     private fun baseUrl(call: ApplicationCall): String = "http://${call.request.host()}:$boundPort${config.prefix}"
 
@@ -348,7 +321,6 @@ class DialServer(
 
     companion object {
         const val MAX_BODY = 4096
-        private const val MAX_GUEST_ENTRIES = 256
         private const val APP = "YouTube"
         private val XML_UTF8 = ContentType.parse("application/xml; charset=utf-8")
         private val BODY_KEY = AttributeKey<String>("dial-body")

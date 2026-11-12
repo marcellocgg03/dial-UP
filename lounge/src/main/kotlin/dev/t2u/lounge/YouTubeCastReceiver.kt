@@ -51,10 +51,10 @@ data class ReceiverDeps(
     val sink: EventSink = NoEvents,
     val scope: CoroutineScope,
     val onDialRequest: (DialRequest) -> Unit = {},
-    /** True for a caller served only because the LAN is allowed. */
-    val isGuest: (String) -> Boolean = { false },
-    /** A guest started a cast launch: the speaker's name and the caller's address. */
-    val onGuestLaunch: (speaker: String, remote: String) -> Unit = { _, _ -> },
+    /** The address of every caller of the DIAL server, told before the access decision. */
+    val onCaller: (String) -> Unit = {},
+    /** A lounge sender connected to the speaker named first (its current DIAL friendly name); the sender carries its own device name. */
+    val onSenderConnected: (speaker: String, sender: Sender) -> Unit = { _, _ -> },
 )
 
 private val UUID_SHAPE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -95,13 +95,6 @@ class YouTubeCastReceiver(
     /** The config the running DIAL server was built from; the port in it is the one a rebind keeps. */
     private var dialConfig: DialConfig? = null
 
-    /** Called when a sender connects. */
-    var onSenderConnect: (Sender) -> Unit
-        get() = app.onSenderConnect
-        set(value) {
-            app.onSenderConnect = value
-        }
-
     /** Called when a sender leaves; the second argument is true when it vanished without saying goodbye. */
     var onSenderDisconnect: (Sender, Boolean) -> Unit
         get() = app.onSenderDisconnect
@@ -115,6 +108,8 @@ class YouTubeCastReceiver(
     var onTerminate: (Throwable) -> Unit = {}
 
     init {
+        // the app calls this inside its own guard, so a throwing owner cannot break the connect
+        app.onSenderConnect = { sender -> deps.onSenderConnected(friendlyName, sender) }
         app.onTerminate = { error ->
             deps.scope.launch {
                 try {
@@ -177,8 +172,7 @@ class YouTubeCastReceiver(
                     modelName = options.model,
                     pid = app.pid,
                     accessPolicy = deps.accessPolicy,
-                    isGuest = deps.isGuest,
-                    onGuestLaunch = { remote -> deps.onGuestLaunch(friendlyName, remote) },
+                    onCaller = deps.onCaller,
                 )
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
                 // Owned before it starts: withContext drops its result when the caller is cancelled as it returns, and a server

@@ -62,8 +62,12 @@ data class BridgeDeps(
     val loungeEndpoints: LoungeEndpoints = LoungeEndpoints(),
     val onMediaRequest: (MediaRequest) -> Unit = {},
     val onDialRequest: (DialRequest) -> Unit = {},
-    /** Another device on the LAN started a cast launch on the speaker named first, from the address named second. */
-    val onGuestLaunch: (speaker: String, remote: String) -> Unit = { _, _ -> },
+    /**
+     * A lounge sender connected to the speaker named first. The second is the sender's device name as the lounge reports it; the
+     * third is the most recent address of another device on the LAN that searched for or called a receiver within the last three
+     * minutes, or null when none did (discovery may have been cached). The owner decides whether it is a guest worth a notice.
+     */
+    val onSenderConnected: (speaker: String, senderName: String, recentGuest: String?) -> Unit = { _, _, _ -> },
     val innerTubeEndpoints: InnerTubeEndpoints = InnerTubeEndpoints(),
     val sourceDownloader: SourceDownloader? = null,
     val upstreamPolicy: UpstreamPolicy = UpstreamPolicy.GOOGLEVIDEO,

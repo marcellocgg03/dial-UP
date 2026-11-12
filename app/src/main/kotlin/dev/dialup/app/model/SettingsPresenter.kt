@@ -404,7 +404,7 @@ class SettingsPresenter(
         changed(SettingKey.RENAME)
     }
 
-    /** Notify when another device on the LAN starts a cast. Read at each launch, so no restart. */
+    /** Notify when another device starts a cast. Read when a sender connects, so no restart. */
     fun setNotifyGuests(on: Boolean): Boolean {
         settings.update { it.copy(notifyGuests = on) }
         return changed(SettingKey.NOTIFY_GUESTS)

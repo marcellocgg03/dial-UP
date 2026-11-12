@@ -119,8 +119,8 @@ class YouTubeCastReceiverTest {
     private fun deps(
         adv: DialAdvertiser = advertiser,
         accessPolicy: (String) -> Boolean = { true },
-        isGuest: (String) -> Boolean = { false },
-        onGuestLaunch: (String, String) -> Unit = { _, _ -> },
+        onCaller: (String) -> Unit = {},
+        onSenderConnected: (String, Sender) -> Unit = { _, _ -> },
     ) = ReceiverDeps(
         bindHost = "127.0.0.1",
         accessPolicy = accessPolicy,
@@ -130,8 +130,8 @@ class YouTubeCastReceiverTest {
         endpoints = fake.endpoints,
         sink = sink,
         scope = scope,
-        isGuest = isGuest,
-        onGuestLaunch = onGuestLaunch,
+        onCaller = onCaller,
+        onSenderConnected = onSenderConnected,
     )
 
     private fun receiver(
@@ -189,9 +189,7 @@ class YouTubeCastReceiverTest {
         assertEquals((clScreen["screenId"] as JsonPrimitive).content, registration.form["screen_id"])
 
         // the sender connects and casts: the recorded setPlaylist plays on the player
-        val recordedVideo = recordedMessages("rpc-cl.txt").first { it.name == "setPlaylist" }.payload.let {
-            ((it as JsonObject)["videoId"] as JsonPrimitive).content
-        }
+        val recordedVideo = recordedVideoOf("rpc-cl.txt")
         fake.replayRecorded("cl")
         awaitUntil { "play:$recordedVideo" in player.calls }
 
@@ -201,36 +199,48 @@ class YouTubeCastReceiverTest {
     }
 
     @Test
-    fun anAcceptedLaunchFromAGuestReportsTheSpeakersNameAndTheCallersAddressAndARejectedOneDoesNot() = run {
-        val guests = CopyOnWriteArrayList<Pair<String, String>>()
+    fun aConnectingSenderIsReportedWithTheSpeakersNameAndItsOwnDeviceNameAndALaunchAloneIsNot() = run {
+        val connected = CopyOnWriteArrayList<Pair<String, Sender>>()
+        val callers = CopyOnWriteArrayList<String>()
         val r = YouTubeCastReceiver(
             player,
             options("🔊 Kitchen"),
-            deps(isGuest = { true }, onGuestLaunch = { speaker, remote -> guests.add(speaker to remote) }),
+            deps(onCaller = { callers.add(it) }, onSenderConnected = { speaker, sender -> connected.add(speaker to sender) }),
         ).also { receivers.add(it) }
         r.start()
         val port = dialPort()
 
-        // no pairing code: the lounge side refuses it, no LOCATION, and nobody is told a cast started
-        val rejected = launchPost(port, "theme=cl")
-        assertEquals(200, rejected.statusCode())
-        assertFalse(rejected.headers().firstValue("LOCATION").isPresent)
-        assertEquals(emptyList(), guests.toList())
+        // a DIAL launch alone (even an accepted one) is no cast yet: the caller's address is noted, nobody is told
+        val launch = launchPost(port, "pairingCode=ABCDEF&theme=cl")
+        assertTrue(launch.headers().firstValue("LOCATION").isPresent)
+        assertEquals(listOf("127.0.0.1"), callers.toList())
+        assertEquals(emptyList(), connected.toList())
 
-        val accepted = launchPost(port, "pairingCode=ABCDEF&theme=cl")
-        assertTrue(accepted.headers().firstValue("LOCATION").isPresent)
-        assertEquals(listOf("🔊 Kitchen" to "127.0.0.1"), guests.toList())
+        // the sender connects through the lounge: that is the moment
+        fake.replayRecorded("cl")
+        awaitUntil { connected.isNotEmpty() }
+        val (speaker, sender) = connected.first()
+        assertEquals("🔊 Kitchen", speaker)
+        assertEquals("Example Phone 01", sender.name, "the device name the lounge reports, not an address")
+    }
 
-        // a caller that is not a guest is never reported
-        val ownerAdv = RecordingAdvertiser()
-        val owner = YouTubeCastReceiver(
+    @Test
+    fun aThrowingSenderCallbackDoesNotBreakTheConnect() = run {
+        val r = YouTubeCastReceiver(
             player,
-            options("🔊 Owner"),
-            deps(adv = ownerAdv, isGuest = { false }, onGuestLaunch = { s, r -> guests.add(s to r) }),
+            options(),
+            deps(onSenderConnected = { _, _ -> error("boom") }),
         ).also { receivers.add(it) }
-        owner.start()
-        launchPost(dialPort(ownerAdv), "pairingCode=ABCDEF&theme=cl")
-        assertEquals(1, guests.size)
+        r.start()
+        launchPost(dialPort(), "pairingCode=ABCDEF&theme=cl")
+        fake.replayRecorded("cl")
+        // the recorded cast still plays although the callback threw on the connect
+        awaitUntil { "play:${recordedVideoOf("rpc-cl.txt")}" in player.calls }
+        assertEquals("running", r.status)
+    }
+
+    private fun recordedVideoOf(file: String): String = recordedMessages(file).first { it.name == "setPlaylist" }.payload.let {
+        ((it as JsonObject)["videoId"] as JsonPrimitive).content
     }
 
     private fun freePort(): Int = java.net.ServerSocket(0).use { it.localPort }
