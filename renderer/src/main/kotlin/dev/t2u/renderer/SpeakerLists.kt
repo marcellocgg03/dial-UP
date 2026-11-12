@@ -88,7 +88,10 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
     /** True when [udn] is hidden. Safe from any thread. */
     fun contains(udn: String): Boolean = udn in snapshot
 
-    /** Hides [entry] (a second add of the same UDN refreshes its name and address) and writes the file. False, with a warning, when [MAX_HIDDEN] other speakers are hidden already. */
+    /**
+     * Hides [entry] (a second add of the same UDN refreshes its name and address) and writes the file. False, with a warning,
+     * when [MAX_HIDDEN] other speakers are hidden already.
+     */
     suspend fun add(entry: HiddenSpeaker): Boolean {
         val accepted = synchronized(lock) {
             if (entry.udn !in items && items.size >= MAX_HIDDEN) {
