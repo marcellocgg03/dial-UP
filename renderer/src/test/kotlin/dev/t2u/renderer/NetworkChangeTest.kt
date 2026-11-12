@@ -28,7 +28,7 @@ internal class NetworkChangeTest {
     }
 
     private fun pinned(format: String): (File) -> Config =
-        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }
+        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000) }
 
     private fun FakeRenderer.uris(): List<String> =
         calls.filter { it.action == "SetAVTransportURI" }

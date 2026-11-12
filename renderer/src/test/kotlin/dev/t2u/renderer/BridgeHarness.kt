@@ -243,6 +243,8 @@ internal class BridgeHarness(
         clearOnCastEnd: (() -> Boolean)? = null,
         // null: leave BridgeDeps' own default (config.json cacheMb) in place
         cacheMb: (() -> Int)? = null,
+        // null: leave BridgeDeps' own default (the config's name template) in place
+        namePrefix: (() -> String)? = null,
         // null: no hidden-speakers store (GUI-03), so nothing is ever hidden
         hidden: HiddenSpeakers? = null,
         // null: discovery searches go to the fake speaker; a dead port makes discovery blind (GUI-04)
@@ -281,6 +283,7 @@ internal class BridgeHarness(
             responderFactory = responderFactory,
             clearOnCastEnd = clearOnCastEnd,
             cacheMb = cacheMb,
+            namePrefix = namePrefix,
             hidden = hidden,
             manualSsdpPort = manualSsdpPort ?: MANUAL_SSDP_PORT,
             manualAnswerTimeoutMs = manualAnswerTimeoutMs ?: MANUAL_ANSWER_TIMEOUT_MS,

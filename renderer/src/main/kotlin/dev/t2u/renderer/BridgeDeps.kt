@@ -82,6 +82,11 @@ data class BridgeDeps(
      */
     val clearOnCastEnd: (() -> Boolean)? = null,
     /**
+     * The prefix of the names shown in the cast menu, read when a renderer is set up and when [Bridge.refreshNames] runs.
+     * Null means the fixed [Config.nameTemplate] decides; the app passes a supplier over its settings.
+     */
+    val namePrefix: (() -> String)? = null,
+    /**
      * The cache cap in MiB, read by the file cache at every prune so a size changed in the app applies without a
      * restart. Null, or a supplier that throws, means [Config.cacheMb] decides.
      */

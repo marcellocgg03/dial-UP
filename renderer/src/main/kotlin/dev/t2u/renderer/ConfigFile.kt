@@ -78,8 +78,8 @@ private val KNOWN_KEYS = setOf(
  * }
  * ```
  *
- * Types are strict (a numeric string is not a number). `nameSuffix` and `nameTemplate` are deliberately
- * not readable (the " (app)" suffix has no setting); they, and any unknown key, are ignored and
+ * Types are strict (a numeric string is not a number). `nameTemplate` is deliberately
+ * not readable (the app's Settings screen sets the name prefix); it, and any unknown key, is ignored and
  * listed by name in one warning. Warnings name keys and indexes, never values.
  */
 fun parseConfigFile(text: String, base: Config): ConfigFileResult {

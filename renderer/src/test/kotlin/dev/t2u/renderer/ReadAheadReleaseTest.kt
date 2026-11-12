@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 internal class ReadAheadReleaseTest {
-    private fun config(dir: File) = Config(dataDir = dir, outputFormat = "direct", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "")
+    private fun config(dir: File) = Config(dataDir = dir, outputFormat = "direct", pollIntervalMs = 50, startTimeoutMs = 5000)
 
     private fun <T> rig(block: suspend RendererHarness.() -> T): T {
         val fake = FakeRenderer()

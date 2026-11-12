@@ -6,8 +6,6 @@ package dev.t2u.renderer
 // Adaptations from the Node tests (plan 02-14 copies these into PARITY.md "Adaptations"):
 //  * The stream format is pinned: these tests set outputFormat "adts" (the app default is auto since plan 03-06), so the token URL ends in .aac and the
 //    registered format is "adts" (Node's setup used outputFormat "auto", which resolved to "direct"/.m4a).
-//  * The Node-titled init test uses nameSuffix "" to match the Node assertion; another test checks the
-//    default D-04 suffix.
 //  * Mute assertions rely on the FakeRenderer SetMute/GetMute extension (the Node fake has neither).
 //  * Receivers, resolver and media registrar are stubs, as in Node (deps.createReceiver, resolver, mediaServer).
 //  * A restart-seek while paused loads without Play and Play is sent at resume (Node's #load always sends Play).
@@ -83,7 +81,7 @@ class RendererTest {
     private class Harness(
         val fake: FakeRenderer,
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        config: (File) -> Config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", clearOnCastEnd = true) },
+        config: (File) -> Config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, clearOnCastEnd = true) },
         resolveDelayMs: Long = 0,
         locationOverride: String? = null,
         private val artist: String = "Band",
@@ -301,7 +299,7 @@ class RendererTest {
         // pinned to the pipe format these assertions were written for (plan 03-06)
         Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, clearOnCastEnd = true) }).use { h ->
             h.renderer.init()
-            assertEquals("🔊 Living Room Speaker (app)", h.receiverOptions?.name)
+            assertEquals("🔊 Living Room Speaker", h.receiverOptions?.name)
         }
     }
 
@@ -470,7 +468,7 @@ class RendererTest {
     @DisplayName("the start clock restarts at Play after a deferred load")
     fun startClockRestartsAtPlayAfterADeferredLoad() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -494,7 +492,7 @@ class RendererTest {
     @DisplayName("a Play after a Pause restarts the start clock when the speaker was never seen playing")
     fun aPlayAfterAPauseRestartsTheStartClockWhenTheSpeakerWasNeverSeenPlaying() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 300, clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -531,7 +529,7 @@ class RendererTest {
     @DisplayName("a Pause during start-up waits for PLAYING before it is sent")
     fun aPauseDuringStartupWaitsForPlayingBeforeItIsSent() = withFake { fake ->
         // pinned to the pipe format these assertions were written for (plan 03-06)
-        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "", clearOnCastEnd = true) }).use { h ->
+        Harness(fake, config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 2000, clearOnCastEnd = true) }).use { h ->
             val r = h.renderer
             r.init()
             assertTrue(r.doPlay(Video(A), 0.0))
@@ -956,7 +954,7 @@ class RendererTest {
     private fun FakeRenderer.sentSince(mark: Int): List<String> = calls.drop(mark).map { it.action }.filter { it in transportCommands }
 
     private fun mp4Config(): (File) -> Config =
-        { Config(dataDir = it, outputFormat = "mp4", pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "", clearOnCastEnd = true) }
+        { Config(dataDir = it, outputFormat = "mp4", pollIntervalMs = 50, startTimeoutMs = 2000, clearOnCastEnd = true) }
 
     @Test
     @DisplayName("a stop while the speaker is on another source sends no Stop, forgets our track and stops polling")

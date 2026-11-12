@@ -55,6 +55,38 @@ class BridgeRenameTest {
     }
 
     @Test
+    @DisplayName("a changed prefix renames a running speaker at once, keeps a name the author gave, and allows an empty prefix")
+    fun aChangedPrefixRenamesARunningSpeakerAtOnce() = h.run<Unit> {
+        var prefix = "🔊"
+        val names = RendererNames(h.dataDir).load()
+        val bridge = h.newBridge(names = names, namePrefix = { prefix })
+        bridge.start()
+        awaitSpeakerUp(bridge)
+        h.awaitUntil("a DIAL search reply") { h.dialSearchAt(bridge, h.loopback) != null }
+        val described = bridge.speakers.value.single().name
+        assertTrue(described.startsWith("🔊 "), described)
+        val own = described.removePrefix("🔊 ")
+
+        prefix = "🎵"
+        bridge.refreshNames()
+        h.awaitUntil("the card takes the new prefix") { bridge.speakers.value.singleOrNull()?.name == "🎵 $own" }
+        assertEquals("🎵 $own", friendlyName(bridge))
+        assertEquals(1, bridge.castCount.value.total, "the receiver was not rebuilt")
+
+        prefix = ""
+        bridge.refreshNames()
+        h.awaitUntil("an empty prefix leaves the speaker's own name") { bridge.speakers.value.singleOrNull()?.name == own }
+        assertEquals(own, friendlyName(bridge))
+
+        assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Kitchen"))
+        prefix = "🔔"
+        bridge.refreshNames()
+        h.awaitUntil("the settle") { true }
+        assertEquals("Kitchen", bridge.speakers.value.single().name, "a name the author gave is kept")
+        assertEquals("Kitchen", friendlyName(bridge))
+    }
+
+    @Test
     @DisplayName("the name survives a bridge restart and a reset brings the described name back")
     fun theNameSurvivesARestartAndAResetBringsTheDescribedNameBack() = h.run<Unit> {
         val first = h.newBridge(names = RendererNames(h.dataDir).load())

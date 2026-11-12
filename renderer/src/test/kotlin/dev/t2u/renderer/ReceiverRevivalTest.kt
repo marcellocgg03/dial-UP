@@ -87,7 +87,7 @@ class ReceiverRevivalTest {
             maxAge = 1800,
             port = 3000,
             deps = RendererDeps(
-                config = Config(dataDir = dataDir, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = ""),
+                config = Config(dataDir = dataDir, pollIntervalMs = 50, startTimeoutMs = 200),
                 resolver = resolver,
                 media = media,
                 http = lanHttpClient(),

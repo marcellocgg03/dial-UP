@@ -62,7 +62,7 @@ internal class RendererCharacterizationTest {
     }
 
     private fun pinned(format: String = "adts"): (File) -> Config =
-        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "", prefetch = false) }
+        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000, prefetch = false) }
 
     private fun FakeRenderer.count(action: String): Int = calls.count { it.action == action }
 
@@ -112,7 +112,7 @@ internal class RendererCharacterizationTest {
             lateinit var renderer: Renderer
             val receiver = DestroyingReceiver({ renderer }, onStop)
             val deps = bareDeps(
-                Config(dataDir = dir, pollIntervalMs = 50, nameSuffix = "", prefetch = false),
+                Config(dataDir = dir, pollIntervalMs = 50, prefetch = false),
                 scope,
                 ReceiverFactory { _, _: ReceiverOptions -> receiver },
                 EventSink { _, _ -> },
@@ -199,7 +199,7 @@ internal class RendererCharacterizationTest {
         val events = java.util.concurrent.CopyOnWriteArrayList<Map<String, Any?>>()
         try {
             val deps = bareDeps(
-                Config(dataDir = dir, pollIntervalMs = 50, nameSuffix = "", prefetch = false),
+                Config(dataDir = dir, pollIntervalMs = 50, prefetch = false),
                 scope,
                 ReceiverFactory { _, _: ReceiverOptions -> NoopReceiver() },
                 EventSink { kind, fields -> if (kind == "renderer") events.add(fields) },
@@ -379,7 +379,7 @@ internal class RendererCharacterizationTest {
         withFake { fake ->
             RendererHarness(
                 fake,
-                config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "", prefetch = true, gapless = true) },
+                config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, prefetch = true, gapless = true) },
                 playlistRequestHandlerFactory = { NextHandler() },
                 prepareDelayFor = { entry -> if (entry.videoId == B) 700L else 0L },
             ).use { h ->
@@ -406,7 +406,7 @@ internal class RendererCharacterizationTest {
         withFake { fake ->
             RendererHarness(
                 fake,
-                config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "", prefetch = true, gapless = true) },
+                config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, prefetch = true, gapless = true) },
                 playlistRequestHandlerFactory = { NextHandler() },
             ).use { h ->
                 val r = h.renderer

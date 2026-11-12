@@ -37,7 +37,7 @@ internal class SeekFallbackTest {
     }
 
     private fun pinned(format: String): (File) -> Config =
-        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000, nameSuffix = "") }
+        { Config(dataDir = it, outputFormat = format, pollIntervalMs = 50, startTimeoutMs = 2000) }
 
     private fun FakeRenderer.count(action: String): Int = calls.count { it.action == action }
 

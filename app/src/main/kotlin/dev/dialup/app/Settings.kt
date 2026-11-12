@@ -25,6 +25,12 @@ const val SETTINGS_FILE = "settings.json"
  */
 val DEFAULT_DIAL_ACCESS = DialAccessMode.PHONE
 
+/** The speaker emoji every cast-menu name starts with unless the author changes it. */
+const val DEFAULT_NAME_PREFIX = "🔊"
+
+/** The longest prefix the Settings field takes, in characters. */
+const val MAX_NAME_PREFIX_LENGTH = 16
+
 /** The app's light or dark look. UI-only: the bridge never reads it, and it is not a config.json override. */
 enum class ThemeMode(val wire: String) {
     SYSTEM("system"),
@@ -58,6 +64,8 @@ data class AppSettingsData(
     val dialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS,
     val clearOnCastEnd: Boolean = false,
     val showAudioFormat: Boolean = false,
+    /** The text before a speaker's own name in the cast menu. Empty is allowed. Read live; a change renames the running speakers. */
+    val namePrefix: String = DEFAULT_NAME_PREFIX,
     val theme: ThemeMode = DEFAULT_THEME,
     /** App-only: whether opening the app checks GitHub for a newer DialUP release. Not a config.json override. */
     val updateCheckEnabled: Boolean = true,
@@ -88,6 +96,7 @@ private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
 private const val KEY_SHOW_AUDIO_FORMAT = "showAudioFormat"
+private const val KEY_NAME_PREFIX = "namePrefix"
 private const val KEY_THEME = "theme"
 private const val KEY_UPDATE_CHECK = "updateCheckEnabled"
 private const val KEY_LOG_ENABLED = "logEnabled"
@@ -147,6 +156,10 @@ fun parseSettings(text: String): ParsedSettings {
     }
     bool(KEY_CLEAR_ON_CAST_END)?.let { data = data.copy(clearOnCastEnd = it) }
     bool(KEY_SHOW_AUDIO_FORMAT)?.let { data = data.copy(showAudioFormat = it) }
+    o[KEY_NAME_PREFIX]?.let { e ->
+        val text = (e as? JsonPrimitive)?.takeIf { it.isString }?.content
+        if (text != null) data = data.copy(namePrefix = text) else problems += KEY_NAME_PREFIX
+    }
     o[KEY_THEME]?.let { e ->
         val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { ThemeMode.fromWire(it) }
         if (mode != null) data = data.copy(theme = mode) else problems += KEY_THEME
@@ -182,6 +195,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
     if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
     if (data.showAudioFormat) known[KEY_SHOW_AUDIO_FORMAT] = JsonPrimitive(true)
+    if (data.namePrefix != DEFAULT_NAME_PREFIX) known[KEY_NAME_PREFIX] = JsonPrimitive(data.namePrefix)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }

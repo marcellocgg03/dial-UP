@@ -24,6 +24,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -43,6 +45,7 @@ import dev.dialup.app.AppSettings
 import dev.dialup.app.AppUpdates
 import dev.dialup.app.BuildConfigFacts
 import dev.dialup.app.HiddenRenderersActivity
+import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.CACHE_STEPS
@@ -141,6 +144,8 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             onChange = { presenter.setShowAudioFormat(it) },
             tag = "setting-show-audio-format",
         )
+        HorizontalDivider()
+        NamePrefixRow(ui.namePrefix) { presenter.setNamePrefix(it) }
         HorizontalDivider()
         ListItem(
             headlineContent = { Text("Hidden renderers") },
@@ -354,6 +359,31 @@ internal fun Choice(current: String, options: List<String>, onPick: (Int) -> Uni
                     },
                     modifier = Modifier.testTag(optionTag(i)),
                 )
+            }
+        }
+    }
+}
+
+/** The text before each speaker's name in the cast menu; Save applies it at once to the running speakers. Empty is allowed. */
+@Composable
+private fun NamePrefixRow(saved: String, onSave: (String) -> String) {
+    var text by remember(saved) { mutableStateOf(saved) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Name prefix", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "Shown before each renderer's name in the cast menu. Leave it empty for none.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.take(MAX_NAME_PREFIX_LENGTH) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).testTag("field-name-prefix"),
+            )
+            TextButton(onClick = { text = onSave(text) }, enabled = text != saved, modifier = Modifier.testTag("btn-name-prefix-save")) {
+                Text("Save")
             }
         }
     }

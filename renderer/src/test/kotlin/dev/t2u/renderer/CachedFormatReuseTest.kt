@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 private const val ID = "dQw4w9WgXcQ"
 
 class CachedFormatReuseTest {
-    private fun cfg(format: String): (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = format) }
+    private fun cfg(format: String): (File) -> Config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = format) }
 
     private fun run(format: String, cached: List<String>, fake: FakeRenderer = FakeRenderer()): String {
         fake.start()

@@ -362,6 +362,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /**
+     * The prefix of the speaker names changed: every running renderer builds its name again and takes it the way a GUI rename
+     * does, at once and without a restart, so a running cast keeps playing. A name the author gave a speaker is kept.
+     */
+    suspend fun refreshNames() {
+        if (!started.get() || stopped.get()) return
+        registry?.renderers().orEmpty().filterIsInstance<Renderer>().forEach { it.refreshName() }
+        emit("names-refreshed")
+    }
+
+    /**
      * Brings the hidden speaker [udn] back. It leaves the hidden set, then the bridge searches for speakers at once so
      * the speaker returns without waiting for the next periodic search. False when it was not hidden (or there is no store).
      */
@@ -548,6 +558,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     deps.scope,
                     deps.events,
                     clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
+                    nameTemplate = deps.namePrefix?.let { prefix -> { nameTemplateFor(prefix()) } } ?: { config.nameTemplate },
                     userName = { deps.names?.get(it) },
                     // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
                     playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },

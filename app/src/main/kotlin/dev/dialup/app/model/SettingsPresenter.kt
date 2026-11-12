@@ -3,8 +3,10 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
+import dev.dialup.app.DEFAULT_NAME_PREFIX
 import dev.dialup.app.DEFAULT_THEME
 import dev.dialup.app.Failures
+import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
@@ -61,6 +63,9 @@ interface BridgePort {
 
     suspend fun clearCache(): Int?
 
+    /** The name prefix changed: the running speakers take their new names at once. The default does nothing. */
+    suspend fun refreshNames() {}
+
     /**
      * Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then);
      * true when cleared.
@@ -93,6 +98,7 @@ enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
     SHOW_AUDIO_FORMAT(false),
+    NAME_PREFIX(false),
     LOG(false),
     GAPLESS(true),
     CACHE(false),
@@ -149,6 +155,8 @@ data class SettingsUi(
     val phoneOnly: Boolean = true,
     val clearOnCastEnd: Boolean = false,
     val showAudioFormat: Boolean = false,
+    /** The text before each speaker's own name in the cast menu; empty is allowed. */
+    val namePrefix: String = DEFAULT_NAME_PREFIX,
     /** The app's look, applied at once. */
     val theme: ThemeMode = DEFAULT_THEME,
     val logEnabled: Boolean = true,
@@ -208,6 +216,7 @@ class SettingsPresenter(
                         phoneOnly = d.dialAccess == DialAccessMode.PHONE,
                         clearOnCastEnd = d.clearOnCastEnd,
                         showAudioFormat = d.showAudioFormat,
+                        namePrefix = d.namePrefix,
                         theme = d.theme,
                     )
                 }
@@ -363,6 +372,19 @@ class SettingsPresenter(
     fun setClearOnCastEnd(on: Boolean): Boolean {
         settings.update { it.copy(clearOnCastEnd = on) }
         return changed(SettingKey.CLEAR_ON_CAST_END)
+    }
+
+    /**
+     * The text before each speaker's own name in the cast menu. Control characters are dropped and the text is cut to
+     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. Applies at once to the running speakers, without a restart, the way a
+     * rename does, so a cast keeps playing. Returns the prefix that was saved.
+     */
+    fun setNamePrefix(text: String): String {
+        val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
+        settings.update { it.copy(namePrefix = clean) }
+        changed(SettingKey.NAME_PREFIX)
+        scope.launch { bridge.refreshNames() }
+        return clean
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {

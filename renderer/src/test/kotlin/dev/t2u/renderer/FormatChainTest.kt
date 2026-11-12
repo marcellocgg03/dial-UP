@@ -42,9 +42,9 @@ class FormatChainTest {
         }
     }
 
-    private fun auto(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "auto")
+    private fun auto(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "auto")
 
-    private fun streaming(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "streaming", prefetch = false)
+    private fun streaming(dir: File) = Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "streaming", prefetch = false)
 
     @Test
     fun streamingTriesAdtsDespiteMissingAdvertisedMime() = withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*")) { fake ->
@@ -74,7 +74,7 @@ class FormatChainTest {
     @DisplayName("a stream the media server failed to produce steps to the next format at once, not after the start timeout")
     fun streamFailureFallsBackWithoutWaitingForTheTimeout() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
         val longTimeout = { dir: File ->
-            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, nameSuffix = "", outputFormat = "streaming", prefetch = false)
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, outputFormat = "streaming", prefetch = false)
         }
         RendererHarness(fake, config = longTimeout).use { h ->
             h.renderer.init()
@@ -414,19 +414,19 @@ class FormatChainTest {
     @Test
     @DisplayName("exclude filter skips renderer")
     fun excludeFilterSkipsRenderer() = withFake { fake ->
-        RendererHarness(fake, config = { Config(dataDir = it, nameSuffix = "", nameFilter = NameFilter(exclude = listOf("living"))) }).use { h ->
+        RendererHarness(fake, config = { Config(dataDir = it, nameFilter = NameFilter(exclude = listOf("living"))) }).use { h ->
             assertFalse(h.renderer.init())
             assertEquals(0, h.receiverCreated)
         }
-        RendererHarness(fake, config = { Config(dataDir = it, nameSuffix = "", nameFilter = NameFilter(include = listOf("kitchen"))) }).use { h ->
+        RendererHarness(fake, config = { Config(dataDir = it, nameFilter = NameFilter(include = listOf("kitchen"))) }).use { h ->
             assertFalse(h.renderer.init())
             assertEquals(0, h.receiverCreated)
         }
-        RendererHarness(fake, config = { Config(dataDir = it, nameSuffix = "", nameFilter = NameFilter(include = listOf("LIVING"))) }).use { h ->
+        RendererHarness(fake, config = { Config(dataDir = it, nameFilter = NameFilter(include = listOf("LIVING"))) }).use { h ->
             assertTrue(h.renderer.init())
             assertEquals(1, h.receiverCreated)
         }
-        RendererHarness(fake, config = { Config(dataDir = it, nameSuffix = "") }).use { h ->
+        RendererHarness(fake, config = { Config(dataDir = it) }).use { h ->
             assertTrue(h.renderer.init())
         }
     }
@@ -434,7 +434,7 @@ class FormatChainTest {
     @Test
     @DisplayName("a forced format never falls back: it stops with a reason and learns nothing")
     fun forcedFormatNeverFallsBack() = withFake(FakeRenderer(neverPlay = true)) { fake ->
-        RendererHarness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "mp3") }).use { h ->
+        RendererHarness(fake, config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "mp3") }).use { h ->
             h.renderer.init()
             h.renderer.play(Video(DQW), 0.0)
             waitUntil { h.renderer.status == PlayerStatus.STOPPED }
@@ -524,7 +524,7 @@ class FormatChainTest {
     fun prepareFailureForcedFailsThePlay() = withFake { fake ->
         RendererHarness(
             fake,
-            config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "direct") },
+            config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "direct") },
             prepareFailure = { IllegalStateException("download failed") },
         ).use { h ->
             h.renderer.init()
@@ -596,7 +596,7 @@ class FormatChainTest {
             }
             RendererHarness(
                 fake,
-                config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, nameSuffix = "", outputFormat = "auto", mediaPort = port) },
+                config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "auto", mediaPort = port) },
                 directDelegate = ms,
             ).use { h ->
                 h.renderer.init()

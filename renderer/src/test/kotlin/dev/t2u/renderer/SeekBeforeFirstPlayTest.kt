@@ -69,7 +69,6 @@ internal class SeekBeforeFirstPlayTest {
         outputFormat = outputFormat,
         pollIntervalMs = 50,
         startTimeoutMs = 5000,
-        nameSuffix = "",
         queueSettleTimeoutMs = 5000,
     )
 

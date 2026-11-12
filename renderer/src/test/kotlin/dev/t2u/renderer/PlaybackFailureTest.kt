@@ -95,7 +95,7 @@ class PlaybackFailureTest {
     }
 
     private fun cfg(format: String = "auto"): (File) -> Config = {
-        Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = format, nameSuffix = "", prefetch = false)
+        Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = format, prefetch = false)
     }
 
     /** The state changes to STOPPED and the failure reports of [h]'s renderer, in the order they happened. */
@@ -227,7 +227,7 @@ class PlaybackFailureTest {
         withFake(FakeRenderer()) { fake ->
             val config: (File) -> Config = {
                 Config(
-                    dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+                    dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000,
                     queueSettleTimeoutMs = 5000, prefetch = false, playRetryDelaysMs = listOf(0L),
                 )
             }

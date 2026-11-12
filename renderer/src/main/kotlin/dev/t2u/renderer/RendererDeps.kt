@@ -38,6 +38,8 @@ data class RendererDeps(
      * Matching (hide, manual, ports, the name filter) never uses it.
      */
     val userName: (String) -> String? = { null },
+    /** The template of a name shown in the cast menu ({name} {manufacturer} {model}), read at setup and on [Renderer.refreshName]. */
+    val nameTemplate: () -> String = { config.nameTemplate },
 )
 
 /** What the speaker is playing, for the status UI and the notification. */

@@ -3,6 +3,7 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
+import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.CacheInfo
@@ -59,6 +60,10 @@ class FakeBridgePort(
     val castingFlow = MutableStateFlow(0)
     override val casting: StateFlow<Int> get() = castingFlow
     override val instance: StateFlow<Any?> get() = flow
+
+    override suspend fun refreshNames() {
+        refreshCalls++
+    }
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
     var outcome: YtDlpUpdateOutcome? = null
@@ -69,6 +74,7 @@ class FakeBridgePort(
     var logResult = true
     var updateCalls = 0
     var restartCalls = 0
+    var refreshCalls = 0
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
     /** When set, clearCache, clearLog, cacheInfo and updateNow throw it (a disk or bridge fault). */
@@ -164,6 +170,28 @@ class SettingsPresenterTest {
         runCurrent()
         assertEquals(DialAccessMode.PHONE, settings.data.value.dialAccess)
         assertTrue(p.state.value.phoneOnly)
+    }
+
+    @Test
+    fun `name prefix is cleaned, may be empty, and renames the running speakers without a restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val bridge = FakeBridgePort()
+        val p = presenter(settings, bridge)
+        assertEquals("🔊", p.state.value.namePrefix)
+
+        assertEquals("🎵", p.setNamePrefix("  🎵\n "))
+        runCurrent()
+        assertEquals("🎵", settings.data.value.namePrefix)
+        assertEquals("🎵", p.state.value.namePrefix)
+        assertEquals(1, bridge.refreshCalls)
+        assertEquals(0, bridge.restartCalls)
+
+        assertEquals("", p.setNamePrefix(""))
+        runCurrent()
+        assertEquals("", settings.data.value.namePrefix)
+        assertEquals(2, bridge.refreshCalls)
+
+        assertEquals(MAX_NAME_PREFIX_LENGTH, p.setNamePrefix("x".repeat(40)).length)
     }
 
     @Test

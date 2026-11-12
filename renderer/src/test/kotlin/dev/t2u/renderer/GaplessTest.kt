@@ -57,7 +57,7 @@ internal class GaplessTest {
     /** adts is pinned so registered paths end `.aac` (Node's `.m4a` regexes become `.aac`). */
     private fun cfg(prefetch: Boolean = true, gapless: Boolean = true, startTimeoutMs: Long = 5000): (File) -> Config = {
         Config(
-            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = startTimeoutMs, nameSuffix = "",
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = startTimeoutMs,
             queueSettleTimeoutMs = 5000, prefetch = prefetch, gapless = gapless,
         )
     }
