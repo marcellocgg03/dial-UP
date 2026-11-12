@@ -103,7 +103,10 @@ class RendererNames(dataDir: File, private val warn: (String) -> Unit = {}) {
     /** The name of [udn], or null. Safe from any thread. */
     fun get(udn: String): String? = snapshot[udn]
 
-    /** Names [udn] [raw] (trimmed) and writes the file. False, with a warning, when the name is unusable or [MAX_NAMES] other renderers are named already. */
+    /**
+     * Names [udn] [raw] (trimmed) and writes the file. False, with a warning, when the name is unusable or [MAX_NAMES] other
+     * renderers are named already.
+     */
     suspend fun set(udn: String, raw: String): Boolean {
         val name = cleanRendererName(raw)
         if (name == null) {

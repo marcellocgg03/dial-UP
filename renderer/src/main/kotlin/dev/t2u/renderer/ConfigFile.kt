@@ -70,7 +70,8 @@ private val KNOWN_KEYS = setOf(
  *   "ytdlpVerbose": true,               // boolean
  *   "ytdlpChannel": "stable",           // stable | nightly: the yt-dlp release the daily background update installs
  *   "ffmpegLogLevel": "error",          // quiet panic fatal error warning info verbose debug
- *   "logLevel": "info",                 // off | info | debug: what the log file and logcat get (debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs)
+ *   "logLevel": "info",                 // off | info | debug: what the log file and logcat get (debug adds SSDP packets, raw lounge
+ *                                          chunks, lounge noops and media GETs)
  *   "prefetch": true,                   // boolean: prepare the next track while the current one plays
  *   "gapless": true,                    // boolean: queue the prepared track on the speaker; no effect when prefetch is false
  *   "cacheMb": 256                      // integer 0..32768: size cap of the converted and downloaded track cache
