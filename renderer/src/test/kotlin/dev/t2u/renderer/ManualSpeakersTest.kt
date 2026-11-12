@@ -7,6 +7,7 @@ package dev.t2u.renderer
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -15,7 +16,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ManualSpeakersTest {
-    private fun tempDir(): File = Files.createTempDirectory("manual-").toFile().also { it.deleteOnExit() }
+    @TempDir lateinit var tempRoot: File
+
+    // under the per-test @TempDir, so the JUnit extension removes it (deleteOnExit does not remove a directory that has files in it)
+    private fun tempDir(): File = Files.createTempDirectory(tempRoot.toPath(), "manual-").toFile()
 
     private class Warnings : (String) -> Unit {
         val lines = CopyOnWriteArrayList<String>()

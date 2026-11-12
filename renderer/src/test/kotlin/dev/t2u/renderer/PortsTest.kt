@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -19,7 +20,10 @@ import kotlin.test.assertTrue
 
 /** CAST-02: a speaker keeps its DIAL port whatever the discovery order. */
 class PortsTest {
-    private fun tempDir(): File = Files.createTempDirectory("ports-").toFile().also { it.deleteOnExit() }
+    @TempDir lateinit var tempRoot: File
+
+    // under the per-test @TempDir, so the JUnit extension removes it (deleteOnExit does not remove a directory that has files in it)
+    private fun tempDir(): File = Files.createTempDirectory(tempRoot.toPath(), "ports-").toFile()
 
     private fun make(dataDir: File = tempDir(), basePort: Int = 3000, warn: (String) -> Unit = {}) =
         PortRegistry(dataDir, basePort, warn).load()

@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -81,7 +82,10 @@ private class FakeManagedRenderer(
 class RendererRegistryTest {
     private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
 
-    private fun tempDir(): File = Files.createTempDirectory("registry-").toFile().also { it.deleteOnExit() }
+    @TempDir lateinit var tempRoot: File
+
+    // under the per-test @TempDir, so the JUnit extension removes it (deleteOnExit does not remove a directory that has files in it)
+    private fun tempDir(): File = Files.createTempDirectory(tempRoot.toPath(), "registry-").toFile()
 
     private class Events : EventSink {
         val list = CopyOnWriteArrayList<Map<String, Any?>>()
