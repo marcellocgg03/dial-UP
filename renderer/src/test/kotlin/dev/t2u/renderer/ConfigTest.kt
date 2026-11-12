@@ -31,6 +31,25 @@ class ConfigTest {
     }
 
     @Test
+    fun aPrefixIsLiteralTextNotAPlaceholder() {
+        for (prefix in listOf("{name}", "{model}", "x{manufacturer}", "{name} {model}")) {
+            val shown = name("Kitchen", template = nameTemplateFor(prefix))
+            assertTrue(shown.endsWith(" Kitchen"), "the real name closes '$shown'")
+            assertTrue("Sonos" !in shown && "Era 100" !in shown, "'$prefix' was not substituted: $shown")
+            assertEquals(1, Regex("Kitchen").findAll(shown).count(), shown)
+        }
+        assertEquals("{x} Kitchen", name("Kitchen", template = nameTemplateFor("{x}")), "other braces stay")
+    }
+
+    @Test
+    fun aSpeakerNameIsLiteralAndCleanedBeforeItIsUsed() {
+        assertEquals("🔊 {model}", name("{model}"), "a speaker that calls itself {model} is not given the model")
+        assertEquals("🔊 Kitchen Bath", name("Kitchen\u0000\n\u0007Bath").replace("  ", " "))
+        assertEquals("🔊 Unknown renderer", name("\u0001\u0002"))
+        assertEquals(63, name("x".repeat(200), template = "{name}").length)
+    }
+
+    @Test
     fun templatePlaceholdersAreReplacedAndTrimmed() {
         assertEquals(
             "Lamp - Sonos SYMFONISK",

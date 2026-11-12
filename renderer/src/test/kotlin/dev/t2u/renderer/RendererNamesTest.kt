@@ -123,4 +123,15 @@ class RendererNamesTest {
         assertEquals("Kitchen", shownRendererName("Kitchen", "D"))
         assertEquals("D", shownRendererName("   ", "D"))
     }
+
+    @Test
+    fun cleanDisplayNameDropsInvalidXmlCharsTurnsControlsIntoSpacesAndCuts() {
+        assertEquals("Kitchen", cleanDisplayName("  Kitchen \u0000"))
+        assertEquals("a b", cleanDisplayName("a\tb"))
+        assertEquals("ab", cleanDisplayName("a\uD800b"))
+        assertEquals("🔊 Lamp", cleanDisplayName("🔊 Lamp"))
+        assertEquals("", cleanDisplayName("\u0001"))
+        assertEquals(3, cleanDisplayName("🔊🔊🔊🔊🔊", 3).codePointCount(0, cleanDisplayName("🔊🔊🔊🔊🔊", 3).length))
+        assertEquals(63, cleanDisplayName("y".repeat(100)).length)
+    }
 }

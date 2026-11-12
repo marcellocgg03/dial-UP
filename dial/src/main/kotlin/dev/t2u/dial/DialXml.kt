@@ -4,9 +4,15 @@
 // ported to Kotlin for Tube2U[PnP] and conveyed under GPL-3.0-only.
 package dev.t2u.dial
 
-/** XML text escaping for every value inserted into the DIAL documents (EJS `<%= %>` escapes the same set). */
+import dev.t2u.upnp.stripInvalidXmlChars
+
+/**
+ * XML text escaping for every value inserted into the DIAL documents (EJS `<%= %>` escapes the same set). Characters that
+ * XML 1.0 does not allow at all (controls other than tab, LF and CR, unpaired surrogates) are dropped: one of them would make
+ * the whole document unparseable and the speaker would vanish from the cast menu.
+ */
 internal fun xmlEscape(s: String): String = buildString(s.length + 8) {
-    for (c in s) {
+    for (c in stripInvalidXmlChars(s)) {
         when (c) {
             '&' -> append("&amp;")
             '<' -> append("&lt;")

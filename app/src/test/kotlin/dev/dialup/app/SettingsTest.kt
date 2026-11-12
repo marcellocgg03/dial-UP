@@ -256,6 +256,15 @@ class SettingsTest {
     }
 
     @Test
+    fun aPrefixFromTheFileIsCleanedAtLoad() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("{\"namePrefix\":\"  Ho\\u0000me\\n\\u0007${"x".repeat(40)}\"}") }
+        val prefix = settings(f).data.value.namePrefix
+        assertEquals(MAX_NAME_PREFIX_LENGTH, prefix.codePointCount(0, prefix.length))
+        assertTrue(prefix.startsWith("Home x"), prefix)
+        assertTrue(prefix.none { it.isISOControl() }, prefix)
+    }
+
+    @Test
     fun aReloadedPrefixCanBeResetToTheDefaultAndStaysReset() {
         val f = File(dir, SETTINGS_FILE).apply { writeText("""{"namePrefix":"Home","other":7}""") }
         val s = settings(f)

@@ -14,6 +14,7 @@ import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YTDLP_STATUS_CASTING
 import dev.t2u.media.YtDlpCheck
 import dev.t2u.media.YtDlpUpdateOutcome
+import dev.t2u.renderer.cleanDisplayName
 import dev.dialup.app.SETTINGS_OUTPUT_FORMATS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -386,7 +387,7 @@ class SettingsPresenter(
      * card asks for it), so a cast is never cut. Returns the prefix that was saved.
      */
     fun setNamePrefix(text: String): String {
-        val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
+        val clean = cleanDisplayName(text.filter { !it.isISOControl() }, MAX_NAME_PREFIX_LENGTH)
         settings.update { it.copy(namePrefix = clean) }
         if (bridge.running && bridge.casting.value == 0) {
             // nothing cast: the running speakers take the name at once and only the YouTube apps are left to refresh

@@ -148,16 +148,32 @@ data class Config(
 
 /**
  * The cast-menu name of a receiver: [template] with the first `{name}`, `{manufacturer}` and `{model}`
- * replaced literally (as renderer.js does with String.replace, in that order) and trimmed. The friendly name
+ * replaced literally and trimmed. The replacement is one pass over the template, so a speaker that calls itself `{model}`
+ * does not get the model put in its name. The three values are cleaned with [cleanDisplayName]. The friendly name
  * arrives from parseDescription, which substitutes "Unknown renderer" for an empty one, so the result is never
  * just the prefix.
  */
-fun receiverName(template: String, friendlyName: String, manufacturer: String, model: String): String =
-    template
-        .replaceFirst("{name}", friendlyName)
-        .replaceFirst("{manufacturer}", manufacturer)
-        .replaceFirst("{model}", model)
-        .trim()
+fun receiverName(template: String, friendlyName: String, manufacturer: String, model: String): String {
+    val values = mapOf(
+        "name" to cleanDisplayName(friendlyName).ifEmpty { "Unknown renderer" },
+        "manufacturer" to cleanDisplayName(manufacturer),
+        "model" to cleanDisplayName(model),
+    )
+    val used = HashSet<String>()
+    return PLACEHOLDER.replace(template) { m ->
+        val key = m.groupValues[1]
+        if (used.add(key)) values.getValue(key) else m.value
+    }.trim()
+}
 
-/** The name template for the author's [prefix]: "<prefix> {name}", or just "{name}" when the prefix is blank. */
-fun nameTemplateFor(prefix: String): String = prefix.trim().let { if (it.isEmpty()) "{name}" else "$it {name}" }
+private val PLACEHOLDER = Regex("""\{(name|manufacturer|model)}""")
+
+/**
+ * The name template for the author's [prefix]: "<prefix> {name}", or just "{name}" when the prefix is blank. The prefix is
+ * literal text: a placeholder spelled in it is made harmless (its opening brace becomes a full-width one), so it can never
+ * take the place of the real `{name}`.
+ */
+fun nameTemplateFor(prefix: String): String = prefix.trim().let { raw ->
+    val literal = PLACEHOLDER.replace(raw) { "\uFF5B" + it.value.substring(1) }
+    if (literal.isEmpty()) "{name}" else "$literal {name}"
+}

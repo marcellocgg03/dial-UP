@@ -3,6 +3,7 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.renderer.cleanDisplayName
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -163,7 +164,7 @@ fun parseSettings(text: String): ParsedSettings {
     bool(KEY_NOTIFY_GUESTS)?.let { data = data.copy(notifyGuests = it) }
     o[KEY_NAME_PREFIX]?.let { e ->
         val text = (e as? JsonPrimitive)?.takeIf { it.isString }?.content
-        if (text != null) data = data.copy(namePrefix = text) else problems += KEY_NAME_PREFIX
+        if (text != null) data = data.copy(namePrefix = cleanDisplayName(text, MAX_NAME_PREFIX_LENGTH)) else problems += KEY_NAME_PREFIX
     }
     o[KEY_THEME]?.let { e ->
         val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { ThemeMode.fromWire(it) }

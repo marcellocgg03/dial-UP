@@ -56,6 +56,16 @@ class DialServerTest {
     }
 
     @Test
+    fun aNameWithCharactersXml10ForbidsStillGivesAParseableDocument() = testApplication {
+        val server = DialServer(config) { }
+        application { server.configure(this) }
+        server.rename("Kit\u0000chen \u0007\uD800\uFFFE")
+        val xml = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(xml.contains("<friendlyName>Kitchen </friendlyName>"), xml)
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml.byteInputStream())
+    }
+
+    @Test
     fun aRenameChangesTheFriendlyNameAtOnceAndEscapesIt() = testApplication {
         val server = DialServer(config) { }
         application { server.configure(this) }
