@@ -40,6 +40,7 @@ import dev.dialup.app.model.confirmText
 @Composable
 fun RestartCard(model: AppModel, prompt: RestartPrompt, clearOnCastEnd: Boolean, modifier: Modifier = Modifier) {
     val visible by prompt.visible.collectAsStateWithLifecycle()
+    val namesChanged by prompt.namesChanged.collectAsStateWithLifecycle()
     val pending by prompt.confirmPending.collectAsStateWithLifecycle()
     val casting by model.casting.collectAsStateWithLifecycle()
     LaunchedEffect(casting) { prompt.onCastingChanged(casting) }
@@ -55,7 +56,11 @@ fun RestartCard(model: AppModel, prompt: RestartPrompt, clearOnCastEnd: Boolean,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Restart the bridge to apply this change",
+                    if (namesChanged) {
+                        "Restart the bridge to apply this change, then clear YouTube and YouTube Music from recents to see the new name"
+                    } else {
+                        "Restart the bridge to apply this change"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )

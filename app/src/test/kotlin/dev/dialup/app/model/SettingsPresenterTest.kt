@@ -196,6 +196,7 @@ class SettingsPresenterTest {
         assertFalse(p.restart.visible.value)
         p.onRenamed()
         assertTrue(p.restart.visible.value)
+        assertTrue(p.restart.namesChanged.value)
         assertEquals(0, bridge.restartCalls)
     }
 

@@ -61,6 +61,7 @@ class RestartPrompt(
 ) {
     private val card = MutableStateFlow(false)
     private val pending = MutableStateFlow(false)
+    private val names = MutableStateFlow(false)
     private var timer: Job? = null
     private var running = false
 
@@ -73,10 +74,17 @@ class RestartPrompt(
     /** True while the confirmation for a restart during a cast is open. */
     val confirmPending: StateFlow<Boolean> = pending.asStateFlow()
 
+    /**
+     * True from a rename or prefix change until the next restart: the YouTube apps keep the old names until they are cleared
+     * from recents, which this app cannot do, so the card says so.
+     */
+    val namesChanged: StateFlow<Boolean> = names.asStateFlow()
+
     /** Shows the card for [visibleMs] when [key] needs a restart and the bridge is [bridgeRunning]; otherwise does nothing. */
     @Synchronized
     fun onSettingChanged(key: SettingKey, bridgeRunning: Boolean) {
         if (!key.needsRestart || !bridgeRunning) return
+        if (key == SettingKey.NAME_PREFIX || key == SettingKey.RENAME) names.value = true
         timer?.cancel()
         card.value = true
         if (sticky) {
@@ -146,6 +154,7 @@ class RestartPrompt(
     private fun run(source: String) {
         if (running) return
         running = true
+        names.value = false
         scope.launch {
             try {
                 action(source)
