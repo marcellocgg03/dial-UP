@@ -1,5 +1,7 @@
 package dev.t2u.media
 
+import java.util.concurrent.CopyOnWriteArrayList
+
 /** What one request did, filled in as the response is produced and reported in `finally`. */
 internal class Outcome {
     var status: Int = 0
@@ -9,7 +11,7 @@ internal class Outcome {
     var note: String? = null
 
     /** The upstream calls of this request, for the log (direct only). */
-    val upstream = java.util.concurrent.CopyOnWriteArrayList<UpstreamTiming>()
+    val upstream = CopyOnWriteArrayList<UpstreamTiming>()
 }
 
 /** One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw). */

@@ -1,5 +1,8 @@
 package dev.t2u.media
 
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * Starts the ffmpeg process for a pipe or buffered entry. The JVM side ([JvmPipeLauncher]) uses a binary on
  * PATH-like absolute location; the Android side (`FfmpegRunner` in :app) adds the library environment.
@@ -28,7 +31,7 @@ class JvmPipeLauncher(
 ) : PipeLauncher {
     private class Watched(val thread: Thread, val tail: StringBuilder)
 
-    private val live: MutableSet<Process> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val live: MutableSet<Process> = ConcurrentHashMap.newKeySet()
     private val watched = object : LinkedHashMap<Process, Watched>() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Process, Watched>): Boolean = size > MAX_WATCHED
     }
@@ -54,7 +57,7 @@ class JvmPipeLauncher(
                         }
                     }
                 }
-            } catch (_: java.io.IOException) {
+            } catch (_: IOException) {
                 // stream closed by destroy
             }
             val code = try {

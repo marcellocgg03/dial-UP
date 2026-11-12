@@ -229,7 +229,7 @@ class EvidenceLog(
     fun clear(): Boolean {
         if (closed.get()) return false
         return try {
-            executor.submit { rotating.clear() }.get(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            executor.submit { rotating.clear() }.get(2000, TimeUnit.MILLISECONDS)
             true
         } catch (t: Throwable) {
             warn("evidence clear failed", t)
@@ -241,7 +241,7 @@ class EvidenceLog(
     fun flush(timeoutMs: Long = 2000) {
         if (closed.get()) return
         try {
-            executor.submit {}.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            executor.submit {}.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (t: Throwable) {
             warn("evidence flush failed", t)
         }

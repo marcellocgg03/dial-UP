@@ -2,6 +2,7 @@ package dev.t2u.lounge
 
 // Kotlin original, protocol reference: youtubei.js Session.generate_session_locally (MIT).
 
+import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.Base64
@@ -25,7 +26,7 @@ object VisitorData {
     /** Protobuf bytes (tag 0x0a, length, id, tag 0x28, varint seconds), base64url, then URL-encoded. */
     fun encode(id: String, seconds: Long): String {
         val idBytes = id.toByteArray(Charsets.UTF_8)
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         out.write(0x0a)
         out.write(idBytes.size)
         out.write(idBytes)

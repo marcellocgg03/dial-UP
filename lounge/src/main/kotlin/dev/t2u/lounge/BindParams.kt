@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.lang.Long as JavaLong
 import java.util.Random
 
 enum class BindType { INIT_SESSION, SEND_MESSAGE, RPC }
@@ -160,7 +161,7 @@ class BindParams(
     }
 
     private fun generateZx(): String =
-        java.lang.Long.toHexString(random.nextLong() ushr 16).padStart(12, '0')
+        JavaLong.toHexString(random.nextLong() ushr 16).padStart(12, '0')
 
     private fun generateRid(): Int =
         random.nextInt(LoungeConstants.RID_MAX - LoungeConstants.RID_MIN + 1) + LoungeConstants.RID_MIN
