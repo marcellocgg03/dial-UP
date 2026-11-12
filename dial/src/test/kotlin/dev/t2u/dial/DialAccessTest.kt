@@ -101,6 +101,19 @@ class DialAccessTest {
     }
 
     @Test
+    fun lanModeAnswersSsdpOnlyFromPrivateLanSources() {
+        val lan = policy(DialAccessMode.LAN)
+        for (ok in listOf("192.168.50.45", "10.1.2.3", "172.16.0.9", "169.254.1.1", "127.0.0.1", "::1", "fe80::1", "fd12:3456::1")) {
+            assertTrue(lan.allowsSsdp(InetAddress.getByName(ok)), "should answer $ok")
+        }
+        for (no in listOf("8.8.8.8", "203.0.113.7", "100.64.0.1", "172.32.0.1", "2001:db8::1", "2606:4700::1111", "::ffff:8.8.8.8")) {
+            assertFalse(lan.allowsSsdp(InetAddress.getByName(no)), "should refuse $no")
+        }
+        val phone = policy(DialAccessMode.PHONE)
+        assertFalse(phone.allowsSsdp(InetAddress.getByName("8.8.8.8")))
+    }
+
+    @Test
     fun announceIsAllowedOnlyInLanMode() {
         assertFalse(policy(DialAccessMode.PHONE).announceAllowed())
         assertTrue(policy(DialAccessMode.LAN).announceAllowed())

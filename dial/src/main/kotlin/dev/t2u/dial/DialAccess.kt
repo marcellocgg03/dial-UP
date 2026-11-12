@@ -1,5 +1,6 @@
 package dev.t2u.dial
 
+import dev.t2u.upnp.isPrivateLanAddress
 import java.net.InetAddress
 
 /**
@@ -45,8 +46,15 @@ class DialAccessPolicy(
         return addr !in phoneAddresses().map(::normalise)
     }
 
-    /** True when an SSDP datagram from [address] may be answered. */
-    fun allowsSsdp(address: InetAddress): Boolean = allowsHttp(address.hostAddress.orEmpty())
+    /**
+     * True when an SSDP datagram from [address] may be answered. Unlike HTTP (bound to the Wi-Fi address only) the SSDP socket
+     * listens on every interface, so in [DialAccessMode.LAN] the source must also be a private LAN address; a global or
+     * mapped-public source is never answered.
+     */
+    fun allowsSsdp(address: InetAddress): Boolean {
+        if (!allowsHttp(address.hostAddress.orEmpty())) return false
+        return mode() != DialAccessMode.LAN || isPrivateLanAddress(address)
+    }
 
     /** Multicast NOTIFY alive makes every LAN device see the receivers, so it is LAN-only. */
     fun announceAllowed(): Boolean = mode() == DialAccessMode.LAN
