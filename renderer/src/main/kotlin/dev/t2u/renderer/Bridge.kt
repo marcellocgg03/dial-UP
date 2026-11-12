@@ -458,7 +458,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
-    private fun startBody() {
+    private suspend fun startBody() {
         val base = deps.config
         // mediaPort 0 means "any free port" (tests); the Node range check applies to the real port below
         base.copy(mediaPort = base.mediaPort.coerceAtLeast(1)).validate()
@@ -479,7 +479,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     }
 
     /** Builds and starts the media server for [base] on [wifi] and keeps it in [mediaServer]. */
-    private fun startMediaServer(base: Config, wifi: String): MediaServer {
+    private suspend fun startMediaServer(base: Config, wifi: String): MediaServer {
         // File builds (mp4) need ffmpeg, a place to write and a way to download the source. The builder keeps its
         // finished files in <bufferDir>/files across starts and prunes them to config.json `cacheMb`; it
         // owns that directory and deletes in it, so it gets a sub-directory of the buffer directory, never the buffer
@@ -513,7 +513,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             mp3Bitrate = base.mp3Bitrate,
             ffmpegLogLevel = base.ffmpegLogLevel,
         )
-        media.start()
+        media.startSuspending()
         mediaServer = media
         return media
     }

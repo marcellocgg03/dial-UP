@@ -172,7 +172,7 @@ class YouTubeCastReceiver(
                     accessPolicy = deps.accessPolicy,
                 )
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.start() }
+                withContext(Dispatchers.IO) { created.startSuspending() }
                 server = created
                 val location = "http://${config.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
                 deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, location))
@@ -266,7 +266,7 @@ class YouTubeCastReceiver(
                 dial = null
                 val moved = config.copy(bindHost = newHost, port = port)
                 val created = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.start() }
+                withContext(Dispatchers.IO) { created.startSuspending() }
                 dial = created
                 dialConfig = moved
                 bindHost = newHost

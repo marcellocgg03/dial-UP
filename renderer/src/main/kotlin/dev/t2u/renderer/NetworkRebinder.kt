@@ -150,7 +150,7 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
         while (true) {
             attempt++
             try {
-                withContext(Dispatchers.IO) { media.rebindHost(host) }
+                withContext(Dispatchers.IO) { media.rebindHostSuspending(host) }
                 emit("media-rebind", "attempt" to attempt, "ok" to true)
                 return
             } catch (e: CancellationException) {
