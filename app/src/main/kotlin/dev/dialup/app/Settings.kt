@@ -231,6 +231,9 @@ class Settings(
     private val state = MutableStateFlow(AppSettingsData())
     private val mode = MutableStateFlow(DEFAULT_DIAL_ACCESS)
 
+    /** What a restart would read for [AppSettingsData.dialAccess]: the last value known to be in the file. */
+    private var persistedDialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS
+
     /** The current settings, as observed by the screens and the bridge gates. */
     val data: StateFlow<AppSettingsData> get() = state
 
@@ -241,14 +244,41 @@ class Settings(
         load()
     }
 
-    /** Applies [change] to the current settings under the lock, publishes the result and persists it atomically. */
+    /**
+     * Applies [change] to the current settings under the lock, publishes the result and persists it atomically.
+     *
+     * Who may cast is a safety setting, so a failed write must never leave a looser value than the file would give after a
+     * restart: a change that loosens it (phone to LAN) is published only once it is saved, and kept at the stricter saved
+     * value when the save fails; a change that tightens it is published at once and stays, with [onError] telling that the
+     * file still holds the looser value (the next update writes it again).
+     */
     fun update(change: (AppSettingsData) -> AppSettingsData) {
         synchronized(lock) {
             val next = change(state.value)
-            state.value = next
-            mode.value = next.dialAccess
-            write(next)
+            val loosens = next.dialAccess == DialAccessMode.LAN && persistedDialAccess != DialAccessMode.LAN
+            if (!loosens) publish(next)
+            val saved = write(next)
+            if (saved) {
+                persistedDialAccess = next.dialAccess
+            } else if (next.dialAccess != persistedDialAccess) {
+                onError(
+                    "settings:dialAccess",
+                    IllegalStateException(
+                        if (loosens) {
+                            "dialAccess ${next.dialAccess.wire} was not saved; staying at ${persistedDialAccess.wire}"
+                        } else {
+                            "dialAccess ${next.dialAccess.wire} is not saved yet; the file still says ${persistedDialAccess.wire}"
+                        },
+                    ),
+                )
+            }
+            if (loosens) publish(if (saved) next else next.copy(dialAccess = persistedDialAccess))
         }
+    }
+
+    private fun publish(data: AppSettingsData) {
+        state.value = data
+        mode.value = data.dialAccess
     }
 
     fun setDialAccess(mode: DialAccessMode) {
@@ -262,6 +292,7 @@ class Settings(
             extras = parsed.extras
             state.value = parsed.data
             mode.value = parsed.data.dialAccess
+            persistedDialAccess = parsed.data.dialAccess
             if (parsed.problems.isNotEmpty()) {
                 onError("settings:read", IllegalArgumentException("settings.json: ${parsed.problems.joinToString(", ")}"))
             }
@@ -270,13 +301,16 @@ class Settings(
         }
     }
 
-    private fun write(data: AppSettingsData) {
+    /** Writes [data]; true when the file now holds it. A failure is reported through [onError]. */
+    private fun write(data: AppSettingsData): Boolean {
         try {
             val json = settingsJson(data, extras).toString()
             file.absoluteFile.parentFile?.mkdirs()
             writer(file, json)
+            return true
         } catch (t: Throwable) {
             onError("settings:write", t)
+            return false
         }
     }
 }

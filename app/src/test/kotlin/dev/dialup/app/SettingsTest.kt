@@ -128,6 +128,44 @@ class SettingsTest {
     }
 
     @Test
+    fun aFailedSaveOfLoosenedAccessKeepsPhoneInMemoryAndOnDisk() {
+        val f = File(dir, SETTINGS_FILE)
+        val failing = Settings(f, { _, _ -> throw IOException("disk full") }) { where, _ -> errors.add(where) }
+        failing.setDialAccess(DialAccessMode.LAN)
+        assertEquals(DialAccessMode.PHONE, failing.dialAccess.value, "never looser in memory than a restart would be")
+        assertEquals(DialAccessMode.PHONE, failing.data.value.dialAccess)
+        assertEquals(listOf("settings:write", "settings:dialAccess"), errors)
+        assertEquals(DialAccessMode.PHONE, settings(f).dialAccess.value)
+    }
+
+    @Test
+    fun aFailedSaveOfTightenedAccessStaysTightAndIsReported() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"dialAccess":"lan"}""") }
+        val s = Settings(f, flakyWriter(setOf(1))) { where, _ -> errors.add(where) }
+        assertEquals(DialAccessMode.LAN, s.dialAccess.value)
+        s.setDialAccess(DialAccessMode.PHONE)
+        assertEquals(DialAccessMode.PHONE, s.dialAccess.value, "the stricter value is in force at once")
+        assertEquals(listOf("settings:write", "settings:dialAccess"), errors, "the stale file is reported")
+        assertTrue(f.readText().contains("lan"), "the file still holds the old value")
+        // the next successful write brings the file in line
+        s.update { it.copy(gapless = false) }
+        assertEquals(DialAccessMode.PHONE, settings(f).dialAccess.value)
+        assertEquals(2, errors.size)
+    }
+
+    @Test
+    fun aSuccessfulLoosenedSaveIsPublishedAndPersisted() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        s.setDialAccess(DialAccessMode.LAN)
+        assertEquals(DialAccessMode.LAN, s.dialAccess.value)
+        assertEquals(DialAccessMode.LAN, settings(f).dialAccess.value)
+        s.update { it.copy(gapless = false) }
+        assertEquals(DialAccessMode.LAN, s.dialAccess.value, "an unrelated update keeps it")
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
     fun missingFileGivesTheFreshInstallDefaults() {
         val d = settings().data.value
         assertEquals(AppSettingsData(), d)
