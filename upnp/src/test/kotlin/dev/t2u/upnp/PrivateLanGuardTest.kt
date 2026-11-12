@@ -84,6 +84,20 @@ class PrivateLanGuardTest {
     }
 
     @Test
+    fun `a trailing dot or a bracketed mapped address does not slip past the rule`() {
+        val guard = PrivateLanGuard()
+        for (u in listOf(
+            "http://8.8.8.8./", "http://localhost./", "http://example.com./", "http://[::ffff:8.8.8.8]/", "http://[::ffff:808:808]/",
+            "http://[::]/", "http://0.0.0.0/", "http://224.0.0.1/",
+        )) {
+            assertFailsWith<IOException>(u) { guard.checkCleartext(u.toHttpUrl()) }
+        }
+        // a private address with a trailing dot is not an IP literal to the guard: refused rather than guessed at
+        assertFailsWith<IOException> { guard.checkCleartext("http://192.168.1.10./".toHttpUrl()) }
+        guard.checkCleartext("http://[::ffff:192.168.1.10]/".toHttpUrl())
+    }
+
+    @Test
     fun `HTTPS passes the guard unchanged`() {
         PrivateLanGuard().checkCleartext("https://example.com/".toHttpUrl())
         PrivateLanGuard().checkCleartext("https://8.8.8.8/".toHttpUrl())
