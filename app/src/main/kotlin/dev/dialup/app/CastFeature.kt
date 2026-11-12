@@ -580,7 +580,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             mapOf(
                 "server" to "media",
                 "method" to req.method,
-                "uri" to req.uri,
+                "uri" to redactStreamToken(req.uri),
                 "httpVersion" to req.httpVersion,
                 "src" to "${req.remoteHost}:${req.remotePort}",
                 "self" to self,
