@@ -187,7 +187,7 @@ class FileBuilder(
                 dir.mkdirs()
                 part.delete()
             }
-            val p = withContext(Dispatchers.IO) { launcher.start(args) }
+            val p = launcher.startOwned(args)
             proc = p
             awaitExit(p)
             val code = p.exitValue()
