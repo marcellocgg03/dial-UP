@@ -23,6 +23,9 @@ object NativePayloads {
         val ffmpegLibDir: File,
         val certFile: File,
     ) {
+        /** `LD_LIBRARY_PATH` for the ffmpeg process: libc++_shared.so exists only in the python lib dir. */
+        fun ldLibraryPath(): String = "${pythonLibDir.absolutePath}:${ffmpegLibDir.absolutePath}"
+
         fun toMap(): Map<String, Any?> = linkedMapOf(
             "nativeLibDir" to nativeLibDir.absolutePath,
             "ffmpegBin" to ffmpegBin.absolutePath,

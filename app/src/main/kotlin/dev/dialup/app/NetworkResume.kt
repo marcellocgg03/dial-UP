@@ -10,7 +10,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
-import java.net.Inet4Address
 
 /**
  * The service stops itself after Wi-Fi has been absent beyond the short rebind window; the switch in
@@ -72,28 +71,13 @@ object NetworkResume {
             setArmed(app, false)
         }
     }
-
-    /** True when a Wi-Fi client network with an IPv4 address exists now. */
-    fun hasWifiAddress(context: Context): Boolean {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
-        // allNetworks is deprecated from API 31 but is the only synchronous way to list networks at minSdk 26; the
-        // replacement is a NetworkCallback (registerNetworkCallback, API 24), which suits watching, not a one-shot check.
-        @Suppress("DEPRECATION")
-        for (network in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val props = cm.getLinkProperties(network) ?: continue
-            if (props.linkAddresses.any { it.address is Inet4Address }) return true
-        }
-        return false
-    }
 }
 
-/** Receives the Wi-Fi network events of [NetworkResume.arm]; acts only while armed, with the switch on, and with a Wi-Fi address. */
+/** Receives the Wi-Fi network events of [NetworkResume.arm]; acts only while armed, with the switch on, and with an address the bridge can bind to ([hasBindableNetwork], the rule every start gate uses). */
 class NetworkResumeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!NetworkResume.isArmed(context)) return
-        if (!NetworkResume.hasWifiAddress(context)) return
+        if (!hasBindableNetwork(context)) return
         BridgeControl.resumeAfterNetwork(context)
     }
 }

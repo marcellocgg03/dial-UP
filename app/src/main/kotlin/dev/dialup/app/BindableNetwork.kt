@@ -13,9 +13,8 @@ import java.net.InetAddress
  * name, else the phone's own tether (hotspot) interface, else null to null.
  *
  * It may run on the main thread: it makes a few ConnectivityManager binder calls (allNetworks, capabilities, link properties)
- * and, only when there is no Wi-Fi client address, one NetworkInterface enumeration. That is the same work
- * [NetworkResumeReceiver]'s hasWifiAddress already does on the main thread, and BOOT_COMPLETED, the resume receiver and
- * onResume must decide synchronously anyway. The UI's continuous presence flow runs it on Dispatchers.IO instead.
+ * and, only when there is no Wi-Fi client address, one NetworkInterface enumeration. The resume receiver, BOOT_COMPLETED
+ * and onResume run it on the main thread because they must decide synchronously. The UI's continuous presence flow runs it on Dispatchers.IO instead.
  */
 // ConnectivityManager.allNetworks is deprecated from API 31 but is the only synchronous way to list networks at minSdk 26;
 // the replacement is a NetworkCallback (registerNetworkCallback), which cannot answer on demand.
