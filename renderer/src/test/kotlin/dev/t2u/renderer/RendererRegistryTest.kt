@@ -246,6 +246,54 @@ class RendererRegistryTest {
         assertEquals(2, h.events.named("added").size)
     }
 
+    private val otherLocation = "http://192.168.50.77:1400/xml/device_description.xml"
+
+    @Test
+    @DisplayName("the same UDN from another address while the entry is fresh is refused and logged once with both addresses")
+    fun aRepeatedUdnFromAnotherAddressDoesNotTakeAFreshEntryOver() = runBlocking {
+        val h = Harness()
+        h.alive()
+        val first = h.created.single()
+        repeat(3) { h.alive(location = otherLocation, src = "192.168.50.77") }
+        assertEquals(1, h.created.size, "no second renderer was set up")
+        assertEquals(0, first.destroyCalls.get(), "the real speaker was not torn down")
+        assertEquals(listOf<ManagedRenderer>(first), h.registry.renderers())
+        assertEquals(0, h.events.named("moved").size)
+        val refused = h.events.named("renderer-moved-refused").single()
+        val reason = refused["reason"].toString()
+        assertTrue("192.168.50.42" in reason && "192.168.50.77" in reason, reason)
+        // the real speaker's own alive still refreshes it
+        h.alive()
+        assertEquals(1, first.refreshCalls.get())
+    }
+
+    @Test
+    @DisplayName("a speaker that moved to another address is accepted once the old entry is stale")
+    fun aMoveToAnotherAddressIsAcceptedWhenTheOldEntryIsStale() = runBlocking {
+        val h = Harness()
+        h.alive()
+        val first = h.created.single()
+        h.now.addAndGet(1800L * 1500L + 1) // past max-age x 1.5 with no alive from the old address
+        h.alive(location = otherLocation, src = "192.168.50.77")
+        assertEquals(2, h.created.size)
+        assertEquals(1, first.destroyCalls.get())
+        assertEquals(1, h.events.named("moved").size)
+        assertEquals(0, h.events.named("renderer-moved-refused").size)
+        assertEquals(listOf<ManagedRenderer>(h.created[1]), h.registry.renderers())
+    }
+
+    @Test
+    @DisplayName("a speaker that said byebye can come back at another address at once")
+    fun aMoveToAnotherAddressIsAcceptedAfterByebye() = runBlocking {
+        val h = Harness()
+        h.alive()
+        h.byebye("Kitchen")
+        h.alive(location = otherLocation, src = "192.168.50.77")
+        assertEquals(2, h.created.size)
+        assertEquals(listOf<ManagedRenderer>(h.created[1]), h.registry.renderers())
+        assertEquals(0, h.events.named("renderer-moved-refused").size)
+    }
+
     @Test
     @DisplayName("a byebye for a known UDN destroys it and releases its port; for an unknown UDN it does nothing")
     fun byebyeRemoves() = runBlocking {
