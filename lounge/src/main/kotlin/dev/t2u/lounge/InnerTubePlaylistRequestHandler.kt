@@ -92,12 +92,27 @@ class InnerTubePlaylistRequestHandler(
                 ?.let { currentVisitor = it.content }
 
             val found = parseNext(root, target)
-            if (playlist.isLast) log("innertubeShape", target, "arrays" to videoArrays(root), "listId" to (target.context?.playlistId != null))
+            if (playlist.isLast)
+                log("innertubeShape", target, "arrays" to videoArrays(root), "listId" to (target.context?.playlistId != null))
             val result = applyGuard(found, playlist, target)
             if (found.previous == null && found.next == null) {
-                log("innertube", target, "status" to status, "bytes" to text.length, "keys" to root.keys.sorted().joinToString(","), "found" to false)
+                log(
+                    "innertube",
+                    target,
+                    "status" to status,
+                    "bytes" to text.length,
+                    "keys" to root.keys.sorted().joinToString(","),
+                    "found" to false,
+                )
             } else {
-                log("innertube", target, "status" to status, "bytes" to text.length, "previous" to (result.previous != null), "next" to (result.next != null))
+                log(
+                    "innertube",
+                    target,
+                    "status" to status,
+                    "bytes" to text.length,
+                    "previous" to (result.previous != null),
+                    "next" to (result.next != null),
+                )
             }
             result
         } catch (e: CancellationException) {

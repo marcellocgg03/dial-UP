@@ -190,7 +190,10 @@ class MediaServer(
         files?.close()
     }
 
-    /** Only says the server object was started and not stopped. After a failed [rebindHostSuspending] it stays true; [isListening] is the truth about the socket. */
+    /**
+     * Only says the server object was started and not stopped. After a failed [rebindHostSuspending] it stays true;
+     * [isListening] is the truth about the socket.
+     */
     fun isRunning(): Boolean = server != null
 
     /** True while the socket is bound and accepting. A housekeeping pass rebinds a running server that is not listening. */
@@ -638,7 +641,8 @@ class MediaServer(
      * Runs the attempt ladder once with ffmpeg writing straight into a part file and registers the result, or
      * returns null so the caller falls back to the live path (which then produces the usual 200 or 502). Bounded
      * three ways (a cold fill must not exhaust disk, time or part files): the file may not pass the per-token cap
-     * (the token is then remembered as too big), the whole fill may not pass [PipeRangeConfig.coldFillTimeoutMs], and a cancelled request kills it.
+     * (the token is then remembered as too big), the whole fill may not pass [PipeRangeConfig.coldFillTimeoutMs], and a
+     * cancelled request kills it.
      * The cache also limits how many part files exist at once, so a fill may be refused outright.
      *
      * Only formats whose file output is byte-identical to their pipe output may be filled ([COLD_FILL_FORMATS]);

@@ -97,7 +97,10 @@ class SsdpResponder(
     private val notifyTarget: InetSocketAddress? = null,
     /** Where [selfProbe] sends its datagram; null means the first listener on loopback, else the SSDP group on [groupPort]. */
     private val probeTarget: InetSocketAddress? = null,
-    /** Creates the reply socket (bound to the address, ephemeral port, interface set when given). Tests inject failing or breakable sockets. */
+    /**
+     * Creates the reply socket (bound to the address, ephemeral port, interface set when given).
+     * Tests inject failing or breakable sockets.
+     */
     private val openReplySocket: (InetAddress, NetworkInterface?) -> MulticastSocket = ::defaultReplySocket,
 ) {
     private class Listener(val spec: ListenSpec, val socket: MulticastSocket) {
@@ -143,7 +146,10 @@ class SsdpResponder(
         openListeners()
     }
 
-    /** Asks the [openReplySocket] factory for a reply socket; a failure is reported through onError and leaves the responder without one. */
+    /**
+     * Asks the [openReplySocket] factory for a reply socket; a failure is reported through onError and
+     * leaves the responder without one.
+     */
     private fun createReplySocket(): MulticastSocket? = try {
         openReplySocket(replyBind, replyInterface)
     } catch (t: Throwable) {

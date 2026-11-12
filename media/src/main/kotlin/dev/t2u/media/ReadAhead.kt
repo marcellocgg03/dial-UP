@@ -21,7 +21,10 @@ internal const val READ_AHEAD_WINDOW_BYTES = 512 * 1024
  */
 internal const val READ_AHEAD_TOTAL_BYTES = 4L * READ_AHEAD_WINDOW_BYTES
 
-/** A bounded range of at most this many bytes counts as one read of a scan; a larger or open-ended one is a stream and is relayed as before. */
+/**
+ * A bounded range of at most this many bytes counts as one read of a scan; a larger or open-ended one is a stream and is
+ * relayed as before.
+ */
 internal const val READ_AHEAD_SCAN_MAX_BYTES = 64 * 1024
 
 /**
@@ -50,7 +53,10 @@ internal class DirectScan {
     val scans = AtomicInteger()
     val epoch = AtomicInteger()
 
-    /** Set when upstream answered a window request in a way the proxy does not rely on; the token then goes back to one upstream request per speaker request. */
+    /**
+     * Set when upstream answered a window request in a way the proxy does not rely on; the token then goes back to one
+     * upstream request per speaker request.
+     */
     @Volatile var disabled = false
 }
 
@@ -69,7 +75,10 @@ internal class ReadAheadStore(private val totalBytes: Long) {
         w
     }
 
-    /** Makes room for a window of [bytes] for [token], dropping the token's own old window and then the oldest others; false if it cannot fit. */
+    /**
+     * Makes room for a window of [bytes] for [token], dropping the token's own old window and then the oldest others;
+     * false if it cannot fit.
+     */
     fun reserve(token: String, bytes: Long): Boolean = synchronized(lock) {
         windows.remove(token)
         while (held() + bytes > totalBytes && windows.isNotEmpty()) {
