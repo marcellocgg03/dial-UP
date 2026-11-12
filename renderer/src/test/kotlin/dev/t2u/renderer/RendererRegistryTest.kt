@@ -916,6 +916,34 @@ class RendererRegistryTest {
     }
 
     @Test
+    @DisplayName("a hidden speaker that comes back from a new address stays hidden, and unhiding brings back one card at the new address")
+    fun aHiddenSpeakerStaysHiddenWhenItsAddressChanges() = runBlocking {
+        val hiddenSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val h = Harness(hidden = { it in hiddenSet })
+        h.alive()
+        assertEquals(1, h.registry.count.value)
+        hiddenSet.add("kitchen")
+        assertTrue(h.registry.hide("kitchen", stop = true, clear = false))
+        assertEquals(0, h.registry.count.value)
+        val created = h.created.size
+
+        val movedLocation = "http://192.168.50.77:1400/xml/device_description.xml"
+        repeat(3) { h.alive(location = movedLocation, src = "192.168.50.77") }
+        assertEquals(0, h.registry.count.value, "the new address does not unhide it")
+        assertEquals(created, h.created.size, "no renderer is built for a hidden speaker, whatever its address")
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS * 2)
+        assertEquals(0, h.registry.retryDue())
+        assertEquals(created, h.created.size)
+
+        hiddenSet.remove("kitchen")
+        h.alive(location = movedLocation, src = "192.168.50.77")
+        assertEquals(1, h.registry.count.value, "unhide brings back exactly one card")
+        assertEquals(created + 1, h.created.size)
+        assertEquals(movedLocation, h.created.last().location)
+        assertEquals(1, h.registry.renderers().size)
+    }
+
+    @Test
     @DisplayName("hide removes the running renderer, frees its port and reports whether there was one")
     fun hideRemovesTheRunningRenderer() = runBlocking {
         val h = Harness()
