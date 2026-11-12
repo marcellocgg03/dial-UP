@@ -46,8 +46,8 @@ fun ytdlpNewer(latest: String, current: String?): Boolean {
     val b = current.trim().split('.').map { it.toLongOrNull() }
     if (a.any { it == null } || b.any { it == null }) return latest.trim() != current.trim()
     for (i in 0 until maxOf(a.size, b.size)) {
-        val x = a.getOrElse(i) { 0L }!!
-        val y = b.getOrElse(i) { 0L }!!
+        val x = a.getOrNull(i) ?: 0L
+        val y = b.getOrNull(i) ?: 0L
         if (x != y) return x > y
     }
     return false

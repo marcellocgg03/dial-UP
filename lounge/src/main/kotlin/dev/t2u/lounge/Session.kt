@@ -310,14 +310,15 @@ class Session(
     }
 
     private suspend fun getLoungeToken(): LoungeToken {
-        val body = formEncode(listOf("screen_ids" to screenId!!)).toRequestBody(formType)
+        val id = checkNotNull(screenId) { "getLoungeToken called before a screen id exists" }
+        val body = formEncode(listOf("screen_ids" to id)).toRequestBody(formType)
         val request = Request.Builder().url(endpoints.getLoungeTokenBatch).header("User-Agent", LoungeConstants.USER_AGENT).post(body).build()
         val text = execute(request).use { r ->
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
         }
         val screen = try {
-            Json.parseToJsonElement(text).jsonObject["screens"]!!.jsonArray[0].jsonObject
+            checkNotNull(Json.parseToJsonElement(text).jsonObject["screens"]) { "no screens key" }.jsonArray[0].jsonObject
         } catch (e: Exception) {
             throw IOException("lounge token data error")
         }

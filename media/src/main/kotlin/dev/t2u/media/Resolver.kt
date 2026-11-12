@@ -437,7 +437,7 @@ class CachingResolver(
             emit(videoId, "hit", started, it)
             return it
         }
-        val deferred = pending.second!!
+        val deferred = checkNotNull(pending.second) { "a cache miss always carries a running lookup" }
         val info = try {
             deferred.await()
         } catch (e: CancellationException) {

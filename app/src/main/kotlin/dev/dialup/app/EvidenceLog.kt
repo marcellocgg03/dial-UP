@@ -277,8 +277,7 @@ class EvidenceLog(
             if (current != null && !current.isClosed && current.dir == dir) return current
             current?.close()
             val created = when {
-                logcat == null && monoNanos == null -> EvidenceLog(dir)
-                logcat == null -> EvidenceLog(dir, monoNanos = monoNanos!!)
+                logcat == null -> if (monoNanos == null) EvidenceLog(dir) else EvidenceLog(dir, monoNanos = monoNanos)
                 monoNanos == null -> EvidenceLog(dir, logcat = logcat)
                 else -> EvidenceLog(dir, monoNanos = monoNanos, logcat = logcat)
             }
