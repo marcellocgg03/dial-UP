@@ -487,7 +487,14 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val config = base.copy(mediaPort = media.resolvedPort())
         effective = config
 
-        val policy = DialAccessPolicy(deps.accessMode, phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") })
+        val policy = DialAccessPolicy(
+            deps.accessMode,
+            phoneAddresses = { setOf(net.wifiIp.hostAddress.orEmpty(), "127.0.0.1", "::1") },
+            // the Wi-Fi interface knows its prefix length; without it (no interface, a test) the subnet is not checked
+            lanSubnet = {
+                net.iface?.interfaceAddresses?.firstOrNull { it.address == net.wifiIp }?.let { net.wifiIp to it.networkPrefixLength.toInt() }
+            },
+        )
         accessPolicy = policy
 
         responder = buildResponder(net, policy)

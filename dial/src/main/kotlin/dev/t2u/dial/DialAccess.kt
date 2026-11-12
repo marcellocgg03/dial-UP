@@ -1,6 +1,7 @@
 package dev.t2u.dial
 
 import dev.t2u.upnp.isPrivateLanAddress
+import java.net.Inet4Address
 import java.net.InetAddress
 
 /**
@@ -24,6 +25,11 @@ enum class DialAccessMode(val wire: String) {
 class DialAccessPolicy(
     private val mode: () -> DialAccessMode,
     private val phoneAddresses: () -> Set<String>,
+    /**
+     * The Wi-Fi address and its prefix length, read per call, or null when it is not known. When known, [allowsSsdp] in LAN
+     * mode also wants an IPv4 source to be on that subnet.
+     */
+    private val lanSubnet: () -> Pair<InetAddress, Int>? = { null },
 ) {
     /** True when a request from [remote] (an address string as the HTTP engine reports it) may be served. */
     fun allowsHttp(remote: String): Boolean {
@@ -49,11 +55,32 @@ class DialAccessPolicy(
     /**
      * True when an SSDP datagram from [address] may be answered. Unlike HTTP (bound to the Wi-Fi address only) the SSDP socket
      * listens on every interface, so in [DialAccessMode.LAN] the source must also be a private LAN address; a global or
-     * mapped-public source is never answered.
+     * mapped-public source is never answered. When the Wi-Fi subnet is known ([lanSubnet]) an IPv4 source must also be on it,
+     * so another private network that reaches the phone (a VPN, a tether) is not answered either; loopback, the phone's own
+     * addresses and IPv6 sources are judged as before.
      */
     fun allowsSsdp(address: InetAddress): Boolean {
         if (!allowsHttp(address.hostAddress.orEmpty())) return false
-        return mode() != DialAccessMode.LAN || isPrivateLanAddress(address)
+        if (mode() != DialAccessMode.LAN) return true
+        if (!isPrivateLanAddress(address)) return false
+        val subnet = lanSubnet() ?: return true
+        if (address !is Inet4Address || address.isLoopbackAddress) return true
+        if (address.hostAddress in phoneAddresses().map(::normalise)) return true
+        return sameSubnet(address, subnet.first, subnet.second)
+    }
+
+    private fun sameSubnet(a: InetAddress, b: InetAddress, prefix: Int): Boolean {
+        val x = a.address
+        val y = b.address
+        if (x.size != y.size || prefix !in 0..x.size * 8) return false
+        var bits = prefix
+        for (i in x.indices) {
+            if (bits <= 0) break
+            val mask = if (bits >= 8) 0xFF else (0xFF shl (8 - bits)) and 0xFF
+            if ((x[i].toInt() and mask) != (y[i].toInt() and mask)) return false
+            bits -= 8
+        }
+        return true
     }
 
     /** Multicast NOTIFY alive makes every LAN device see the receivers, so it is LAN-only. */
