@@ -93,6 +93,8 @@ class SsdpResponder(
     private val replyPolicy: (InetAddress) -> Boolean = { true },
     /** Whether [announce] may send ssdp:alive (false in phone-only mode); byebye is always sent. */
     private val announcePolicy: () -> Boolean = { true },
+    /** Told the source of every M-SEARCH that is not our own probe, before any access decision. Must not throw; a throw is dropped. */
+    private val onSearchSource: (InetAddress) -> Unit = {},
     /** Where NOTIFY goes; null means the SSDP group on [groupPort]. Tests point it at a unicast socket. */
     private val notifyTarget: InetSocketAddress? = null,
     /** Where [selfProbe] sends its datagram; null means the first listener on loopback, else the SSDP group on [groupPort]. */
@@ -338,6 +340,11 @@ class SsdpResponder(
         if (st.startsWith(PROBE_ST_PREFIX)) {
             pendingProbes[st.removePrefix(PROBE_ST_PREFIX)]?.countDown()
             return
+        }
+        try {
+            onSearchSource(src.address)
+        } catch (_: Exception) {
+            // a note about who is searching never changes the answer
         }
         // searches for types none of our devices answers are not ours to refuse or log
         if (devices.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return

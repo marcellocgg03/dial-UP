@@ -26,6 +26,7 @@ class SsdpResponderTest {
     private inner class Harness(
         replyPolicy: (InetAddress) -> Boolean = { true },
         announcePolicy: () -> Boolean = { true },
+        onSearchSource: (InetAddress) -> Unit = {},
     ) : AutoCloseable {
         val notifySock = DatagramSocket(0, loopback).apply { soTimeout = 1000 }
         val drops = CopyOnWriteArrayList<String>()
@@ -40,6 +41,7 @@ class SsdpResponderTest {
             },
             replyPolicy = replyPolicy,
             announcePolicy = announcePolicy,
+            onSearchSource = onSearchSource,
             notifyTarget = InetSocketAddress(loopback, notifySock.localPort),
         )
 
@@ -117,6 +119,30 @@ class SsdpResponderTest {
             h.start(h.device(uuidA))
             h.search(dialSt)
             assertEquals(listOf(loopback), seen.toList())
+        }
+    }
+
+    @Test
+    fun theSourceOfASearchIsReportedEvenWhenTheAccessPolicyRefusesItAndAThrowDoesNotChangeTheAnswer() {
+        val seen = CopyOnWriteArrayList<InetAddress>()
+        Harness(replyPolicy = { false }, onSearchSource = { seen.add(it) }).use { h ->
+            h.start(h.device(uuidA))
+            h.search(dialSt, waitMs = 500)
+            assertEquals(listOf(loopback), seen.toList(), "who searched is noted before the access decision")
+        }
+        Harness(onSearchSource = { error("boom") }).use { h ->
+            h.start(h.device(uuidA))
+            assertEquals(1, h.search(dialSt).size, "a throwing callback never costs the reply")
+        }
+    }
+
+    @Test
+    fun theResponderOwnProbeIsNotASearchSource() {
+        val seen = CopyOnWriteArrayList<InetAddress>()
+        Harness(onSearchSource = { seen.add(it) }).use { h ->
+            h.start(h.device(uuidA))
+            assertTrue(h.responder.selfProbe(2000))
+            assertTrue(seen.isEmpty(), "the probe is not a device on the LAN: $seen")
         }
     }
 
