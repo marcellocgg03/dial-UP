@@ -363,6 +363,7 @@ class Resolver(private val gateway: YtDlpGateway) {
 private const val MAX_CACHE_MS = 60L * 60 * 1000
 private const val EXPIRY_MARGIN_MS = 5L * 60 * 1000
 private const val MAX_CACHE_ENTRIES = 100
+private const val MAX_INVALIDATIONS = 1024
 
 /** How long one yt-dlp lookup may run before every caller waiting on it gets a ResolveException. A normal one takes a few seconds. */
 private const val LOOKUP_TIMEOUT_MS = 90_000L
@@ -413,6 +414,13 @@ class CachingResolver(
     private val lock = Any()
     private val cache = LinkedHashMap<String, Cached>()
     private val inflight = HashMap<String, Deferred<ResolvedInfo>>()
+
+    /** Lookups that are running now, shared ones counted once; an invalidated lookup still counts until it ends. */
+    private var activeLookups = 0
+
+    /** Increases with every lookup start and every invalidation, so "invalidated after this lookup began" is a comparison. */
+    private var seq = 0L
+    private val invalidatedAt = LinkedHashMap<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override suspend fun resolve(videoId: String): ResolvedInfo {
@@ -428,9 +436,16 @@ class CachingResolver(
                 coalesced = true
                 return@synchronized null to running
             }
-            val fresh = scope.async { lookup(videoId) }
+            val startSeq = ++seq
+            val fresh = scope.async { lookup(videoId, startSeq) }
             inflight[videoId] = fresh
-            fresh.invokeOnCompletion { synchronized(lock) { inflight.remove(videoId, fresh) } }
+            activeLookups++
+            fresh.invokeOnCompletion {
+                synchronized(lock) {
+                    activeLookups--
+                    inflight.remove(videoId, fresh)
+                }
+            }
             null to fresh
         }
         pending.first?.let {
@@ -450,14 +465,24 @@ class CachingResolver(
         return info
     }
 
+    /**
+     * Drops the cached answer for [videoId] and detaches a lookup that is running for it: its callers still get its answer,
+     * but it is not cached, and the next [resolve] starts a lookup of its own instead of joining it.
+     */
     override fun invalidate(videoId: String) {
-        synchronized(lock) { cache.remove(videoId) }
+        synchronized(lock) {
+            cache.remove(videoId)
+            inflight.remove(videoId)
+            invalidatedAt.remove(videoId)
+            invalidatedAt[videoId] = ++seq
+            while (invalidatedAt.size > MAX_INVALIDATIONS) invalidatedAt.remove(invalidatedAt.keys.first())
+        }
     }
 
     /** How many yt-dlp lookups run now (callers of one ID share one). The yt-dlp updater waits while it is above 0. */
-    fun inFlightCount(): Int = synchronized(lock) { inflight.size }
+    fun inFlightCount(): Int = synchronized(lock) { activeLookups }
 
-    private suspend fun lookup(id: String): ResolvedInfo = withContext(Dispatchers.IO) {
+    private suspend fun lookup(id: String, startSeq: Long): ResolvedInfo = withContext(Dispatchers.IO) {
         val result = try {
             // withTimeoutOrNull, never a catch of TimeoutCancellationException: only this lookup's own deadline becomes an
             // error, a cancellation from outside still propagates as one.
@@ -480,8 +505,11 @@ class CachingResolver(
         }
         val info = parsed.copy(steps = Resolver.stepLines(result, id))
         synchronized(lock) {
-            cache[id] = Cached(info, urlExpiry(info.url, clock()))
-            while (cache.size > MAX_CACHE_ENTRIES) cache.remove(cache.keys.first())
+            // invalidated while this lookup ran: the URL may be the revoked one, so it is handed to its callers but not kept
+            if ((invalidatedAt[id] ?: 0L) < startSeq) {
+                cache[id] = Cached(info, urlExpiry(info.url, clock()))
+                while (cache.size > MAX_CACHE_ENTRIES) cache.remove(cache.keys.first())
+            }
         }
         info
     }
