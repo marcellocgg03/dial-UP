@@ -5,7 +5,8 @@ package dev.dialup.app
 /**
  * Event log level. Pure JVM so the classifier runs in a unit test.
  *
- * INFO is the default: discovery, DIAL launches, lounge messages, playback, net and retry events.
+ * INFO is the default: discovery, the SSDP replies we send (ssdp-tx, so a shared log shows what each speaker
+ * advertised), DIAL launches, lounge messages, playback, net and retry events.
  * DEBUG adds the per-packet noise. Measured volumes: about 0.15 MB/h idle at
  * info; about 1 MB/h would remain if lounge noops were kept at info, which is why they are debug.
  *
@@ -22,7 +23,7 @@ fun logLevelOf(text: String?): LogLevel = when (text) {
 }
 
 /** Kinds that exist only to show packets and raw chunks. */
-val DEBUG_KINDS: Set<String> = setOf("ssdp-rx", "ssdp-tx", "ssdp-drop", "ssdp-bind", "lounge-raw", "lounge-http")
+val DEBUG_KINDS: Set<String> = setOf("ssdp-rx", "ssdp-drop", "ssdp-bind", "lounge-raw", "lounge-http")
 
 /** The level an event belongs to; an unknown kind is INFO so a new event is never silently dropped. */
 fun levelOf(kind: String, fields: Map<String, Any?>): LogLevel {

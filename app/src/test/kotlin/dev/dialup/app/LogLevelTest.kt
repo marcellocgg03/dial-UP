@@ -22,9 +22,14 @@ class LogLevelTest {
 
     @Test
     fun `packet and chunk kinds are debug`() {
-        for (kind in listOf("ssdp-rx", "ssdp-tx", "ssdp-drop", "ssdp-bind", "lounge-raw", "lounge-http")) {
+        for (kind in listOf("ssdp-rx", "ssdp-drop", "ssdp-bind", "lounge-raw", "lounge-http")) {
             assertEquals(LogLevel.DEBUG, levelOf(kind, emptyMap()), kind)
         }
+    }
+
+    @Test
+    fun `the ssdp replies we send are info so a shared log shows what each speaker advertised`() {
+        assertEquals(LogLevel.INFO, levelOf("ssdp-tx", emptyMap()))
     }
 
     @Test
@@ -60,8 +65,9 @@ class LogLevelTest {
 
     @Test
     fun `shouldWrite honours the configured level`() {
-        assertFalse(shouldWrite(LogLevel.INFO, "ssdp-tx", emptyMap()))
-        assertTrue(shouldWrite(LogLevel.DEBUG, "ssdp-tx", emptyMap()))
+        assertFalse(shouldWrite(LogLevel.INFO, "ssdp-rx", emptyMap()))
+        assertTrue(shouldWrite(LogLevel.DEBUG, "ssdp-rx", emptyMap()))
+        assertTrue(shouldWrite(LogLevel.INFO, "ssdp-tx", emptyMap()))
         assertTrue(shouldWrite(LogLevel.INFO, "renderer", emptyMap()))
         for (kind in listOf("feature-error", "service-start", "renderer", "ssdp-tx")) {
             assertFalse(shouldWrite(LogLevel.OFF, kind, emptyMap()), kind)
@@ -74,7 +80,7 @@ class LogLevelTest {
         val log = EvidenceLog(File(tmp, "logs"), monoNanos = { 42L }, logcat = { seen += it })
         fun fileText() = log.currentFile().takeIf { it.exists() }?.readText().orEmpty()
 
-        log.event("ssdp-tx", mapOf("raw" to "x"))
+        log.event("ssdp-rx", mapOf("raw" to "x"))
         log.flush()
         assertEquals("", fileText())
         assertTrue(seen.isEmpty())
@@ -91,7 +97,7 @@ class LogLevelTest {
         assertEquals(1, seen.size)
 
         log.setLevel(LogLevel.DEBUG)
-        log.event("ssdp-tx", mapOf("raw" to "x"))
+        log.event("ssdp-rx", mapOf("raw" to "x"))
         log.flush()
         assertEquals(2, fileText().lines().count { it.isNotBlank() })
         assertEquals(2, seen.size)
