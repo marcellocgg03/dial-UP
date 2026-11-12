@@ -180,6 +180,10 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     private val warmed = AtomicBoolean(false)
     private val denied = AtomicInteger()
 
+    /** Media requests that named no registered token; every one is counted, few are logged. */
+    private val unknownTokens = AtomicInteger()
+    private val unknownTokenLog = SourceLogLimiter(DENIED_LOG_WINDOW_NS, 1024)
+
     /** Last time a DIAL denial was logged per source IP (one event per source per minute). */
     private val deniedLogged = ConcurrentHashMap<String, Long>()
 
@@ -345,6 +349,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val extra = mapOf(
             "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
             "denied" to JsonPrimitive(denied.get()),
+            "unknownTokens" to JsonPrimitive(unknownTokens.get()),
         )
         val config = configSummaryJson
         return JsonObject(if (config == null) base + extra else base + extra + ("config" to config))
@@ -574,6 +579,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     // ----- evidence mapping ----------------------------------------------------------------------
 
     private fun onMediaRequest(h: SpikeHost, req: MediaRequest) {
+        // A scan of the media port answers 404 for every probe: count them, log one line per source per minute
+        var suppressed: Int? = null
+        if (isUnregisteredTokenMiss(req.status, req.label, req.note)) {
+            unknownTokens.incrementAndGet()
+            suppressed = unknownTokenLog.admit(req.remoteHost) ?: return
+        }
         val self = req.remoteHost == lastIp || req.remoteHost.startsWith("127.") || req.remoteHost == "::1"
         h.evidence.event(
             "http-req",
@@ -592,6 +603,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 "label" to req.label,
                 "note" to req.note,
                 "upstream" to req.upstream,
+                "suppressed" to suppressed?.takeIf { it > 0 },
             ),
         )
     }
