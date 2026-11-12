@@ -47,6 +47,7 @@ internal class SpeakersUiState(
     confirmingHideState: MutableState<String?>,
     confirmingRefreshState: MutableState<Boolean>,
     restartAfterRenameState: MutableState<Boolean>,
+    renamedNoticeState: MutableState<Boolean>,
 ) {
     var renaming: String? by renamingState
     var adding: Boolean by addingState
@@ -55,6 +56,9 @@ internal class SpeakersUiState(
 
     /** The dialog that offers the bridge restart a rename needs (the speaker keeps its old name until then). */
     var restartAfterRename: Boolean by restartAfterRenameState
+
+    /** The dialog that says to clear the YouTube apps from recents after a rename the bridge restarted for by itself. */
+    var renamedNotice: Boolean by renamedNoticeState
 }
 
 /** Collects the flows the Renderers tab reads, keeps its dialog flags and computes the listing and the empty-list phase. */
@@ -74,6 +78,7 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
     val castingNow by model.casting.collectAsStateWithLifecycle()
     val confirmingRefresh = rememberSaveable { mutableStateOf(false) }
     val restartAfterRename = rememberSaveable { mutableStateOf(false) }
+    val renamedNotice = rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -122,5 +127,6 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
         confirmingHideState = confirmingHide,
         confirmingRefreshState = confirmingRefresh,
         restartAfterRenameState = restartAfterRename,
+        renamedNoticeState = renamedNotice,
     )
 }

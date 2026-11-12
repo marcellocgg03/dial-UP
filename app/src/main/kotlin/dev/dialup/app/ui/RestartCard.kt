@@ -41,9 +41,32 @@ import dev.dialup.app.model.confirmText
 fun RestartCard(model: AppModel, prompt: RestartPrompt, clearOnCastEnd: Boolean, modifier: Modifier = Modifier) {
     val visible by prompt.visible.collectAsStateWithLifecycle()
     val namesChanged by prompt.namesChanged.collectAsStateWithLifecycle()
+    val notice by prompt.notice.collectAsStateWithLifecycle()
     val pending by prompt.confirmPending.collectAsStateWithLifecycle()
     val casting by model.casting.collectAsStateWithLifecycle()
     LaunchedEffect(casting) { prompt.onCastingChanged(casting) }
+
+    if (notice) {
+        Card(
+            modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("names-notice-card"),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 16.dp, end = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Clear YouTube and YouTube Music from recents to see the new name",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = prompt::dismissNotice, modifier = Modifier.testTag("btn-names-notice-close")) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close")
+                }
+            }
+        }
+    }
 
     if (visible) {
         Card(

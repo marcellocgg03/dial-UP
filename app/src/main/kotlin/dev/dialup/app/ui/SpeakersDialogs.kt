@@ -37,6 +37,17 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             model.rediscoverRenderers()
         })
     }
+    if (ui.renamedNotice) {
+        AlertDialog(
+            onDismissRequest = { ui.renamedNotice = false },
+            title = { Text("Name changed") },
+            text = { Text("Clear YouTube and YouTube Music from recents to see the new name.") },
+            confirmButton = {
+                TextButton(onClick = { ui.renamedNotice = false }, modifier = Modifier.testTag("btn-rename-notice-ok")) { Text("OK") }
+            },
+            modifier = Modifier.testTag("dialog-rename-notice"),
+        )
+    }
     if (ui.restartAfterRename) {
         RenameRestartDialog(
             onRestart = { ui.restartAfterRename = false; onRestart() },
@@ -95,9 +106,20 @@ internal fun RefreshConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) 
     )
 }
 
-/** A rename shows on the speaker only after a bridge restart, so with the bridge up the dialog offers it at once; without it the card does. */
+/**
+ * A rename shows on the speaker only after a bridge restart. Bridge off: nothing to do. Something cast: the dialog asks first.
+ * Nothing cast: [showCard] (the presenter) restarts at once and the dialog only mentions the YouTube apps.
+ */
 private fun renamed(ui: SpeakersUiState, showCard: () -> Unit) {
-    if (ui.bridgeUp) ui.restartAfterRename = true else showCard()
+    if (!ui.bridgeUp) {
+        showCard()
+    } else if (ui.castingNow > 0) {
+        ui.restartAfterRename = true
+    } else {
+        // nothing cast: the presenter restarts the bridge by itself; only the YouTube apps are left to refresh
+        showCard()
+        ui.renamedNotice = true
+    }
 }
 
 /** Offers the restart a rename needs, and says the YouTube apps must be cleared from recents to show the new name. */
@@ -108,8 +130,8 @@ internal fun RenameRestartDialog(onRestart: () -> Unit, onLater: () -> Unit) {
         title = { Text("Restart the bridge?") },
         text = {
             Text(
-                "The new name shows after the bridge restarts. Then clear YouTube and YouTube Music from recents to see it. " +
-                    "A restart disconnects current casts.",
+                "The new name shows after the bridge restarts, which disconnects the current cast. " +
+                    "Then clear YouTube and YouTube Music from recents to see it.",
             )
         },
         confirmButton = {

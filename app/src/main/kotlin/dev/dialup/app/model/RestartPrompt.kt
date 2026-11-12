@@ -17,6 +17,9 @@ const val RESTART_SOURCE = "restart"
 /** The source of a restart the app made on its own when it was opened (T-dcg-06): the event log tells it from the author's. */
 const val AUTO_RESTART_SOURCE = "auto-restart"
 
+/** How long the info card after a name change stays. */
+const val NOTICE_MS = 10_000L
+
 /**
  * The settings a running bridge reads only at its start: the [SettingKey] entries with `needsRestart` (gapless and the forced
  * output format). Keep the two in step.
@@ -62,6 +65,8 @@ class RestartPrompt(
     private val card = MutableStateFlow(false)
     private val pending = MutableStateFlow(false)
     private val names = MutableStateFlow(false)
+    private val noticeCard = MutableStateFlow(false)
+    private var noticeTimer: Job? = null
     private var timer: Job? = null
     private var running = false
 
@@ -79,6 +84,35 @@ class RestartPrompt(
      * from recents, which this app cannot do, so the card says so.
      */
     val namesChanged: StateFlow<Boolean> = names.asStateFlow()
+
+    /** True while the info card is shown: the bridge restarted for a new name and only the YouTube apps are left to refresh. */
+    val notice: StateFlow<Boolean> = noticeCard.asStateFlow()
+
+    /** Hides the info card (its close icon). */
+    @Synchronized
+    fun dismissNotice() {
+        noticeTimer?.cancel()
+        noticeTimer = null
+        noticeCard.value = false
+    }
+
+    /**
+     * A new name with nothing cast: restarts the bridge at once, as nothing is lost, and with [showCard] shows the info card
+     * (no button) for [NOTICE_MS] that says to clear the YouTube apps from recents.
+     */
+    @Synchronized
+    fun restartForNames(showCard: Boolean) {
+        dismiss()
+        run(AUTO_RESTART_SOURCE)
+        if (showCard) {
+            noticeTimer?.cancel()
+            noticeCard.value = true
+            noticeTimer = scope.launch {
+                delay(NOTICE_MS)
+                noticeCard.value = false
+            }
+        }
+    }
 
     /** Shows the card for [visibleMs] when [key] needs a restart and the bridge is [bridgeRunning]; otherwise does nothing. */
     @Synchronized

@@ -169,7 +169,7 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `name prefix is cleaned, may be empty, and asks for a restart instead of renaming live`() = runTest {
+    fun `name prefix is cleaned, may be empty, and restarts an idle bridge with an info card`() = runTest {
         val settings = FakeSettingsPort()
         val bridge = FakeBridgePort()
         val p = presenter(settings, bridge)
@@ -179,8 +179,9 @@ class SettingsPresenterTest {
         runCurrent()
         assertEquals("🎵", settings.data.value.namePrefix)
         assertEquals("🎵", p.state.value.namePrefix)
-        assertTrue(p.restart.visible.value)
-        assertEquals(0, bridge.restartCalls)
+        assertEquals(1, bridge.restartCalls)
+        assertTrue(p.restart.notice.value)
+        assertFalse(p.restart.visible.value)
 
         assertEquals("", p.setNamePrefix(""))
         runCurrent()
@@ -190,14 +191,49 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `a rename shows the restart card and restarts nothing`() = runTest {
+    fun `name prefix with a cast shows the restart card and restarts nothing`() = runTest {
         val bridge = FakeBridgePort()
+        bridge.castingFlow.value = 1
         val p = presenter(FakeSettingsPort(), bridge)
-        assertFalse(p.restart.visible.value)
+        p.setNamePrefix("🎵")
+        runCurrent()
+        assertTrue(p.restart.visible.value)
+        assertTrue(p.restart.namesChanged.value)
+        assertFalse(p.restart.notice.value)
+        assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
+    fun `a rename with a cast shows the restart card and restarts nothing`() = runTest {
+        val bridge = FakeBridgePort()
+        bridge.castingFlow.value = 1
+        val p = presenter(FakeSettingsPort(), bridge)
         p.onRenamed()
+        runCurrent()
         assertTrue(p.restart.visible.value)
         assertTrue(p.restart.namesChanged.value)
         assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
+    fun `a rename with nothing cast restarts the bridge and shows no card`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(FakeSettingsPort(), bridge)
+        p.onRenamed()
+        runCurrent()
+        assertEquals(1, bridge.restartCalls)
+        assertFalse(p.restart.visible.value)
+        assertFalse(p.restart.notice.value)
+    }
+
+    @Test
+    fun `a rename with the bridge off restarts nothing`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(FakeSettingsPort(), bridge)
+        p.onRenamed()
+        runCurrent()
+        assertEquals(0, bridge.restartCalls)
+        assertFalse(p.restart.visible.value)
     }
 
     @Test

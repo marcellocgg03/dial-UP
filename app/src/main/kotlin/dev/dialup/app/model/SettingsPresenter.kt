@@ -381,13 +381,21 @@ class SettingsPresenter(
     fun setNamePrefix(text: String): String {
         val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
         settings.update { it.copy(namePrefix = clean) }
-        changed(SettingKey.NAME_PREFIX)
+        namesChanged(SettingKey.NAME_PREFIX, showCard = true)
         return clean
     }
 
     /** A renderer was renamed or reset: the new name is used at the next bridge start, so the restart card is shown. */
     fun onRenamed() {
-        changed(SettingKey.RENAME)
+        namesChanged(SettingKey.RENAME, showCard = false)
+    }
+
+    /**
+     * Nothing cast: the bridge restarts at once (nothing is lost) and only the YouTube apps are left to refresh, which the info
+     * card says when [showCard]. Something cast: the restart card asks, as for any setting that needs a restart.
+     */
+    private fun namesChanged(key: SettingKey, showCard: Boolean) {
+        if (bridge.running && bridge.casting.value == 0) restart.restartForNames(showCard) else changed(key)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {
