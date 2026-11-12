@@ -67,7 +67,7 @@ internal class SessionSendQueue(
         ofs = 0
     }
 
-    /** A token refresh finished: sends queued before it go out with their AID cleared. */
+    /** A token refresh finished (called while the send lock is still held): sends queued before it go out with their AID cleared. */
     fun nextEpoch() {
         epoch++
     }
@@ -149,8 +149,9 @@ internal class SessionSendQueue(
                 try {
                     refreshToken()
                 } catch (r: Exception) {
-                    if (r is CancellationException) throw r
+                    // a caller outside the cancelled scope must get its answer too
                     task.result.complete(false)
+                    if (r is CancellationException) throw r
                     return
                 }
             }

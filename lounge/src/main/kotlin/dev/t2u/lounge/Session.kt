@@ -212,6 +212,8 @@ class Session(
                         if (e is CancellationException) throw e
                         throw SessionException("(${client.displayName}) Error while refreshing lounge token", e)
                     }
+                    // before the lock is released, so a send waiting for it already sees the new epoch and goes out without its AID
+                    sendQueue.nextEpoch()
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -220,7 +222,6 @@ class Session(
                 throw e
             }
             old?.close()
-            sendQueue.nextEpoch()
             if (status == SessionStatus.REFRESHING) status = SessionStatus.RUNNING else rpcLongPoll.current?.close()
         } finally {
             refreshMutex.unlock()

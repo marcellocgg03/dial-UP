@@ -79,8 +79,7 @@ class SessionCharacterizationTest {
     @Test
     fun aSendWaitingAcrossATokenRefreshGoesOutWithoutItsAid() = run {
         // The send is deferred 2 s, far longer than the refresh takes, so it leaves after the epoch changed.
-        // Not pinned: a send that is already queued behind the refresh when the send lock is released can still leave with
-        // its AID, because refreshLoungeToken bumps the epoch after it unlocks; which of the two wins is a race.
+        // A send already queued behind the refresh is covered by the next test.
         val s = session()
         s.begin()
         coroutineScope {
@@ -96,6 +95,35 @@ class SessionCharacterizationTest {
         assertEquals("8", aids[1], "a send queued after the refresh keeps its AID")
         // the refreshed bind session counts messages from zero again
         assertEquals(listOf("0", "1"), fake.sent.getValue("cl").map { it["ofs"] })
+    }
+
+    @Test
+    fun aSendQueuedBehindARefreshLeavesWithoutItsAid() = run {
+        val inRefresh = CompletableDeferred<Unit>()
+        val armed = AtomicBoolean(false)
+        val http = lanHttpClient().newBuilder().addInterceptor { chain ->
+            val req = chain.request()
+            if (armed.get() && req.url.encodedPath.endsWith("get_lounge_token_batch")) {
+                inRefresh.complete(Unit)
+                release.await()
+            }
+            chain.proceed(req)
+        }.build()
+        val s = session(http)
+        s.begin()
+        armed.set(true)
+        coroutineScope {
+            val refresh = async<Unit> { s.refreshLoungeToken() }
+            inRefresh.await() // the refresh holds the send lock
+            val queued = async { s.sendMessage(listOf(volume(20, aid = 7))) }
+            delay(200) // the send is queued behind the lock with the epoch from before the refresh
+            release.countDown()
+            refresh.await()
+            assertTrue(queued.await())
+        }
+        val aids = postedAids()
+        assertEquals(1, aids.size)
+        assertTrue(aids.single() != "7", "the epoch changes before the lock is released, so the stale AID is dropped: $aids")
     }
 
     @Test
@@ -129,10 +157,9 @@ class SessionCharacterizationTest {
     }
 
     @Test
-    fun cancellingTheScopeDuringTheRefreshOfARetryNeverAnswersTheCaller() = run {
-        // Pinned as found: process() rethrows the cancellation from the refresh without completing the task's result,
-        // so a caller that lives outside the cancelled scope waits for ever. In the app every send is launched inside
-        // that scope (YouTubeApp.post), so it is cancelled with it.
+    fun cancellingTheScopeDuringTheRefreshOfARetryAnswersTheCallerFalse() = run {
+        // process() rethrows the cancellation from the refresh, but first completes the task's result, so a caller that
+        // lives outside the cancelled scope does not wait for ever.
         val inRefresh = CompletableDeferred<Unit>()
         val armed = AtomicBoolean(false)
         val http = lanHttpClient().newBuilder().addInterceptor { chain ->
@@ -152,10 +179,7 @@ class SessionCharacterizationTest {
             inRefresh.await()
             scope.cancel()
             release.countDown()
-            // an absence check: if it runs early it passes wrongly, it can never fail wrongly
-            delay(300)
-            assertFalse(caller.isCompleted)
-            caller.cancel()
+            assertFalse(withTimeout(5_000) { caller.await() })
         }
     }
 
