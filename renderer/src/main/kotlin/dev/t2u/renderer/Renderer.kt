@@ -1905,7 +1905,7 @@ class Renderer(
     /**
      * Another source (Sonos radio, a line-in, another app) took the speaker over while a track of ours was loaded.
      * Our side is released without sending anything to the speaker: polling stops, the track is forgotten as
-     * a Stop would forget it, and the sender is told the player stopped, which also drops the speaker from the cast count. This
+     * a Stop would forget it, and the sender is told the player stopped and the cast ends (the senders are dropped). This
      * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log.
      */
     private fun releaseTakenOverSpeaker(uri: String?) {
@@ -1917,8 +1917,11 @@ class Renderer(
             ?.take(24)
             .orEmpty()
         note("info", "the speaker was taken over by another source - released", "scheme" to scheme)
-        // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled.
-        scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
+        // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled. A playback failure, not a
+        // plain state change: the sender is told STOPPED and the receiver also ends the cast (it drops the senders, so the
+        // sender's app leaves the cast instead of sitting connected and idle). The player is already STOPPED then, so the
+        // reset that follows sends nothing, and the speaker clear leaves another source's URI alone.
+        scope.launch { reportPlaybackFailure("the speaker was taken over by another source") }
     }
 
     /**
