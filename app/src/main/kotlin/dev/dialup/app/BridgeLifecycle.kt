@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.BindException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -89,7 +90,7 @@ fun isBindFailure(t: Throwable): Boolean {
     var cur: Throwable? = t
     var depth = 0
     while (cur != null && depth < 10) {
-        if (cur is java.net.BindException) return true
+        if (cur is BindException) return true
         cur = cur.cause
         depth++
     }

@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.net.Inet4Address
+import java.util.Timer
+import java.util.TimerTask
 
 /**
  * Logs every Wi-Fi network event as a `net` evidence line and calls [onChange] (with the event name)
@@ -28,7 +30,7 @@ class NetworkMonitor(
     private val lock = Any()
     private val tracker = WifiAddressTracker()
     private var registered = false
-    private var tetherTimer: java.util.Timer? = null
+    private var tetherTimer: Timer? = null
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -70,8 +72,8 @@ class NetworkMonitor(
         manager.registerNetworkCallback(request, callback)
         registered = true
         // a hotspot starting or stopping raises no Wi-Fi network callback, so look for the tether address now and then
-        tetherTimer = java.util.Timer("tether-probe", true).also { timer ->
-            timer.schedule(object : java.util.TimerTask() {
+        tetherTimer = Timer("tether-probe", true).also { timer ->
+            timer.schedule(object : TimerTask() {
                 override fun run() {
                     val changed = runCatching { synchronized(lock) { tracker.onFallback(tetherProbe()) } }.getOrDefault(false)
                     if (changed) {
