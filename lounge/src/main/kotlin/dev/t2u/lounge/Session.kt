@@ -138,6 +138,11 @@ class Session(
         }
     }
 
+    /** True while the loungeStatus of a fresh bind session is delivered: it is not yet the server's list of remote controls. */
+    @Volatile
+    var deliveringInitStatus: Boolean = false
+        private set
+
     /** generate_screen_id, token, bind init, then the RPC connection. */
     private suspend fun establish(screenFromStore: Boolean) {
         if (screenId == null) screenId = generateScreenId()
@@ -156,7 +161,13 @@ class Session(
             if (message.name == "c" || message.name == "S") {
                 bind.updateWithMessage(message)
             } else if (message.name == "loungeStatus") {
-                handleMessages(listOf(message))
+                // the phone may not have bound to the fresh session yet, so this status can omit a sender that is still there
+                deliveringInitStatus = true
+                try {
+                    handleMessages(listOf(message))
+                } finally {
+                    deliveringInitStatus = false
+                }
             }
         }
         // test that the RPC query can be built before connecting

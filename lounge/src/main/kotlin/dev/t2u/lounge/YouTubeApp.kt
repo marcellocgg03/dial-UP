@@ -574,7 +574,9 @@ class YouTubeApp(
             out.add(if (nav != null) navMessage(aid, nav) else OutgoingMessage.onHasPreviousNextChanged(aid, null))
             out.add(OutgoingMessage.onAutoplayModeChanged(aid, nav?.autoplayMode))
         }
-        if (devices != null && session === activeSession) {
+        // not on the status of a fresh bind session (after a 410 refresh): the phone may not be bound to it yet, and a live
+        // cast would be dropped as an implicit disconnect; the next status from the stream reconciles
+        if (devices != null && session === activeSession && !session.deliveringInitStatus) {
             val listedIds = remoteControls(devices).mapNotNull { it.text("id") }.toSet()
             dropSendersNotListed(listedIds, session, aid)
         }
