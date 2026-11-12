@@ -1185,6 +1185,26 @@ class RendererTest {
     }
 
     @Test
+    @DisplayName("a taken-over speaker ends the cast: the failure listeners run and nothing is sent to the other source")
+    fun aTakenOverSpeakerEndsTheCast() {
+        withFake { fake ->
+            Harness(fake).use { h ->
+                val r = playingThroughThePlayer(h)
+                val reasons = CopyOnWriteArrayList<String>()
+                r.addFailureListener { reasons.add(it) }
+                val mark = fake.calls.size
+
+                fake.state.currentUri = radio
+                until(3000) { reasons.isNotEmpty() }
+
+                assertEquals(listOf("the speaker was taken over by another source"), reasons.toList())
+                assertEquals(PlayerStatus.STOPPED, r.status)
+                assertEquals(emptyList(), fake.sentSince(mark), "a command reached the other source")
+            }
+        }
+    }
+
+    @Test
     @DisplayName("a taken-over speaker does not move the queue on")
     fun aTakenOverSpeakerDoesNotAdvanceTheQueue() {
         withFake { fake ->

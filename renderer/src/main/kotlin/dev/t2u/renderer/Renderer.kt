@@ -857,10 +857,18 @@ class Renderer(
         val startAt = restartOffset(position, info.duration, offsetStart)
         val cur = Current(video, fmt, startAt, info.mime, offsetOnly || offsetStart)
         cur.wantedAt = position
-        val entry = VideoEntry(video.id, fmt, startAt, ext = info.ext, sourceMime = info.mime) {
-            if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
-            cur.fetched = true
-        }
+        val entry = VideoEntry(
+            video.id,
+            fmt,
+            startAt,
+            ext = info.ext,
+            sourceMime = info.mime,
+            onRequest = {
+                if (!cur.fetched) note("info", "Renderer started fetching the stream ($fmt)")
+                cur.fetched = true
+            },
+            onFailure = { cur.streamFailed = true },
+        )
         val streamPath = deps.media.prepareAndRegister(entry)
         cur.streamPath = streamPath
         val url = "http://$address:${config.mediaPort}$streamPath"
@@ -1794,10 +1802,13 @@ class Renderer(
         return PollRead(polledRaw, foreign, foreignUri)
     }
 
-    /** If the speaker has not reached PLAYING well after Play, assume it cannot handle the stream. True when it gave up on [c]. */
+    /**
+     * If the speaker has not reached PLAYING well after Play, or the media server already failed to produce the stream
+     * (a 5xx on its request), assume it cannot handle the stream. True when it gave up on [c].
+     */
     private suspend fun startFailedByTimeout(state: String, c: Current?): Boolean {
         if (!sawPlaying && state != "PLAYING" && c != null && status == PlayerStatus.PLAYING &&
-            startTimedOut(c, deps.clock())
+            (c.streamFailed || startTimedOut(c, deps.clock()))
         ) {
             handleStartFailure(c)
             return true
@@ -1894,7 +1905,7 @@ class Renderer(
     /**
      * Another source (Sonos radio, a line-in, another app) took the speaker over while a track of ours was loaded.
      * Our side is released without sending anything to the speaker: polling stops, the track is forgotten as
-     * a Stop would forget it, and the sender is told the player stopped, which also drops the speaker from the cast count. This
+     * a Stop would forget it, and the sender is told the player stopped and the cast ends (the senders are dropped). This
      * is not a track end, so the queue does not advance. Only the URI's scheme is written to the log.
      */
     private fun releaseTakenOverSpeaker(uri: String?) {
@@ -1906,8 +1917,11 @@ class Renderer(
             ?.take(24)
             .orEmpty()
         note("info", "the speaker was taken over by another source - released", "scheme" to scheme)
-        // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled.
-        scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
+        // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled. A playback failure, not a
+        // plain state change: the sender is told STOPPED and the receiver also ends the cast (it drops the senders, so the
+        // sender's app leaves the cast instead of sitting connected and idle). The player is already STOPPED then, so the
+        // reset that follows sends nothing, and the speaker clear leaves another source's URI alone.
+        scope.launch { reportPlaybackFailure("the speaker was taken over by another source") }
     }
 
     /**

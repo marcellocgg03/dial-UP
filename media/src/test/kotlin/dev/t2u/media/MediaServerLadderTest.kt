@@ -246,6 +246,17 @@ class MediaServerLadderTest {
     }
 
     @Test
+    @DisplayName("a 502 on a video stream runs the entry's onFailure once; a healthy stream does not")
+    fun aFailedStreamRunsOnFailure() {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val ms = serve(TestResolver(forbiddenUrls()))
+        val path = ms.registerVideo(VideoEntry("qqqqqqqqqqq", "mp3", onFailure = { failures.incrementAndGet() }))
+        assertEquals(502, get(ms, path).status)
+        awaitReport { it.uri == path }
+        assertEquals(1, failures.get())
+    }
+
+    @Test
     @DisplayName("a renderer that hangs up while the stream is being prepared leaves nothing running")
     fun aRendererThatHangsUpWhileTheStreamIsBeingPreparedLeavesNothingRunning() {
         val resolver = TestResolver(okUrls(), delayMs = 400) // slow yt-dlp lookup
