@@ -311,6 +311,17 @@ class YouTubeCastReceiverTest {
     }
 
     @Test
+    fun aLaunchLogsWhichReceiverItReachedWithoutThePairingCode() = run {
+        receiver().start()
+        val port = dialPort()
+        launchPost(port, "pairingCode=SECRETCODE&theme=cl")
+        val target = events.single { (kind, f) -> kind == "lounge-receiver" && f["type"] == "launchTarget" }.second
+        assertEquals(port, target["dialPort"])
+        assertEquals(advertiser.advertised.single().uuid, target["dialUuid"])
+        assertTrue(events.none { it.second.values.any { v -> v.toString().contains("SECRETCODE") } })
+    }
+
+    @Test
     fun aRefusingAccessPolicyAnswers403AndNothingReachesTheLounge() = run {
         receiver(accessPolicy = { false }).start()
         val port = dialPort()
