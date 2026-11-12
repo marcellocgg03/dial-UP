@@ -89,6 +89,9 @@ class YouTubeCastReceiver(
     /** The DIAL friendly name: [ReceiverOptions.name] until [rename] changes it; read at start and at a rebind. */
     @Volatile private var friendlyName: String = options.name
 
+    /** Starts a DIAL server; a seam for the tests that cancel the caller while the server binds. */
+    internal var dialStarter: suspend (DialServer) -> Unit = { it.startSuspending() }
+
     /** The config the running DIAL server was built from; the port in it is the one a rebind keeps. */
     private var dialConfig: DialConfig? = null
 
@@ -178,8 +181,10 @@ class YouTubeCastReceiver(
                     onGuestLaunch = { remote -> deps.onGuestLaunch(friendlyName, remote) },
                 )
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.startSuspending() }
+                // Owned before it starts: withContext drops its result when the caller is cancelled as it returns, and a server
+                // that was bound by then must still be reachable by the cleanup below.
                 server = created
+                withContext(Dispatchers.IO) { dialStarter(created) }
                 val location = "http://${config.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
                 deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, location))
                 advertisedUuid = id
@@ -267,13 +272,16 @@ class YouTubeCastReceiver(
             }
             // a server a failed earlier move left behind is gone (old == null): start again on the port the config names
             val port = old?.resolvedPort() ?: config.port
+            var created: DialServer? = null
             try {
                 withContext(Dispatchers.IO) { old?.stop() }
                 dial = null
                 val moved = config.copy(bindHost = newHost, port = port)
-                val created = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.startSuspending() }
-                dial = created
+                val next = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
+                created = next
+                // owned before it starts, as in start: a cancellation at the boundary must not strand a bound port
+                dial = next
+                withContext(Dispatchers.IO) { dialStarter(next) }
                 dialConfig = moved
                 bindHost = newHost
                 deps.advertiser.advertise(
@@ -281,6 +289,9 @@ class YouTubeCastReceiver(
                 )
                 note("rebound", "port" to port)
             } catch (e: CancellationException) {
+                // the old server is gone and the new one may be bound: close it, so the port is free for the next attempt
+                withContext(NonCancellable) { created?.let { s -> runQuietly { withContext(Dispatchers.IO) { s.stop() } } } }
+                dial = null
                 throw e
             } catch (e: Throwable) {
                 dial = null

@@ -4,6 +4,7 @@ package dev.t2u.lounge
 // MIT, Copyright (c) Patrick Kan): DIAL server, the two lounge sessions and one SSDP advertisement as one cast target.
 // The lounge side is FakeLoungeServer, which replays the traffic recorded from the Node receiver.
 
+import dev.t2u.dial.DialServer
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.lanHttpClient
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
@@ -189,6 +191,55 @@ class YouTubeCastReceiverTest {
         // and the player's state goes back to the sender
         awaitUntil { fake.sentNames("cl").flatten().let { "nowPlaying" in it && "onStateChange" in it } }
         assertTrue(fake.sentNames("cl").flatten().containsAll(listOf("nowPlaying", "onStateChange")))
+    }
+
+    private fun freePort(): Int = java.net.ServerSocket(0).use { it.localPort }
+
+    private fun portIsFree(port: Int): Boolean = try {
+        java.net.ServerSocket().use {
+            it.reuseAddress = true
+            it.bind(InetSocketAddress("127.0.0.1", port))
+        }
+        true
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /** A starter that cancels [caller] in the middle of the start and then lets the server finish binding, so the caller is cancelled at the withContext boundary. */
+    private fun cancelWhileBinding(caller: () -> kotlinx.coroutines.Job): suspend (DialServer) -> Unit = { s ->
+        caller().cancel()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { s.startSuspending() }
+    }
+
+    @Test
+    fun aStartCancelledWhileTheDialServerBindsReleasesThePort() {
+        val port = freePort()
+        val r = YouTubeCastReceiver(player, options().copy(dialPort = port), deps()).also { receivers.add(it) }
+        lateinit var caller: kotlinx.coroutines.Job
+        r.dialStarter = cancelWhileBinding { caller }
+        caller = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { r.start() }
+        runBlocking {
+            caller.start()
+            withTimeout(10_000) { caller.join() }
+        }
+        assertTrue(caller.isCancelled)
+        assertEquals("stopped", r.status)
+        assertTrue(portIsFree(port), "the DIAL port was left bound by the cancelled start")
+    }
+
+    @Test
+    fun aRebindCancelledWhileTheNewDialServerBindsReleasesThePort() = run {
+        val port = freePort()
+        val r = YouTubeCastReceiver(player, options().copy(dialPort = port), deps()).also { receivers.add(it) }
+        r.start()
+        assertFalse(portIsFree(port), "running")
+        lateinit var caller: kotlinx.coroutines.Job
+        r.dialStarter = cancelWhileBinding { caller }
+        caller = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { r.rebindDial("127.0.0.1") }
+        caller.start()
+        caller.join()
+        assertTrue(caller.isCancelled)
+        assertTrue(portIsFree(port), "the new DIAL server was left bound by the cancelled rebind")
     }
 
     private fun getBytes(port: Int, path: String): ByteArray = http.send(
