@@ -110,7 +110,7 @@ class DialServer(
      * throws [BindException] to the caller and leaves this instance startable again; Ktor's accept job
      * must never throw it on a thread whose uncaught handler ends the process.
      */
-    fun start() {
+    suspend fun startSuspending() {
         check(server == null) { "already started" }
         // Pre-bind check: Ktor CIO binds inside its accept job, where a failure is uncaught. reuseAddress
         // keeps TIME_WAIT from failing it, as for the real bind below.
@@ -133,7 +133,7 @@ class DialServer(
         }
         try {
             s.start(wait = false)
-            boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+            boundPort = s.engine.resolvedConnectors().first().port
         } catch (e: Throwable) {
             runCatching { s.stop(0, 0) }
             val cause = asyncFailure.get() ?: e
@@ -141,6 +141,14 @@ class DialServer(
                 ?: BindException("DIAL server cannot bind ${config.bindHost}:${config.port}: ${cause.message}").also { it.initCause(cause) }
         }
         server = s
+    }
+
+    /**
+     * Blocking form of [startSuspending], for tests and callers that are not in a coroutine. Production calls
+     * [startSuspending]: a blocking start inside a coroutine would hold its dispatcher thread through the bind.
+     */
+    fun start() {
+        runBlocking { startSuspending() }
     }
 
     private fun requireBindable(host: String, port: Int) {
