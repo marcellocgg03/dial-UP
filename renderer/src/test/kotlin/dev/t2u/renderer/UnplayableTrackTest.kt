@@ -46,7 +46,7 @@ internal class UnplayableTrackTest {
     private fun cfg(retryDelays: List<Long>): (File) -> Config = {
         // prefetch = false: the track-end load, not a prepared slot, is what these tests exercise.
         Config(
-            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000,
             queueSettleTimeoutMs = 5000, prefetch = false, playRetryDelaysMs = retryDelays,
         )
     }

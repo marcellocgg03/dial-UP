@@ -102,7 +102,6 @@ internal class SeekPositionTest {
         outputFormat = "direct",
         pollIntervalMs = 50,
         startTimeoutMs = 5000,
-        nameSuffix = "",
         queueSettleTimeoutMs = 5000,
         prefetch = false, // Node's test setup() omits PREFETCH; the Config default (true) would prepare B behind these tests
     )

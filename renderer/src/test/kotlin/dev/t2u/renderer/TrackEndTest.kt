@@ -47,7 +47,7 @@ internal class TrackEndTest {
     private fun cfg(settleMs: Long = 5000): (File) -> Config = {
         // prefetch = false: Node's test setup() omits PREFETCH, and the Config default (true) would prepare B behind these tests.
         Config(
-            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000,
             queueSettleTimeoutMs = settleMs, prefetch = false,
         )
     }

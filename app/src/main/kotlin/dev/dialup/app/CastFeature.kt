@@ -434,6 +434,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 accessMode = { appSettings.dialAccess.value },
                 // Read at clear time, so switching the setting applies to the running bridge
                 clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
+                // Read at setup and when the prefix changes, so the running speakers take a new prefix without a restart
+                namePrefix = { appSettings.data.value.namePrefix },
                 // The cache cap read at every prune: the app's value when set, else config.json or the default
                 cacheMb = { appSettings.data.value.cacheMb ?: loaded.config.cacheMb },
                 // The hidden speakers, kept across bridges and readable while the bridge is off

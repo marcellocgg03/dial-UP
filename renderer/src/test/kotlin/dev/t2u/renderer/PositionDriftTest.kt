@@ -107,7 +107,6 @@ internal class PositionDriftTest {
         outputFormat = "direct",
         pollIntervalMs = POLL_MS,
         startTimeoutMs = 5000,
-        nameSuffix = "",
         queueSettleTimeoutMs = 5000,
     )
 

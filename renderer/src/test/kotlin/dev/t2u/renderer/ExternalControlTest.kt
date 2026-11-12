@@ -31,7 +31,7 @@ internal class ExternalControlTest {
     }
 
     private fun cfg(startTimeoutMs: Long = 5000): (File) -> Config =
-        { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = startTimeoutMs, nameSuffix = "") }
+        { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = startTimeoutMs) }
 
     private fun FakeRenderer.count(action: String): Int = calls.count { it.action == action }
 

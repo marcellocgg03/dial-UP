@@ -202,6 +202,21 @@ class SettingsTest {
     }
 
     @Test
+    fun namePrefixDefaultsToTheSpeakerEmojiAndKeepsAnEmptyChoice() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        assertEquals("🔊", s.data.value.namePrefix)
+        assertFalse(f.exists() && f.readText().contains("namePrefix"))
+        s.update { it.copy(namePrefix = "") }
+        assertEquals("", settings(f).data.value.namePrefix)
+        assertTrue(f.readText().contains("namePrefix"))
+        s.update { it.copy(namePrefix = "🎵") }
+        assertEquals("🎵", settings(f).data.value.namePrefix)
+        s.update { it.copy(namePrefix = "🔊") }
+        assertFalse(f.readText().contains("namePrefix"))
+    }
+
+    @Test
     fun audioFormatSwitchIsStoredOnlyWhenEnabled() {
         val f = File(dir, SETTINGS_FILE)
         val s = settings(f)

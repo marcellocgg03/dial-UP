@@ -10,14 +10,6 @@ import java.util.regex.PatternSyntaxException
 /** Name shown in the YouTube cast menu. Placeholders: {name} {manufacturer} {model}. */
 const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
 
-/**
- * While the Docker server runs next to this app, entries carry a hard-coded suffix
- * ("🔊 Living Room Speaker (app)") so the two sets of receivers can be told apart in the cast menu.
- * There is deliberately no naming setting. Remove at parity (delete this constant, the
- * `nameSuffix` default and its use in [receiverName] callers).
- */
-const val DOCKER_COEXISTENCE_SUFFIX = " (app)"
-
 /** Output modes accepted by config.json; streaming tries ADTS then MP3. */
 val OUTPUT_FORMATS = setOf("auto", "streaming", "direct", "mp4", "adts", "mp3")
 
@@ -116,7 +108,6 @@ data class Config(
     val pruneIntervalS: Int = 60,
     val defaultMaxAge: Int = 1800,
     val nameTemplate: String = DEFAULT_NAME_TEMPLATE,
-    val nameSuffix: String = DOCKER_COEXISTENCE_SUFFIX,
     val outputFormat: String = "auto",
     val pollIntervalMs: Long = 2000,
     val startTimeoutMs: Long = 12000,
@@ -157,13 +148,16 @@ data class Config(
 
 /**
  * The cast-menu name of a receiver: [template] with the first `{name}`, `{manufacturer}` and `{model}`
- * replaced literally (as renderer.js does with String.replace, in that order), trimmed, then [suffix]
- * appended. The friendly name arrives from parseDescription, which substitutes "Unknown renderer" for
- * an empty one, so the result is never just the emoji and the suffix.
+ * replaced literally (as renderer.js does with String.replace, in that order) and trimmed. The friendly name
+ * arrives from parseDescription, which substitutes "Unknown renderer" for an empty one, so the result is never
+ * just the prefix.
  */
-fun receiverName(template: String, suffix: String, friendlyName: String, manufacturer: String, model: String): String =
+fun receiverName(template: String, friendlyName: String, manufacturer: String, model: String): String =
     template
         .replaceFirst("{name}", friendlyName)
         .replaceFirst("{manufacturer}", manufacturer)
         .replaceFirst("{model}", model)
-        .trim() + suffix
+        .trim()
+
+/** The name template for the author's [prefix]: "<prefix> {name}", or just "{name}" when the prefix is blank. */
+fun nameTemplateFor(prefix: String): String = prefix.trim().let { if (it.isEmpty()) "{name}" else "$it {name}" }

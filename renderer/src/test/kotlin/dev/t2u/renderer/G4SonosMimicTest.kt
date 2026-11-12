@@ -184,7 +184,6 @@ class G4SonosMimicTest {
                     mediaPort = server.resolvedPort(),
                     pollIntervalMs = POLL_MS,
                     startTimeoutMs = START_TIMEOUT_MS,
-                    nameSuffix = "",
                 ),
                 resolver = resolver,
                 media = server,

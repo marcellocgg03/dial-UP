@@ -297,7 +297,7 @@ class ConfigFileTest {
         assertContains(w, "ignored keys:")
         for (k in listOf("nameSuffix", "nameTemplate", "foo")) assertContains(w, k)
         assertNoLeak(r, "SECRETSUFFIX", "SECRETTEMPLATE", "SECRETFOO")
-        assertEquals(DOCKER_COEXISTENCE_SUFFIX, r.config.nameSuffix)
+        assertEquals(DEFAULT_NAME_TEMPLATE, r.config.nameTemplate)
     }
 
     @Test

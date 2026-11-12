@@ -12,52 +12,56 @@ import kotlin.test.assertTrue
 class ConfigTest {
     private val cfg = Config(dataDir = File("data"))
 
-    private fun name(friendly: String, template: String = cfg.nameTemplate, suffix: String = cfg.nameSuffix, manufacturer: String = "Sonos", model: String = "Era 100") =
-        receiverName(template, suffix, friendly, manufacturer, model)
+    private fun name(friendly: String, template: String = cfg.nameTemplate, manufacturer: String = "Sonos", model: String = "Era 100") =
+        receiverName(template, friendly, manufacturer, model)
 
     @Test
-    fun defaultNameHasSpeakerEmojiAndAppSuffix() {
-        assertEquals("🔊 Living Room Speaker (app)", name("Living Room Speaker"))
+    fun defaultNameHasTheSpeakerEmoji() {
+        assertEquals("🔊 Living Room Speaker", name("Living Room Speaker"))
     }
 
     @Test
-    fun emptySuffixGivesTheNodeValue() {
-        assertEquals("🔊 Living Room Speaker", name("Living Room Speaker", suffix = ""))
+    fun aPrefixBuildsTheTemplateAndABlankPrefixLeavesOnlyTheName() {
+        assertEquals("{name}", nameTemplateFor(""))
+        assertEquals("{name}", nameTemplateFor("   "))
+        assertEquals("🎵 {name}", nameTemplateFor("🎵"))
+        assertEquals("DialUP {name}", nameTemplateFor("  DialUP "))
+        assertEquals("Kitchen", name("Kitchen", template = nameTemplateFor("")))
+        assertEquals("🎵 Kitchen", name("Kitchen", template = nameTemplateFor("🎵")))
     }
 
     @Test
     fun templatePlaceholdersAreReplacedAndTrimmed() {
         assertEquals(
             "Lamp - Sonos SYMFONISK",
-            receiverName("  {name} - {manufacturer} {model}  ", "", "Lamp", "Sonos", "SYMFONISK"),
+            receiverName("  {name} - {manufacturer} {model}  ", "Lamp", "Sonos", "SYMFONISK"),
         )
     }
 
     @Test
     fun eachPlaceholderIsReplacedOnceLikeJsStringReplace() {
-        assertEquals("Lamp {name}", receiverName("{name} {name}", "", "Lamp", "Sonos", "SYMFONISK"))
+        assertEquals("Lamp {name}", receiverName("{name} {name}", "Lamp", "Sonos", "SYMFONISK"))
     }
 
     @Test
     fun replacementIsLiteral() {
         // JS String.replace treats "$&" in a string replacement specially; a friendly name is data, not a pattern.
-        assertEquals("🔊 Cost \$& Co (app)", name("Cost \$& Co"))
+        assertEquals("🔊 Cost \$& Co", name("Cost \$& Co"))
     }
 
     @Test
     fun unknownRendererFallbackNeverLeavesAnEmptyName() {
-        assertEquals("🔊 Unknown renderer (app)", name("Unknown renderer"))
+        assertEquals("🔊 Unknown renderer", name("Unknown renderer"))
     }
 
     @Test
     fun accentedAndEmojiCharactersAreKept() {
-        assertEquals("🔊 Küche 🎵 (app)", name("Küche 🎵"))
+        assertEquals("🔊 Küche 🎵", name("Küche 🎵"))
     }
 
     @Test
     fun constantsAreTheDocumentedOnes() {
         assertEquals("🔊 {name}", DEFAULT_NAME_TEMPLATE)
-        assertEquals(" (app)", DOCKER_COEXISTENCE_SUFFIX)
     }
 
     @Test

@@ -330,7 +330,7 @@ class Renderer(
             return false
         }
 
-        val described = receiverName(config.nameTemplate, config.nameSuffix, desc.friendlyName, desc.manufacturer, desc.modelName)
+        val described = receiverName(deps.nameTemplate(), desc.friendlyName, desc.manufacturer, desc.modelName)
         describedName = described
         val displayName = shownRendererName(deps.userName(udn), described)
         name = displayName
@@ -398,6 +398,18 @@ class Renderer(
         } catch (e: Exception) {
             note("warn", "Cast receiver could not take the new name (${e.javaClass.simpleName})")
         }
+    }
+
+    /**
+     * The name template changed (the author's prefix): the described name is built again from the description with the
+     * template [RendererDeps.nameTemplate] now returns, then the rename path runs, so a name the author gave this speaker
+     * still wins, the card and the DIAL friendly name change at once, and a running cast is untouched.
+     */
+    suspend fun refreshName() {
+        val desc = description ?: return
+        if (describedName == null || destroyed) return
+        describedName = receiverName(deps.nameTemplate(), desc.friendlyName, desc.manufacturer, desc.modelName)
+        rename(deps.userName(udn))
     }
 
     /**

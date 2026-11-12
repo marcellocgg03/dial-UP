@@ -59,6 +59,7 @@ internal class CastNotifier(
         )
 
         return NotificationCompat.Builder(service, CHANNEL_ID)
+            .setContentIntent(openAppIntent(service))
             .setContentTitle("DialUP")
             .setContentText(notificationText(count))
             .setSmallIcon(R.drawable.ic_stat_dialup)
@@ -127,6 +128,14 @@ internal class CastNotifier(
     }
 
     companion object {
+        /** Opens DialUP; a tap on the notification does not dismiss it (the bridge notification is ongoing). */
+        fun openAppIntent(service: Service): PendingIntent = PendingIntent.getActivity(
+            service,
+            1,
+            Intent(service, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
         const val CHANNEL_ID = "dialup"
         const val NOTIFICATION_ID = 1
     }

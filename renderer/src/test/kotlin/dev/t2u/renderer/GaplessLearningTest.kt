@@ -49,7 +49,7 @@ internal class GaplessLearningTest {
 
     private fun cfg(): (File) -> Config = {
         Config(
-            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000, nameSuffix = "",
+            dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 5000,
             queueSettleTimeoutMs = 5000, prefetch = true, gapless = true,
         )
     }
