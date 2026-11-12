@@ -278,6 +278,18 @@ class BridgeManualTest {
     }
 
     @Test
+    @DisplayName("Remove sends a search at once so a discovered speaker is listed again")
+    fun removeSearchesAtOnce() = h.run<Unit> {
+        val (bridge, _) = upManualBridge()
+
+        assertTrue(bridge.removeManual(HARNESS_RENDERER_UDN))
+
+        h.awaitUntil("a search with the delete trigger") {
+            h.events.any { it.first == "search" && it.second["trigger"] == "delete" }
+        }
+    }
+
+    @Test
     @DisplayName("Remove of an offline manual speaker")
     fun removeOfAnOfflineManualSpeaker() = h.run<Unit> {
         val (bridge, store) = upManualBridge()
