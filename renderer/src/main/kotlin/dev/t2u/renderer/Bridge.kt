@@ -425,7 +425,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * [BridgeDeps.manualSsdpGraceMs] the bridge fetches the device description from the typed address (one GET to
      * [BridgeDeps.manualDescriptionUrl], host must equal [ip]) and hands it to the registry as synthetic alive headers, so the
      * same guards apply. Waits at most [BridgeDeps.manualAnswerTimeoutMs] in total. A speaker the bridge already lists is
-     * reported at once. Added and AlreadyListed results are saved, every other result saves nothing.
+     * reported at once. An Added result is saved, every other result saves nothing.
      */
     suspend fun addManual(ip: InetAddress): ManualAddResult = manual.addManual(ip)
 
