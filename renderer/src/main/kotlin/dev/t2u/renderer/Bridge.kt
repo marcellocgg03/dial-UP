@@ -63,6 +63,7 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
@@ -73,7 +74,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
     @Volatile private var networkDown = false
 
     /** Every receiver this bridge built, so a move can reach them; stopped ones are dropped when a new one is built. */
-    private val receiverList = java.util.concurrent.CopyOnWriteArrayList<TrackedReceiver>()
+    private val receiverList = CopyOnWriteArrayList<TrackedReceiver>()
 
     private class TrackedReceiver(val receiver: YouTubeCastReceiver, val createdAt: Long = System.currentTimeMillis())
 

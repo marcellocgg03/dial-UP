@@ -46,6 +46,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -207,13 +208,13 @@ class Renderer(
     @Volatile private var loadedThisSession = false
 
     /** One entry per SetAVTransportURI a load has sent and not yet seen answered; a clear waits for them. */
-    private val uriInFlight: MutableSet<CompletableDeferred<Unit>> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val uriInFlight: MutableSet<CompletableDeferred<Unit>> = ConcurrentHashMap.newKeySet()
 
     /**
      * Loads that have started and not yet registered their SetAVTransportURI call: still resolving, preparing or sending Stop.
      * A clear that finds one cancels it (bumps [loadSeq]) so it never reaches the speaker.
      */
-    private val loadsBeforeUri = java.util.concurrent.atomic.AtomicInteger()
+    private val loadsBeforeUri = AtomicInteger()
 
     /**
      * Consecutive polls that read a non-empty speaker URI that is not one of our own streams while we hold a track.

@@ -23,7 +23,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
+import java.nio.file.NoSuchFileException
 
 private val prettyHiddenJson = Json { prettyPrint = true }
 
@@ -68,9 +70,9 @@ class HiddenSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
                     else -> loaded[udn] = HiddenSpeaker(udn, name, address)
                 }
             }
-        } catch (_: java.io.FileNotFoundException) {
+        } catch (_: FileNotFoundException) {
             // nothing hidden yet
-        } catch (_: java.nio.file.NoSuchFileException) {
+        } catch (_: NoSuchFileException) {
         } catch (e: Exception) {
             warn("Ignoring unreadable $file: ${e.message}")
             loaded.clear()
@@ -191,9 +193,9 @@ class ManualSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
                     }
                 }
             }
-        } catch (_: java.io.FileNotFoundException) {
+        } catch (_: FileNotFoundException) {
             // nothing saved yet
-        } catch (_: java.nio.file.NoSuchFileException) {
+        } catch (_: NoSuchFileException) {
         } catch (e: Exception) {
             warn("Ignoring unreadable $file: ${e.message}")
             loaded.clear()

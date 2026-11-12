@@ -17,7 +17,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
+import java.nio.file.NoSuchFileException
 
 private const val MAX_PORT = 65535
 
@@ -48,9 +50,9 @@ class PortRegistry(
                 val port = asPort(value)
                 if (port == null) warn("Ignoring entry '$udn' in $file: not a port (integer 1..$MAX_PORT)") else loaded[udn] = port
             }
-        } catch (_: java.io.FileNotFoundException) {
+        } catch (_: FileNotFoundException) {
             // first run: nothing remembered yet
-        } catch (_: java.nio.file.NoSuchFileException) {
+        } catch (_: NoSuchFileException) {
         } catch (e: Exception) {
             warn("Ignoring unreadable $file: ${e.message}")
             loaded.clear()

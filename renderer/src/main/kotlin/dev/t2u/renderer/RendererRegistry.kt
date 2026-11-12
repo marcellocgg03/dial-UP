@@ -360,7 +360,8 @@ class RendererRegistry(
                         try {
                             gate.withPermit {
                                 entered = true
-                                setUp(udn, skip.location, skip.src!!, skip.maxAge, attempt)
+                                val src = checkNotNull(skip.src) { "a skipped entry picked for retry always records its source" }
+                                setUp(udn, skip.location, src, skip.maxAge, attempt)
                             }
                         } finally {
                             // setUp's own finally released the reservation when it was entered; otherwise do it here
