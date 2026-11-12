@@ -108,5 +108,8 @@ internal class PendingSeek(val id: Int, val target: Double, val startedMs: Long,
     @Volatile var sawTransitioning: Boolean = false
 }
 
-/** Result of the last poll: [rel] is already shifted by the stream offset. [reported] is false when the speaker gave no readable position and [rel] is carried over. */
+/**
+ * Result of the last poll: [rel] is already shifted by the stream offset. [reported] is false when the speaker gave no readable
+ * position and [rel] is carried over.
+ */
 internal data class PollPosition(val rel: Double, val dur: Double, val uri: String?, val at: Long, val reported: Boolean = true)

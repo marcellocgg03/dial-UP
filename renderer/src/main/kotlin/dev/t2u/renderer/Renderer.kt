@@ -84,7 +84,10 @@ class Renderer(
     @Volatile var description: DeviceDescription? = null
         private set
 
-    /** The name [receiverName] built from the description (template and suffix applied); null until [init] has read it. A user name replaces it on show, never in matching. */
+    /**
+     * The name [receiverName] built from the description (template and suffix applied); null until [init] has read it. A user
+     * name replaces it on show, never in matching.
+     */
     @Volatile private var describedName: String? = null
 
     // The status UI follows these through [ui]; the property syntax and the private setters stay as they were.
@@ -406,7 +409,10 @@ class Renderer(
         val at = deps.clock()
         terminatedAt = at
         nextReviveAt = at + REVIVE_FIRST_DELAY_MS
-        note("warn", "Cast receiver stopped itself (${error.javaClass.simpleName}) - starting it again in ${REVIVE_FIRST_DELAY_MS / 1000} s")
+        note(
+            "warn",
+            "Cast receiver stopped itself (${error.javaClass.simpleName}) - starting it again in ${REVIVE_FIRST_DELAY_MS / 1000} s",
+        )
     }
 
     /**
@@ -440,7 +446,10 @@ class Renderer(
                 if (e is CancellationException) throw e
                 runCatching { rec?.stop() }
                 nextReviveAt = now + RendererRegistry.RETRY_FAILED_MS
-                note("warn", "Cast receiver could not start again (${e.javaClass.simpleName}) - trying again in ${RendererRegistry.RETRY_FAILED_MS / 60_000} minutes")
+                note(
+                    "warn",
+                    "Cast receiver could not start again (${e.javaClass.simpleName}) - trying again in ${RendererRegistry.RETRY_FAILED_MS / 60_000} minutes",
+                )
                 false
             }
         }
@@ -902,7 +911,15 @@ class Renderer(
         item.current.startedAt = item.current.loadedAt
         if (current !== item.current) releaseStream(current) // the stream this one replaces
         current = item.current
-        nowPlaying = NowPlaying(item.current.video.id, item.title, item.artist, item.duration, item.format, item.thumbnail, item.current.sourceMime)
+        nowPlaying = NowPlaying(
+            item.current.video.id,
+            item.title,
+            item.artist,
+            item.duration,
+            item.format,
+            item.thumbnail,
+            item.current.sourceMime,
+        )
         position = PollPosition(item.current.startAt.toDouble(), item.duration, null, deps.clock())
         lastError = null
         sawPlaying = alreadyPlaying
@@ -1176,23 +1193,33 @@ class Renderer(
     /**
      * After an accepted empty URI: reads what the speaker holds (one GetMediaInfo) and writes the outcome as one evidence line.
      * A speaker that still holds one of our streams gets the empty URI once more and is read once more; a second failure is
-     * logged, not retried. A failed read never fails the clear. Stream URIs carry a token and are never logged, only whether they were ours.
+     * logged, not retried. A failed read never fails the clear. Stream URIs carry a token and are never logged, only whether
+     * they were ours.
      */
     private suspend fun readBack() {
         val first = readCurrentUri()
         when {
             first == null -> note("info", "Cleared the speaker: read-back unavailable (the empty URI was accepted)")
             first.isEmpty() -> note("info", "Cleared the speaker: confirmed empty")
-            !isOurStream(first) -> note("info", "Cleared the speaker: confirmed empty of our stream (the speaker is on another source now, left alone)")
+            !isOurStream(first) -> note(
+                "info",
+                "Cleared the speaker: confirmed empty of our stream (the speaker is on another source now, left alone)",
+            )
             else -> {
                 if (!soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")) {
-                    note("warn", "clear: still ours after retry - the speaker still holds one of our streams and refused the second empty URI")
+                    note(
+                        "warn",
+                        "clear: still ours after retry - the speaker still holds one of our streams and refused the second empty URI",
+                    )
                     return
                 }
                 val second = readCurrentUri()
                 when {
                     second == null -> note("info", "Cleared the speaker: read-back unavailable (the empty URI was sent twice)")
-                    second.isEmpty() || !isOurStream(second) -> note("info", "Cleared the speaker: confirmed empty after a second empty URI")
+                    second.isEmpty() || !isOurStream(second) -> note(
+                        "info",
+                        "Cleared the speaker: confirmed empty after a second empty URI",
+                    )
                     else -> note("warn", "clear: still ours after retry - the speaker still holds one of our streams after two empty URIs")
                 }
             }
@@ -1200,7 +1227,8 @@ class Renderer(
     }
 
     /** The URI the speaker holds ("" when empty), or null when it could not be read. */
-    private suspend fun readCurrentUri(): String? = soap.safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
+    private suspend fun readCurrentUri(): String? =
+        soap.safeCall(AV_TRANSPORT, "GetMediaInfo", "InstanceID" to 0)?.let { it["CurrentURI"].orEmpty() }
 
     /** The running slow-clear watch, if any; a new clear replaces it and [destroy] cancels it. */
     @Volatile private var slowClearWatch: Job? = null
@@ -1215,7 +1243,10 @@ class Renderer(
     private fun startSlowClearWatch() {
         val seq = loadSeq.get()
         slowClearWatch?.cancel()
-        note("info", "clear watch started: reading the speaker every ${SLOW_CLEAR_WATCH_INTERVAL_MS} ms for up to ${SLOW_CLEAR_WATCH_MS / 1000} s")
+        note(
+            "info",
+            "clear watch started: reading the speaker every ${SLOW_CLEAR_WATCH_INTERVAL_MS} ms for up to ${SLOW_CLEAR_WATCH_MS / 1000} s",
+        )
         slowClearWatch = scope.launch {
             val reason = withTimeoutOrNull(SLOW_CLEAR_WATCH_MS + CLEAR_BUDGET_MS) { watchForLateStream(seq) } ?: "time used up"
             note("info", "clear watch ended: $reason")
@@ -1238,7 +1269,8 @@ class Renderer(
             expectStop = true
             soap.safeCall(AV_TRANSPORT, "Stop", "InstanceID" to 0)
             val emptied = soap.ok(AV_TRANSPORT, "SetAVTransportURI", "InstanceID" to 0, "CurrentURI" to "", "CurrentURIMetaData" to "")
-            return if (emptied) "emptied a stream that landed after the clear" else "found a stream that landed after the clear, the speaker refused the empty URI"
+            return if (emptied) "emptied a stream that landed after the clear"
+            else "found a stream that landed after the clear, the speaker refused the empty URI"
         }
     }
 
@@ -1424,7 +1456,8 @@ class Renderer(
         val wasBuffering = status == PlayerStatus.PLAYING
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
-        if (state !in SEEK_SETTLED_STATES) note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
+        if (state !in SEEK_SETTLED_STATES)
+            note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
         val raw = polledRaw ?: speakerPosition() ?: return
         // A bar that was buffering did not count on, so it is where it was told; a playing one has counted on since.
         val senderIsAt = p.shown + if (status == PlayerStatus.PLAYING && !wasBuffering) (now - p.shownAt) / 1000.0 else 0.0
@@ -1574,7 +1607,10 @@ class Renderer(
     /** What the speaker answered to a re-sync read: the transport state, the GetPositionInfo reading and what its TrackURI is. */
     private class ResyncReading(val state: String?, val reading: Map<String, String>?, val kind: UriKind)
 
-    /** Waits for a load in flight (bounded by [NETWORK_RESET_WAIT_MS]). True when the re-sync is over: destroyed, or the load never finished. */
+    /**
+     * Waits for a load in flight (bounded by [NETWORK_RESET_WAIT_MS]). True when the re-sync is over: destroyed, or the load
+     * never finished.
+     */
     private suspend fun resyncWaitedOutLoad(): Boolean {
         val deadline = deps.clock() + NETWORK_RESET_WAIT_MS
         while (!destroyed && loadInFlight() && deps.clock() < deadline) delay(NETWORK_RESET_STEP_MS)
@@ -1792,7 +1828,10 @@ class Renderer(
         return false
     }
 
-    /** The speaker reads STOPPED while we were playing: wait out a gapless switch, advance the queue, re-set a dry buffer, or mirror the stop. */
+    /**
+     * The speaker reads STOPPED while we were playing: wait out a gapless switch, advance the queue, re-set a dry buffer, or
+     * mirror the stop.
+     */
     private suspend fun pollStopped(c: Current?, epoch: Int) {
         val p = position
         val ended = trackEnded(p, c?.startAt ?: 0)
@@ -1862,7 +1901,10 @@ class Renderer(
         pollLoop.stop()
         foreignPolls = 0
         forgetTrack()
-        val scheme = uri?.substringBefore(':', "")?.filter { it.isLetterOrDigit() || it == '-' || it == '+' || it == '.' }?.take(24).orEmpty()
+        val scheme = uri?.substringBefore(':', "")
+            ?.filter { it.isLetterOrDigit() || it == '-' || it == '+' || it == '.' }
+            ?.take(24)
+            .orEmpty()
         note("info", "the speaker was taken over by another source - released", "scheme" to scheme)
         // Launched, because the poll that got here runs in the job pollLoop.stop() just cancelled.
         scope.launch { notifyExternalStateChange(PlayerStatus.STOPPED) }
@@ -1921,7 +1963,8 @@ class Renderer(
             val deadline = deps.clock() + config.queueSettleTimeoutMs
             while (queue.isUpdating && !superseded(seq) && deps.clock() < deadline) delay(QUEUE_SETTLE_STEP_MS)
             if (superseded(seq)) return@launch
-            if (queue.isUpdating) note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
+            if (queue.isUpdating)
+                note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
             val advanced = next()
             if (!advanced && !superseded(seq) && status == PlayerStatus.PLAYING) notifyExternalStateChange(PlayerStatus.STOPPED)
         }
@@ -1983,7 +2026,8 @@ class Renderer(
                 dropAdvanced()
                 return@launch
             }
-            if (queue.isUpdating) note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
+            if (queue.isUpdating)
+                note("warn", "Playlist refresh still in flight after ${config.queueSettleTimeoutMs} ms - advancing anyway")
             handingOff = true
             val moved = try {
                 next()

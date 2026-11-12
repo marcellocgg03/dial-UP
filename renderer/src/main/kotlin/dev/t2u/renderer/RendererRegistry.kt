@@ -198,7 +198,9 @@ class RendererRegistry(
         val named = if (host.contains(':')) {
             // a name cannot contain ':', so this is an IPv6 literal and no lookup happens
             try { InetAddress.getByName(host) } catch (_: Exception) { null }
-        } else if (host.split('.').let { p -> p.size == 4 && p.all { it.isNotEmpty() && it.length <= 3 && it.all { c -> c in '0'..'9' } } }) {
+        } else if (host.split('.').let { p ->
+            p.size == 4 && p.all { it.isNotEmpty() && it.length <= 3 && it.all { c -> c in '0'..'9' } }
+        }) {
             // a dotted quad of decimals: getByName parses it as a literal without a lookup
             try { InetAddress.getByName(host) } catch (_: Exception) { null }
         } else {
@@ -420,7 +422,14 @@ class RendererRegistry(
             }
         }
         if (withTimeoutOrNull(destroyBudgetMs) { job.join() } == null) {
-            log("destroy-slow", r.udn, r.name, r.location, r.port, "the speaker did not finish stopping in $destroyBudgetMs ms; it ends in the background")
+            log(
+                "destroy-slow",
+                r.udn,
+                r.name,
+                r.location,
+                r.port,
+                "the speaker did not finish stopping in $destroyBudgetMs ms; it ends in the background",
+            )
         }
     }
 

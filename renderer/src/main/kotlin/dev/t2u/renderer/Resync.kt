@@ -54,9 +54,9 @@ internal const val RESYNC_WATCH_MS = 120_000L
  * Decides what to do after the network returned, from one reading of the speaker.
  *
  * A speaker that is STOPPED (or has no media) is never re-set at its own RelTime: a Sonos that ran dry during the outage
- * reports 0:00, which would restart the track from the beginning (the track would restart from the beginning). Those cases use the last polled
- * position. A FOREIGN stream wins over every readable transport state, so a source that took the speaker and stopped it is
- * not taken over again.
+ * reports 0:00, which would restart the track from the beginning (the track would restart from the beginning). Those cases
+ * use the last polled position. A FOREIGN stream wins over every readable transport state, so a source that took the speaker
+ * and stopped it is not taken over again.
  *
  * @param holdsTrack the renderer has a current track and its status is PLAYING, PAUSED or LOADING.
  * @param ipChanged the phone's address differs from the one the stream URL was built with.

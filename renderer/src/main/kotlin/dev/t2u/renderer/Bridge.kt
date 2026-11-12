@@ -428,8 +428,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /**
      * Forgets the saved manual speaker [udn]: it leaves manual.json and the list, and when it runs it is taken out
-     * of the registry (byebye, DIAL server closed); its hidden and renamed marks go too. A speaker that multicast discovery also finds comes back at the next search as
-     * an ordinary discovered speaker without the manual mark; hiding it is what keeps it away. False when it was not saved.
+     * of the registry (byebye, DIAL server closed); its hidden and renamed marks go too. A speaker that multicast discovery
+     * also finds comes back at the next search as an ordinary discovered speaker without the manual mark; hiding it is what
+     * keeps it away. False when it was not saved.
      * The app calls this from Delete on the card of a renderer saved by address; BridgeManualTest covers it.
      */
     suspend fun removeManual(udn: String): Boolean = manual.removeManual(udn)
@@ -751,7 +752,9 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         } else {
             combine(renderers.map { it.ui }) { speakers ->
                 BridgeCount(
-                    speakers.count { it.status == PlayerStatus.LOADING || it.status == PlayerStatus.PLAYING || it.status == PlayerStatus.PAUSED },
+                    speakers.count {
+                        it.status == PlayerStatus.LOADING || it.status == PlayerStatus.PLAYING || it.status == PlayerStatus.PAUSED
+                    },
                     speakers.size,
                 )
             }
@@ -943,8 +946,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
      * straight back), a start that failed, a goodbye and a stale speaker leave the speaker alone.
      *
      * Switching the bridge off ends playback. With [stopSpeakers] every speaker that is playing gets a Stop and keeps
-     * its track loaded; only [clearSpeakers] (the setting to empty speakers when a cast ends) also empties it. Neither flag: the speakers are not
-     * touched (the reload-config restart, where the bridge comes straight back).
+     * its track loaded; only [clearSpeakers] (the setting to empty speakers when a cast ends) also empties it. Neither flag:
+     * the speakers are not touched (the reload-config restart, where the bridge comes straight back).
      */
     suspend fun stop(clearSpeakers: Boolean = false, stopSpeakers: Boolean = false) {
         if (!stopped.compareAndSet(false, true)) return
