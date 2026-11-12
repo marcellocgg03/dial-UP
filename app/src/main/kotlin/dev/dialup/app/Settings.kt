@@ -102,7 +102,8 @@ private val KNOWN_KEYS = setOf(
 )
 
 /**
- * The nullable override keys of [data] that are set, in a stable order. Names only. The theme and the update check are app-only and never listed.
+ * The nullable override keys of [data] that are set, in a stable order. Names only. The theme and the update check are app-only
+ * and never listed.
  */
 fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
     if (data.logEnabled != null) add(KEY_LOG_ENABLED)
