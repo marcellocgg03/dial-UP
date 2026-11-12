@@ -216,17 +216,6 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `a rename with nothing cast restarts the bridge and shows no card`() = runTest {
-        val bridge = FakeBridgePort()
-        val p = presenter(FakeSettingsPort(), bridge)
-        p.onRenamed()
-        runCurrent()
-        assertEquals(1, bridge.restartCalls)
-        assertFalse(p.restart.visible.value)
-        assertFalse(p.restart.notice.value)
-    }
-
-    @Test
     fun `a rename with the bridge off restarts nothing`() = runTest {
         val bridge = FakeBridgePort(running = false)
         val p = presenter(FakeSettingsPort(), bridge)

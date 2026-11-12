@@ -64,8 +64,8 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             RenameDialog(
                 current = card.name,
                 custom = udn in ui.names,
-                onSave = { model.rename(udn, it); renamed(ui, onRenamed) },
-                onReset = { model.rename(udn, null); renamed(ui, onRenamed) },
+                onSave = { model.rename(udn, it, live = ui.bridgeUp && ui.castingNow == 0); renamed(ui, onRenamed) },
+                onReset = { model.rename(udn, null, live = ui.bridgeUp && ui.castingNow == 0); renamed(ui, onRenamed) },
                 onDismiss = { ui.renaming = null },
             )
         }
@@ -108,7 +108,7 @@ internal fun RefreshConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) 
 
 /**
  * A rename shows on the speaker only after a bridge restart. Bridge off: nothing to do. Something cast: the dialog asks first.
- * Nothing cast: [showCard] (the presenter) restarts at once and the dialog only mentions the YouTube apps.
+ * Nothing cast: the name was applied live and the dialog only mentions the YouTube apps.
  */
 private fun renamed(ui: SpeakersUiState, showCard: () -> Unit) {
     if (!ui.bridgeUp) {
@@ -116,8 +116,7 @@ private fun renamed(ui: SpeakersUiState, showCard: () -> Unit) {
     } else if (ui.castingNow > 0) {
         ui.restartAfterRename = true
     } else {
-        // nothing cast: the presenter restarts the bridge by itself; only the YouTube apps are left to refresh
-        showCard()
+        // nothing cast: the name was applied live; only the YouTube apps are left to refresh
         ui.renamedNotice = true
     }
 }

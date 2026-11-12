@@ -385,9 +385,9 @@ class SettingsPresenter(
         return clean
     }
 
-    /** A renderer was renamed or reset: the new name is used at the next bridge start, so the restart card is shown. */
+    /** A renderer was renamed or reset while something is cast: the new name is used at the next bridge start, so the restart card is shown. */
     fun onRenamed() {
-        namesChanged(SettingKey.RENAME, showCard = false)
+        changed(SettingKey.RENAME)
     }
 
     /**

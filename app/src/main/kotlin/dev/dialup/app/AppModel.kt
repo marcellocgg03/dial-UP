@@ -228,13 +228,17 @@ class AppModel private constructor(context: Context) {
 
     /**
      * GUI rename: names the renderer [udn] [name], or resets it to its own name when [name] is null. Matched by UDN. Through the
-     * store only: a running bridge keeps the old name until it restarts (the Settings restart card asks for it), so DialUP and
-     * YouTube never show different names. The bridge's next start uses the name. An unusable name changes nothing. Fire-and-forget.
+     * the store only, unless [live]: then through the running bridge (the card and the DIAL friendly name change at once, a cast is
+     * not cut). The caller passes [live] only with nothing cast; with a cast the old name stays until the bridge restarts, so
+     * DialUP and YouTube never show different names. An unusable name changes nothing. Fire-and-forget.
      */
-    fun rename(udn: String, name: String?): Job = scope.launch {
+    fun rename(udn: String, name: String?, live: Boolean = false): Job = scope.launch {
         try {
-            val store = SpeakerStores.of(appContext).names
-            if (name == null) store.remove(udn) else store.set(udn, name)
+            val bridge = if (live) cast.value?.currentBridge() else null
+            if (bridge == null || !bridge.rename(udn, name)) {
+                val store = SpeakerStores.of(appContext).names
+                if (name == null) store.remove(udn) else store.set(udn, name)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
