@@ -20,7 +20,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
+import java.nio.file.NoSuchFileException
 
 private val prettyNamesJson = Json { prettyPrint = true }
 
@@ -83,9 +85,9 @@ class RendererNames(dataDir: File, private val warn: (String) -> Unit = {}) {
                     else -> loaded[udn] = name
                 }
             }
-        } catch (_: java.io.FileNotFoundException) {
+        } catch (_: FileNotFoundException) {
             // nothing named yet
-        } catch (_: java.nio.file.NoSuchFileException) {
+        } catch (_: NoSuchFileException) {
         } catch (e: Exception) {
             warn("Ignoring unreadable $file: ${e.message}")
             loaded.clear()

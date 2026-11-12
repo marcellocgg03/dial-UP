@@ -14,6 +14,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import java.io.File
+import java.io.IOException
 
 /** A config.json larger than this is not read (a config is a few hundred bytes). */
 const val MAX_CONFIG_FILE_BYTES = 64 * 1024
@@ -35,7 +36,7 @@ fun loadConfigFile(file: File, base: Config): ConfigFileResult {
     if (!file.isFile) return ConfigFileResult(base, emptyList(), false)
     val bytes = try {
         file.inputStream().use { it.readNBytes(MAX_CONFIG_FILE_BYTES + 1) }
-    } catch (_: java.io.IOException) {
+    } catch (_: IOException) {
         return ConfigFileResult(base, listOf("config.json ignored: could not be read"), true)
     }
     if (bytes.size > MAX_CONFIG_FILE_BYTES) {

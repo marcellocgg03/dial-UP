@@ -1,5 +1,6 @@
 package dev.t2u.upnp
 
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -8,6 +9,8 @@ import java.net.NetworkInterface
 import java.net.SocketAddress
 import java.net.SocketTimeoutException
 import java.security.SecureRandom
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -103,10 +106,10 @@ class SsdpResponder(
 
     private val devices = CopyOnWriteArrayList<SsdpDevice>()
     private val listeners = CopyOnWriteArrayList<Listener>()
-    private val bound = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val bound = ConcurrentHashMap<String, Int>()
 
     /** Reply timestamps per source IP for the reflection cap. */
-    private val replyTimes = java.util.concurrent.ConcurrentHashMap<String, java.util.ArrayDeque<Long>>()
+    private val replyTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
     @Volatile private var replySocket: MulticastSocket? = null
 
@@ -116,7 +119,7 @@ class SsdpResponder(
     private val lifecycle = Any()
 
     /** Probes in flight: nonce -> latch counted down when our own listener hears that probe. */
-    private val pendingProbes = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+    private val pendingProbes = ConcurrentHashMap<String, CountDownLatch>()
 
     private val random = SecureRandom()
 
@@ -281,7 +284,7 @@ class SsdpResponder(
             val bytes = msg.toByteArray(Charsets.UTF_8)
             try {
                 sock.send(DatagramPacket(bytes, bytes.size, target))
-            } catch (_: java.io.IOException) {
+            } catch (_: IOException) {
                 return ProbeResult.SEND_FAILED
             }
             return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) ProbeResult.OK else ProbeResult.NOT_HEARD
@@ -351,7 +354,7 @@ class SsdpResponder(
     private fun allowReply(src: InetSocketAddress): Boolean {
         if (replyTimes.size > 4096) replyTimes.clear()
         val key = src.address.hostAddress
-        val times = replyTimes.computeIfAbsent(key) { java.util.ArrayDeque() }
+        val times = replyTimes.computeIfAbsent(key) { ArrayDeque() }
         val now = clockNanos()
         synchronized(times) {
             while (times.isNotEmpty() && now - times.peekFirst() >= WINDOW_NANOS) times.pollFirst()
