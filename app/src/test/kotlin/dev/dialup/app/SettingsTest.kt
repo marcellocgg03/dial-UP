@@ -218,6 +218,19 @@ class SettingsTest {
     }
 
     @Test
+    fun aReloadedPrefixCanBeResetToTheDefaultAndStaysReset() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"namePrefix":"Home","other":7}""") }
+        val s = settings(f)
+        assertEquals("Home", s.data.value.namePrefix)
+        assertFalse("namePrefix" in parseSettings(f.readText()).extras, "the prefix is a known key, not an extra")
+        s.update { it.copy(namePrefix = DEFAULT_NAME_PREFIX) }
+        val text = f.readText()
+        assertFalse(text.contains("namePrefix"), text)
+        assertTrue(text.contains(""""other":7"""), text)
+        assertEquals(DEFAULT_NAME_PREFIX, settings(f).data.value.namePrefix)
+    }
+
+    @Test
     fun audioFormatSwitchIsStoredOnlyWhenEnabled() {
         val f = File(dir, SETTINGS_FILE)
         val s = settings(f)
