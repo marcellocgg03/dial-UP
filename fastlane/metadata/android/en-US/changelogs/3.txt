@@ -1,7 +1,0 @@
-First stable release.
-• Streaming, Direct and Cached playback modes
-• Refresh button for the renderer list
-• Confirmation before hiding a casting renderer
-• yt-dlp can be updated while casting, after a confirmation
-• Settings grouped; Hidden renderers on its own screen
-• Fixes: steadier volume controls, high CPU overnight, Refresh keeping the list when it cannot search, nightly to stable yt-dlp switch
