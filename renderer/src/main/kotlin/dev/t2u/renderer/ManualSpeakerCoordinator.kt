@@ -84,12 +84,14 @@ internal class ManualSpeakerCoordinator(private val host: ManualSpeakerHost, pri
     /** What [probeManual] came to and which probe path produced the answer: `ssdp` (unicast search) or `http` (description). */
     private class ProbeOutcome(val result: ManualAddResult, val via: String)
 
-    /** A speaker that was added or was already listed is remembered; every other outcome leaves nothing behind. */
+    /**
+     * A speaker that was added is remembered; every other outcome leaves nothing behind. A speaker that discovery already
+     * listed is not saved: it stays an ordinary discovered speaker, without the saved mark and its Delete.
+     */
     private suspend fun saveManual(ip: InetAddress, result: ManualAddResult) {
         val store = deps.manual ?: return
         val udn = when (result) {
             is ManualAddResult.Added -> result.udn
-            is ManualAddResult.AlreadyListed -> result.udn
             else -> return
         }
         val running = registry?.renderers()?.firstOrNull { it.udn == udn } ?: return

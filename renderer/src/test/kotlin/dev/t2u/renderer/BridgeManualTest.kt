@@ -150,9 +150,10 @@ class BridgeManualTest {
     }
 
     @Test
-    @DisplayName("a speaker that is already listed is reported as such")
+    @DisplayName("a speaker that is already listed is reported as such and is not saved")
     fun aSpeakerThatIsAlreadyListedIsReportedAsSuch() = h.run<Unit> {
-        val bridge = h.newBridge(manualSsdpPort = h.speakerPort)
+        val store = ManualSpeakers(h.dataDir).load()
+        val bridge = h.newBridge(manualSsdpPort = h.speakerPort, manual = store)
         bridge.start()
         h.awaitUntil("the speaker listed by discovery") { bridge.speakers.value.size == 1 }
 
@@ -161,6 +162,8 @@ class BridgeManualTest {
         val listed = result as? ManualAddResult.AlreadyListed ?: throw AssertionError("expected AlreadyListed, got $result")
         assertEquals(HARNESS_RENDERER_UDN, listed.udn)
         assertEquals(1, bridge.speakers.value.size)
+        assertTrue(store.entries.value.isEmpty(), "a discovered speaker is not saved by an add by address")
+        assertTrue(ManualSpeakers(h.dataDir).load().entries.value.isEmpty(), "nothing reached manual.json")
     }
 
     @Test
@@ -425,7 +428,7 @@ class BridgeManualTest {
         assertTrue(result is ManualAddResult.AlreadyListed, "got $result")
         assertTrue(tookMs < 500, "answered in $tookMs ms")
         assertEquals(seen, h.searchesSeen.get(), "no unicast search went out")
-        assertEquals(HARNESS_RENDERER_UDN, store.entries.value.single().udn)
+        assertTrue(store.entries.value.isEmpty(), "a listed speaker is not saved")
     }
 
     @Test

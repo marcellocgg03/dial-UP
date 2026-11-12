@@ -62,7 +62,7 @@ fun parseManualIp(text: String): Inet4Address? {
 fun manualTargetAllowed(ip: InetAddress): Boolean =
     ip is Inet4Address && !ip.isMulticastAddress && !ip.isAnyLocalAddress && isPrivateLanAddress(ip)
 
-/** What an add by address came to. Nothing is saved except by [ManualSpeakers], and only for Added or AlreadyListed. */
+/** What an add by address came to. Nothing is saved except by [ManualSpeakers], and only for Added. */
 sealed interface ManualAddResult {
     /** The speaker answered and now has a card. */
     data class Added(val udn: String, val name: String) : ManualAddResult
