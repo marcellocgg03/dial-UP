@@ -39,6 +39,19 @@ class AtomicFilesTest {
     }
 
     @Test
+    fun theTempFileHoldsTheWholeTextWhenTheMoveStepRunsAndTheFileIsUtf8() {
+        val target = File(dir, "a.json")
+        val text = "{\"name\":\"caf\u00e9 \ud83d\udd0a\"}"
+        var seenAtMove: String? = null
+        writeTextAtomic(target, text, app) { from, to, options ->
+            seenAtMove = from.toFile().readText(Charsets.UTF_8)
+            Files.move(from, to, *options)
+        }
+        assertEquals(text, seenAtMove, "the data is complete before the rename")
+        assertEquals(text, target.readText(Charsets.UTF_8))
+    }
+
+    @Test
     fun appPresetFailedReplacementThrowsAndLeavesNoTempFile() {
         val dest = File(dir, "state.json")
         assertTrue(dest.mkdir())
