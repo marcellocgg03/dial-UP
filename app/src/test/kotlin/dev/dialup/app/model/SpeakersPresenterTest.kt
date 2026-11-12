@@ -4,6 +4,7 @@ package dev.dialup.app.model
 
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.ManualSpeaker
+import dev.t2u.renderer.PinnedSpeaker
 import dev.t2u.renderer.NowPlaying
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
@@ -174,7 +175,8 @@ class SpeakersPresenterTest {
         hidden: Set<String> = setOf("H"),
         names: Map<String, String> = emptyMap(),
         waiting: Boolean = false,
-    ) = rendererListing(switchOn, serviceUp, bridgeUp, waiting, live, savedList, hidden, names)
+        pinned: List<PinnedSpeaker> = emptyList(),
+    ) = rendererListing(switchOn, serviceUp, bridgeUp, waiting, live, savedList, hidden, names, pinned)
 
     @Test
     fun `switch off with the old service and bridge still up lists only the saved greyed cards`() {
@@ -282,5 +284,43 @@ class SpeakersPresenterTest {
         assertTrue(deleteOffered(speaker(PlayerStatus.IDLE, online = false).copy(manual = true)))
         assertEquals(false, deleteOffered(speaker(PlayerStatus.IDLE)))
         assertEquals(false, deleteOffered(speaker(PlayerStatus.IDLE, online = false)))
+    }
+
+    private fun pin(udn: String) = PinnedSpeaker(udn, "Pinned $udn", "10.0.0.5")
+
+    @Test
+    fun `pinned live cards go first and the rest keep their order`() {
+        val live = listOf(card("A"), card("B"), card("C"), card("D"))
+        val l = listing(switchOn = true, serviceUp = true, bridgeUp = true, live = live, pinned = listOf(pin("D"), pin("B")))
+        assertEquals(listOf("B", "D", "A", "C"), l.live.map { it.udn })
+    }
+
+    @Test
+    fun `with the bridge off a pinned discovered speaker is a greyed card and a pinned saved one stays one card`() {
+        val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList(), pinned = listOf(pin("P"), pin("S2")))
+        assertEquals(listOf("S2", "P", "M"), l.saved.map { it.udn }, "pinned first, the rest in their order")
+        assertEquals(1, l.saved.count { it.udn == "S2" })
+        val p = l.saved.first { it.udn == "P" }
+        assertEquals("Pinned P", p.name)
+        assertTrue(!p.online && !p.manual)
+    }
+
+    @Test
+    fun `a hidden speaker is not listed even when it is still pinned`() {
+        val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList(), pinned = listOf(pin("H")))
+        assertTrue(l.saved.none { it.udn == "H" })
+    }
+
+    @Test
+    fun `a pinned speaker uses the name the author gave it`() {
+        val l = listing(switchOn = false, serviceUp = false, bridgeUp = false, live = emptyList(), pinned = listOf(pin("P")), names = mapOf("P" to "Den"))
+        assertEquals("Den", l.saved.first { it.udn == "P" }.name)
+    }
+
+    @Test
+    fun `an unanswering pinned card offers Hide`() {
+        val c = card("P", online = false)
+        assertTrue(!hideOffered(c))
+        assertTrue(hideOffered(c, pinned = true))
     }
 }

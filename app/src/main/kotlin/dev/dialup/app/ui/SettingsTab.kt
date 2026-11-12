@@ -24,7 +24,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +52,16 @@ import dev.dialup.app.model.SettingsPresenter
 import dev.dialup.app.model.SettingsUi
 import dev.dialup.app.model.UpdateUi
 import dev.dialup.app.model.updateMessage
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
 
 private val FORMATS = listOf(
     "streaming" to "Streaming",
@@ -364,23 +373,58 @@ internal fun Choice(current: String, options: List<String>, onPick: (Int) -> Uni
     }
 }
 
-/** The text before each speaker's name in the cast menu; Save applies it at once to the running speakers. Empty is allowed. */
+/**
+ * The text before each speaker's name in the cast menu. Saving it restarts an idle bridge (the Settings restart rules decide).
+ * Empty is allowed. A compact rounded field under the title, lined up with the other rows.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NamePrefixRow(saved: String, onSave: (String) -> String) {
     var text by remember(saved) { mutableStateOf(saved) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    val interaction = remember { MutableInteractionSource() }
+    val colors = OutlinedTextFieldDefaults.colors()
+    val shape = RoundedCornerShape(24.dp)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text("Name prefix", style = MaterialTheme.typography.bodyLarge)
         Text(
             "Shown before each renderer's name in the cast menu. Leave it empty for none.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
+        Row(
+            modifier = Modifier.padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
                 value = text,
                 onValueChange = { text = it.take(MAX_NAME_PREFIX_LENGTH) },
                 singleLine = true,
-                modifier = Modifier.weight(1f).testTag("field-name-prefix"),
+                interactionSource = interaction,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.width(150.dp).height(44.dp).testTag("field-name-prefix"),
+                decorationBox = { inner ->
+                    OutlinedTextFieldDefaults.DecorationBox(
+                        value = text,
+                        innerTextField = inner,
+                        enabled = true,
+                        singleLine = true,
+                        visualTransformation = VisualTransformation.None,
+                        interactionSource = interaction,
+                        colors = colors,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                        container = {
+                            OutlinedTextFieldDefaults.Container(
+                                enabled = true,
+                                isError = false,
+                                interactionSource = interaction,
+                                colors = colors,
+                                shape = shape,
+                            )
+                        },
+                    )
+                },
             )
             TextButton(onClick = { text = onSave(text) }, enabled = text != saved, modifier = Modifier.testTag("btn-name-prefix-save")) {
                 Text("Save")

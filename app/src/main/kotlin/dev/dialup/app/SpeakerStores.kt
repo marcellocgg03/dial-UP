@@ -5,6 +5,7 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.renderer.HiddenSpeakers
 import dev.t2u.renderer.ManualSpeakers
+import dev.t2u.renderer.PinnedSpeakers
 import dev.t2u.renderer.RendererNames
 import java.io.File
 
@@ -14,7 +15,7 @@ import java.io.File
  * the Config dataDir.
  */
 object SpeakerStores {
-    class Instance(val hidden: HiddenSpeakers, val manual: ManualSpeakers, val names: RendererNames)
+    class Instance(val hidden: HiddenSpeakers, val manual: ManualSpeakers, val names: RendererNames, val pinned: PinnedSpeakers)
 
     @Volatile private var instance: Instance? = null
 
@@ -34,7 +35,11 @@ object SpeakerStores {
             val names = RendererNames(dir) { line ->
                 ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "names", "message" to line))
             }.load()
-            return Instance(hidden, manual, names).also { instance = it }
+            // The cards the author pinned to the top of the list
+            val pinned = PinnedSpeakers(dir) { line ->
+                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "pinned", "message" to line))
+            }.load()
+            return Instance(hidden, manual, names, pinned).also { instance = it }
         }
     }
 }

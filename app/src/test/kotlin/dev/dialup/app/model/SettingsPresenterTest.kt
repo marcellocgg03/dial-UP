@@ -61,9 +61,12 @@ class FakeBridgePort(
     override val casting: StateFlow<Int> get() = castingFlow
     override val instance: StateFlow<Any?> get() = flow
 
+    var refreshCalls = 0
+
     override suspend fun refreshNames() {
         refreshCalls++
     }
+
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
     var outcome: YtDlpUpdateOutcome? = null
@@ -74,7 +77,6 @@ class FakeBridgePort(
     var logResult = true
     var updateCalls = 0
     var restartCalls = 0
-    var refreshCalls = 0
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
     /** When set, clearCache, clearLog, cacheInfo and updateNow throw it (a disk or bridge fault). */
@@ -173,7 +175,7 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `name prefix is cleaned, may be empty, and renames the running speakers without a restart`() = runTest {
+    fun `name prefix is cleaned, may be empty, and applies live with an info card when nothing is cast`() = runTest {
         val settings = FakeSettingsPort()
         val bridge = FakeBridgePort()
         val p = presenter(settings, bridge)
@@ -185,13 +187,50 @@ class SettingsPresenterTest {
         assertEquals("🎵", p.state.value.namePrefix)
         assertEquals(1, bridge.refreshCalls)
         assertEquals(0, bridge.restartCalls)
+        assertTrue(p.restart.notice.value)
+        assertFalse(p.restart.visible.value)
 
         assertEquals("", p.setNamePrefix(""))
         runCurrent()
         assertEquals("", settings.data.value.namePrefix)
-        assertEquals(2, bridge.refreshCalls)
 
         assertEquals(MAX_NAME_PREFIX_LENGTH, p.setNamePrefix("x".repeat(40)).length)
+    }
+
+    @Test
+    fun `name prefix with a cast shows the restart card and restarts nothing`() = runTest {
+        val bridge = FakeBridgePort()
+        bridge.castingFlow.value = 1
+        val p = presenter(FakeSettingsPort(), bridge)
+        p.setNamePrefix("🎵")
+        runCurrent()
+        assertTrue(p.restart.visible.value)
+        assertTrue(p.restart.namesChanged.value)
+        assertFalse(p.restart.notice.value)
+        assertEquals(0, bridge.refreshCalls)
+        assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
+    fun `a rename with a cast shows the restart card and restarts nothing`() = runTest {
+        val bridge = FakeBridgePort()
+        bridge.castingFlow.value = 1
+        val p = presenter(FakeSettingsPort(), bridge)
+        p.onRenamed()
+        runCurrent()
+        assertTrue(p.restart.visible.value)
+        assertTrue(p.restart.namesChanged.value)
+        assertEquals(0, bridge.restartCalls)
+    }
+
+    @Test
+    fun `a rename with the bridge off restarts nothing`() = runTest {
+        val bridge = FakeBridgePort(running = false)
+        val p = presenter(FakeSettingsPort(), bridge)
+        p.onRenamed()
+        runCurrent()
+        assertEquals(0, bridge.restartCalls)
+        assertFalse(p.restart.visible.value)
     }
 
     @Test

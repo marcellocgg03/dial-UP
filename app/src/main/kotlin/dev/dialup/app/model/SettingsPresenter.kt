@@ -58,13 +58,14 @@ interface BridgePort {
     /** How many renderers are being cast to now; 0 while there is no bridge. Update now is not offered while it is above 0. */
     val casting: StateFlow<Int> get() = NOT_CASTING
 
+    /** The name prefix changed: the running speakers take their new names at once. The default does nothing. */
+    suspend fun refreshNames() {}
+
     /** Whether there is a running bridge now. */
     val running: Boolean get() = instance.value != null
 
     suspend fun clearCache(): Int?
 
-    /** The name prefix changed: the running speakers take their new names at once. The default does nothing. */
-    suspend fun refreshNames() {}
 
     /**
      * Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then);
@@ -98,7 +99,8 @@ enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
     SHOW_AUDIO_FORMAT(false),
-    NAME_PREFIX(false),
+    NAME_PREFIX(true),
+    RENAME(true),
     LOG(false),
     GAPLESS(true),
     CACHE(false),
@@ -376,15 +378,26 @@ class SettingsPresenter(
 
     /**
      * The text before each speaker's own name in the cast menu. Control characters are dropped and the text is cut to
-     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. Applies at once to the running speakers, without a restart, the way a
-     * rename does, so a cast keeps playing. Returns the prefix that was saved.
+     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. With nothing cast the running speakers take the new name at once and an info
+     * card says to clear the YouTube apps from recents; with a cast the names stay until the bridge restarts (the restart
+     * card asks for it), so a cast is never cut. Returns the prefix that was saved.
      */
     fun setNamePrefix(text: String): String {
         val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
         settings.update { it.copy(namePrefix = clean) }
-        changed(SettingKey.NAME_PREFIX)
-        scope.launch { bridge.refreshNames() }
+        if (bridge.running && bridge.casting.value == 0) {
+            // nothing cast: the running speakers take the name at once and only the YouTube apps are left to refresh
+            scope.launch { bridge.refreshNames() }
+            restart.showNamesNotice()
+        } else {
+            changed(SettingKey.NAME_PREFIX)
+        }
         return clean
+    }
+
+    /** A renderer was renamed or reset while something is cast: the new name is used at the next bridge start, so the restart card is shown. */
+    fun onRenamed() {
+        changed(SettingKey.RENAME)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {

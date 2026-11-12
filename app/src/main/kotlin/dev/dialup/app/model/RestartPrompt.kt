@@ -17,6 +17,9 @@ const val RESTART_SOURCE = "restart"
 /** The source of a restart the app made on its own when it was opened (T-dcg-06): the event log tells it from the author's. */
 const val AUTO_RESTART_SOURCE = "auto-restart"
 
+/** How long the info card after a name change stays. */
+const val NOTICE_MS = 10_000L
+
 /**
  * The settings a running bridge reads only at its start: the [SettingKey] entries with `needsRestart` (gapless and the forced
  * output format). Keep the two in step.
@@ -61,6 +64,9 @@ class RestartPrompt(
 ) {
     private val card = MutableStateFlow(false)
     private val pending = MutableStateFlow(false)
+    private val names = MutableStateFlow(false)
+    private val noticeCard = MutableStateFlow(false)
+    private var noticeTimer: Job? = null
     private var timer: Job? = null
     private var running = false
 
@@ -73,10 +79,42 @@ class RestartPrompt(
     /** True while the confirmation for a restart during a cast is open. */
     val confirmPending: StateFlow<Boolean> = pending.asStateFlow()
 
+    /**
+     * True from a rename or prefix change until the next restart: the YouTube apps keep the old names until they are cleared
+     * from recents, which this app cannot do, so the card says so.
+     */
+    val namesChanged: StateFlow<Boolean> = names.asStateFlow()
+
+    /** True while the info card is shown: a new name was applied live and only the YouTube apps are left to refresh. */
+    val notice: StateFlow<Boolean> = noticeCard.asStateFlow()
+
+    /** Hides the info card (its close icon). */
+    @Synchronized
+    fun dismissNotice() {
+        noticeTimer?.cancel()
+        noticeTimer = null
+        noticeCard.value = false
+    }
+
+    /**
+     * A new prefix applied live with nothing cast: shows the info card (no button) for [NOTICE_MS], which says to clear the
+     * YouTube apps from recents.
+     */
+    @Synchronized
+    fun showNamesNotice() {
+        noticeTimer?.cancel()
+        noticeCard.value = true
+        noticeTimer = scope.launch {
+            delay(NOTICE_MS)
+            noticeCard.value = false
+        }
+    }
+
     /** Shows the card for [visibleMs] when [key] needs a restart and the bridge is [bridgeRunning]; otherwise does nothing. */
     @Synchronized
     fun onSettingChanged(key: SettingKey, bridgeRunning: Boolean) {
         if (!key.needsRestart || !bridgeRunning) return
+        if (key == SettingKey.NAME_PREFIX || key == SettingKey.RENAME) names.value = true
         timer?.cancel()
         card.value = true
         if (sticky) {
@@ -146,6 +184,7 @@ class RestartPrompt(
     private fun run(source: String) {
         if (running) return
         running = true
+        names.value = false
         scope.launch {
             try {
                 action(source)

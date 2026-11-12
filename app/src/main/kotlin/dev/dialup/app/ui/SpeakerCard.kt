@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -65,6 +66,8 @@ fun SpeakerCard(
     onHide: () -> Unit = {},
     onRename: () -> Unit = {},
     onDelete: () -> Unit = {},
+    pinned: Boolean = false,
+    onTogglePin: () -> Unit = {},
     showAudioFormat: Boolean = false,
 ) {
     val udn = speaker.udn
@@ -86,7 +89,17 @@ fun SpeakerCard(
         ) {
             TrackArt(speaker.track?.thumbnail, Modifier.size(64.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(speaker.name, style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(speaker.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f, fill = false))
+                    if (pinned) {
+                        Icon(
+                            PinIcon,
+                            contentDescription = "Pinned",
+                            modifier = Modifier.size(16.dp).testTag("pin-glyph-$udn"),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 Text(
                     statusLabel(speaker.status, speaker.online),
                     style = MaterialTheme.typography.labelMedium,
@@ -128,7 +141,15 @@ fun SpeakerCard(
                         },
                         modifier = Modifier.testTag("menu-rename-$udn"),
                     )
-                    if (hideOffered(speaker)) {
+                    DropdownMenuItem(
+                        text = { Text(if (pinned) "Unpin" else "Pin to top") },
+                        onClick = {
+                            menuOpen = false
+                            onTogglePin()
+                        },
+                        modifier = Modifier.testTag("menu-pin-$udn"),
+                    )
+                    if (hideOffered(speaker, pinned)) {
                         DropdownMenuItem(
                             text = { Text("Hide from cast menus") },
                             onClick = {

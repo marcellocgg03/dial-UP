@@ -34,7 +34,7 @@ import dev.dialup.app.model.hideEndsCast
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden.
  */
 @Composable
-fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
+fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () -> Unit = {}, onRestart: () -> Unit = {}) {
     val ui = rememberSpeakersUiState(model)
     val listing = ui.listing
     LazyColumn(
@@ -43,7 +43,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "add-speaker") { SpeakersActionRow(model, ui) }
-        listing.note?.let { note -> item(key = "empty-note") { EmptyNote(model, note, ui.phase) } }
+        listing.note?.let { note -> item(key = "empty-note") { EmptyNote(note, ui.phase) } }
         items(listing.live, key = { it.udn }) { speaker ->
             SpeakerCard(
                 speaker,
@@ -52,6 +52,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 onHide = { if (hideEndsCast(speaker)) ui.confirmingHide = speaker.udn else model.hide(speaker) },
                 onRename = { ui.renaming = speaker.udn },
                 onDelete = { model.deleteManual(speaker.udn) },
+                pinned = speaker.udn in ui.pinned,
+                onTogglePin = { model.setPinned(speaker, speaker.udn !in ui.pinned) },
                 showAudioFormat = ui.showAudioFormat,
             )
         }
@@ -64,10 +66,12 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 onHide = { model.hide(card) },
                 onRename = { ui.renaming = card.udn },
                 onDelete = { model.deleteManual(card.udn) },
+                pinned = card.udn in ui.pinned,
+                onTogglePin = { model.setPinned(card, card.udn !in ui.pinned) },
             )
         }
     }
-    SpeakersDialogs(model, ui)
+    SpeakersDialogs(model, ui, onRenamed, onRestart)
 }
 
 /** The add and refresh buttons above the list. */
@@ -78,8 +82,9 @@ private fun SpeakersActionRow(model: AppModel, ui: SpeakersUiState) {
             Text("Add renderer by address")
         }
         // the list is emptied and rebuilt from a fresh search, as at the first discovery (the spinner shows). Every
-        // listed speaker is stopped, so while casting the button asks first. Hidden while a search runs, so none starts on top of it.
-        if (!ui.searching) {
+        // listed speaker is stopped, so while casting the button asks first. Shown exactly when the spinner is not: the spinner covers
+        // the search window and the settle time after it, so no search starts on top of another.
+        if (!ui.spinnerShown) {
             OutlinedButton(
                 onClick = { if (ui.castingNow > 0) ui.confirmingRefresh = true else model.rediscoverRenderers() },
                 enabled = ui.bridgeUp,
@@ -89,23 +94,17 @@ private fun SpeakersActionRow(model: AppModel, ui: SpeakersUiState) {
     }
 }
 
-/** The note shown in place of an empty list: the spinner while looking, then a Refresh button. */
+/** The note shown in place of an empty list: the spinner while looking. The Refresh button is the one beside Add. */
 @Composable
-private fun EmptyNote(model: AppModel, note: ListNote, phase: EmptyPhase) {
+private fun EmptyNote(note: ListNote, phase: EmptyPhase) {
     when (note) {
         ListNote.LOOKING ->
-            Column(
-                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (phase == EmptyPhase.SPINNER) {
+            if (phase == EmptyPhase.SPINNER) {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     CircularProgressIndicator(Modifier.testTag("speakers-spinner"))
-                } else {
-                    OutlinedButton(
-                        onClick = { model.refreshRenderers("ui") },
-                        modifier = Modifier.testTag("btn-refresh"),
-                    ) { Text("Refresh") }
                 }
             }
     }
