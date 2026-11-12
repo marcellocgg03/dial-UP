@@ -16,15 +16,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Port of the cache titles of reference/tube2upnp/test/remux.test.js (D-16), against real /usr/bin/ffmpeg and
+ * Port of the cache titles of reference/tube2upnp/test/remux.test.js (D-16), against real ffmpeg (from PATH) and
  * ffprobe. The source a track is "downloaded" from is a generated fragmented M4A; no network is involved.
  * Eviction runs inside the build (before `prepare` returns), so no test waits for a background prune.
  */
 class MediaServerCacheTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
-    private val ffprobe = "/usr/bin/ffprobe"
+    private val ffmpeg = ToolPaths.ffmpeg
+    private val ffprobe = ToolPaths.ffprobe
     private lateinit var buildDir: File
     private lateinit var launcher: PipeLauncher
     private val servers = CopyOnWriteArrayList<MediaServer>()

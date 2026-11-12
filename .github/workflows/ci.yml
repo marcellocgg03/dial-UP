@@ -46,17 +46,21 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
-      # The media and renderer tests that start a real ffmpeg look for /usr/bin/ffmpeg and are skipped when it is missing;
+      # The media and renderer tests that start a real ffmpeg look for it on PATH and are skipped when it is missing;
       # without this step a runner image without it would report them skipped and stay green.
       - name: Install ffmpeg for the process tests
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-          test -x /usr/bin/ffmpeg
+          command -v ffmpeg ffprobe
           ffmpeg -version | head -n 1
 
       - name: Unit tests
         run: ./gradlew test
+
+      # A skipped test counts as green to Gradle; this fails the job when one that should have run (ffmpeg missing) was skipped.
+      - name: No unexpected skipped tests
+        run: python3 tools/check-skipped-tests.py
 
       - name: Debug APK
         run: ./gradlew :app:assembleDebug

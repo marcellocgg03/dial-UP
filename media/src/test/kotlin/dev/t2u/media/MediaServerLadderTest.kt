@@ -25,15 +25,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Port of the remux.test.js titles that belong to the ADTS/MP3 pipe path, against real /usr/bin/ffmpeg and
+ * Port of the remux.test.js titles that belong to the ADTS/MP3 pipe path, against real ffmpeg (from PATH) and
  * ffprobe: the upstream is a local HTTP server that serves a 60 s fragmented M4A (what YouTube serves) and
  * answers paths containing "forbidden" with 403.
  */
 class MediaServerLadderTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
-    private val ffprobe = "/usr/bin/ffprobe"
+    private val ffmpeg = ToolPaths.ffmpeg
+    private val ffprobe = ToolPaths.ffprobe
     private lateinit var upstream: HttpServer
     private lateinit var base: String
     private lateinit var launcher: CountingLauncher

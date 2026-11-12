@@ -481,7 +481,7 @@ internal class BridgeHarness(
     }
 
     /** The first ffmpeg binary found, or null. */
-    fun findFfmpeg(): String? = listOf("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg").firstOrNull { File(it).canExecute() }
+    fun findFfmpeg(): String? = ToolPaths.ffmpeg.takeIf { File(it).canExecute() }
 
     /** Makes a [seconds]-second sine source (AAC in m4a) at [target] with the real ffmpeg; false when ffmpeg is absent or failed. */
     fun makeSineSource(target: File, seconds: Int = 3): Boolean {
