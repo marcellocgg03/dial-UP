@@ -709,7 +709,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             emit("ssdp-drop", "src" to "${src.address.hostAddress}:${src.port}", "reason" to reason)
         }
 
-        override fun onError(where: String, t: Throwable) = failure("ssdp:$where", t)
+        override fun onError(where: String, t: Throwable) {
+            if (isExpectedOffline(where, networkDown)) return
+            failure("ssdp:$where", t)
+        }
     }
 
     private fun firstInWindow(key: String): Boolean {
@@ -981,3 +984,6 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 }
+
+/** A notice (alive or byebye) that cannot leave while the network is known to be down is expected, not a bridge-error. */
+internal fun isExpectedOffline(where: String, networkDown: Boolean): Boolean = where == "notify" && networkDown
