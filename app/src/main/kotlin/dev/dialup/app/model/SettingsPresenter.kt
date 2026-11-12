@@ -63,8 +63,6 @@ interface BridgePort {
 
     suspend fun clearCache(): Int?
 
-    /** The name prefix changed: the running speakers take their new names at once. The default does nothing. */
-    suspend fun refreshNames() {}
 
     /**
      * Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then);
@@ -98,7 +96,8 @@ enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
     SHOW_AUDIO_FORMAT(false),
-    NAME_PREFIX(false),
+    NAME_PREFIX(true),
+    RENAME(true),
     LOG(false),
     GAPLESS(true),
     CACHE(false),
@@ -376,15 +375,19 @@ class SettingsPresenter(
 
     /**
      * The text before each speaker's own name in the cast menu. Control characters are dropped and the text is cut to
-     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. Applies at once to the running speakers, without a restart, the way a
-     * rename does, so a cast keeps playing. Returns the prefix that was saved.
+     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. The running speakers keep their names until the bridge restarts (the
+     * restart card is shown), so DialUP and YouTube never disagree. Returns the prefix that was saved.
      */
     fun setNamePrefix(text: String): String {
         val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
         settings.update { it.copy(namePrefix = clean) }
         changed(SettingKey.NAME_PREFIX)
-        scope.launch { bridge.refreshNames() }
         return clean
+    }
+
+    /** A renderer was renamed or reset: the new name is used at the next bridge start, so the restart card is shown. */
+    fun onRenamed() {
+        changed(SettingKey.RENAME)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {

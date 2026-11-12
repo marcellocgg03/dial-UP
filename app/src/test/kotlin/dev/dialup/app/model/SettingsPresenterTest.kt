@@ -61,9 +61,6 @@ class FakeBridgePort(
     override val casting: StateFlow<Int> get() = castingFlow
     override val instance: StateFlow<Any?> get() = flow
 
-    override suspend fun refreshNames() {
-        refreshCalls++
-    }
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
     var outcome: YtDlpUpdateOutcome? = null
@@ -74,7 +71,6 @@ class FakeBridgePort(
     var logResult = true
     var updateCalls = 0
     var restartCalls = 0
-    var refreshCalls = 0
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
     /** When set, clearCache, clearLog, cacheInfo and updateNow throw it (a disk or bridge fault). */
@@ -173,7 +169,7 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `name prefix is cleaned, may be empty, and renames the running speakers without a restart`() = runTest {
+    fun `name prefix is cleaned, may be empty, and asks for a restart instead of renaming live`() = runTest {
         val settings = FakeSettingsPort()
         val bridge = FakeBridgePort()
         val p = presenter(settings, bridge)
@@ -183,15 +179,24 @@ class SettingsPresenterTest {
         runCurrent()
         assertEquals("🎵", settings.data.value.namePrefix)
         assertEquals("🎵", p.state.value.namePrefix)
-        assertEquals(1, bridge.refreshCalls)
+        assertTrue(p.restart.visible.value)
         assertEquals(0, bridge.restartCalls)
 
         assertEquals("", p.setNamePrefix(""))
         runCurrent()
         assertEquals("", settings.data.value.namePrefix)
-        assertEquals(2, bridge.refreshCalls)
 
         assertEquals(MAX_NAME_PREFIX_LENGTH, p.setNamePrefix("x".repeat(40)).length)
+    }
+
+    @Test
+    fun `a rename shows the restart card and restarts nothing`() = runTest {
+        val bridge = FakeBridgePort()
+        val p = presenter(FakeSettingsPort(), bridge)
+        assertFalse(p.restart.visible.value)
+        p.onRenamed()
+        assertTrue(p.restart.visible.value)
+        assertEquals(0, bridge.restartCalls)
     }
 
     @Test

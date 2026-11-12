@@ -77,10 +77,6 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
 
         override val casting: StateFlow<Int> = model.casting
 
-        override suspend fun refreshNames() {
-            model.cast.value?.currentBridge()?.refreshNames()
-        }
-
         override suspend fun clearCache(): Int? = withContext(Dispatchers.IO) {
             model.cast.value?.clearCache() ?: offlineCache().clear().also {
                 evidence()?.event("cache-clear", mapOf("cleared" to it, "source" to "ui-offline"))

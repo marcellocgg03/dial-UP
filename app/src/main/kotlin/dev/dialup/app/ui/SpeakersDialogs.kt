@@ -18,7 +18,7 @@ import dev.t2u.renderer.SpeakerUi
  * longer casts, the rename dialog when its card is gone.
  */
 @Composable
-internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState) {
+internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: () -> Unit = {}) {
     if (ui.adding) AddSpeakerDialog(model, onDismiss = { ui.adding = false })
     ui.confirmingHide?.let { udn ->
         val card = ui.listing.live.firstOrNull { it.udn == udn }
@@ -46,8 +46,8 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState) {
             RenameDialog(
                 current = card.name,
                 custom = udn in ui.names,
-                onSave = { model.rename(udn, it) },
-                onReset = { model.rename(udn, null) },
+                onSave = { model.rename(udn, it); onRenamed() },
+                onReset = { model.rename(udn, null); onRenamed() },
                 onDismiss = { ui.renaming = null },
             )
         }
