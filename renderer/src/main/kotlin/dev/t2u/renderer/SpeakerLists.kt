@@ -308,3 +308,132 @@ fun savedSpeakerCards(saved: List<ManualSpeaker>, hidden: Set<String>, names: Ma
             manual = true,
         )
     }
+
+private val prettyPinnedJson = Json { prettyPrint = true }
+
+/** The pinned set never holds more than this many speakers (a damaged or runaway file cannot grow it). */
+const val MAX_PINNED = 64
+
+/** A speaker the author pinned: its UDN and what it was called and where it was, so a greyed card can show it with the bridge off. */
+data class PinnedSpeaker(val udn: String, val name: String, val address: String)
+
+/**
+ * The pinned speakers, in `<dataDir>/pinned.json` as a JSON object keyed by UDN: {"uuid": {"name": "Kitchen", "address":
+ * "192.168.1.20"}}, in the order they were pinned. [warn] receives one line per problem and is never used for control flow;
+ * nothing here throws on a bad file.
+ */
+class PinnedSpeakers(dataDir: File, private val warn: (String) -> Unit = {}) {
+    private val file = File(dataDir, "pinned.json")
+    private val lock = Any()
+    private val items = LinkedHashMap<String, PinnedSpeaker>()
+    private val writeMutex = Mutex()
+
+    private val _entries = MutableStateFlow<List<PinnedSpeaker>>(emptyList())
+
+    /** The pinned speakers in the order they were pinned; follows every add and remove. */
+    val entries: StateFlow<List<PinnedSpeaker>> = _entries.asStateFlow()
+
+    /** Reads pinned.json. A missing file is empty; anything unreadable is ignored with a warning. */
+    fun load(): PinnedSpeakers {
+        val loaded = LinkedHashMap<String, PinnedSpeaker>()
+        try {
+            val data = Json.parseToJsonElement(file.readText())
+            if (data !is JsonObject) throw IllegalArgumentException("not a JSON object")
+            for ((udn, value) in data) {
+                val name = (value as? JsonObject)?.stringOrNull("name")
+                val address = (value as? JsonObject)?.stringOrNull("address")
+                when {
+                    name == null || address == null || udn.isEmpty() ->
+                        warn("Ignoring entry '$udn' in $file: it needs a UDN and a string name and address")
+                    loaded.size >= MAX_PINNED -> warn("Ignoring entry '$udn' in $file: more than $MAX_PINNED pinned speakers")
+                    else -> loaded[udn] = PinnedSpeaker(udn, name, address)
+                }
+            }
+        } catch (_: FileNotFoundException) {
+            // nothing pinned yet
+        } catch (_: NoSuchFileException) {
+        } catch (e: Exception) {
+            warn("Ignoring unreadable $file: ${e.message}")
+            loaded.clear()
+        }
+        synchronized(lock) {
+            items.clear()
+            items.putAll(loaded)
+            publish()
+        }
+        return this
+    }
+
+    /**
+     * Pins [entry] (a second pin of the same UDN keeps its place and refreshes its name and address) and writes the file. False,
+     * with a warning, when [MAX_PINNED] other speakers are pinned already.
+     */
+    suspend fun add(entry: PinnedSpeaker): Boolean {
+        val accepted = synchronized(lock) {
+            if (entry.udn !in items && items.size >= MAX_PINNED) {
+                false
+            } else {
+                items[entry.udn] = entry
+                publish()
+                true
+            }
+        }
+        if (!accepted) {
+            warn("Not pinning '${entry.udn}': $MAX_PINNED speakers are pinned already")
+            return false
+        }
+        persist()
+        return true
+    }
+
+    /** Unpins [udn] and writes the file. False when it was not pinned. */
+    suspend fun remove(udn: String): Boolean {
+        val removed = synchronized(lock) {
+            val had = items.remove(udn) != null
+            if (had) publish()
+            had
+        }
+        if (removed) persist()
+        return removed
+    }
+
+    /** Call with [lock] held. */
+    private fun publish() {
+        _entries.value = items.values.toList()
+    }
+
+    private suspend fun persist() {
+        writeMutex.withLock {
+            val current = synchronized(lock) { items.values.toList() }
+            try {
+                withContext(Dispatchers.IO) {
+                    val json = JsonObject(
+                        current.associate { e ->
+                            e.udn to JsonObject(mapOf("name" to JsonPrimitive(e.name), "address" to JsonPrimitive(e.address)))
+                        },
+                    )
+                    writeTextAtomic(file, prettyPinnedJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
+                }
+            } catch (e: IOException) {
+                warn("Could not save $file: ${e.message}")
+            }
+        }
+    }
+}
+
+/** An offline card for a pinned speaker that is not saved by address: shown, greyed, while the bridge's own list is not. */
+fun pinnedSpeakerCard(entry: PinnedSpeaker, names: Map<String, String> = emptyMap()): SpeakerUi =
+    SpeakerUi(
+        udn = entry.udn,
+        name = names[entry.udn] ?: entry.name,
+        address = entry.address,
+        status = PlayerStatus.IDLE,
+        track = null,
+        error = null,
+        hasPrevious = false,
+        hasNext = false,
+        queueHasCurrent = false,
+        position = null,
+        online = false,
+        manual = false,
+    )

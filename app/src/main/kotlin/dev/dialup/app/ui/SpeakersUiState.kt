@@ -40,6 +40,7 @@ internal class SpeakersUiState(
     val castingNow: Int,
     val busy: Set<String>,
     val names: Map<String, String>,
+    val pinned: Set<String>,
     val showAudioFormat: Boolean,
     val presenter: SpeakersPresenter,
     renamingState: MutableState<String?>,
@@ -73,6 +74,8 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
     val hidden by model.hidden.collectAsStateWithLifecycle()
     val manual by model.manual.collectAsStateWithLifecycle()
     val names by model.names.collectAsStateWithLifecycle()
+    val pinnedList by model.pinned.collectAsStateWithLifecycle()
+    val pinnedUdns = pinnedList.mapTo(HashSet()) { it.udn } - hidden.mapTo(HashSet()) { it.udn }
     // the UDN being renamed; the dialog goes when no card with that UDN is on the list any more
     val renaming = rememberSaveable { mutableStateOf<String?>(null) }
     val adding = rememberSaveable { mutableStateOf(false) }
@@ -102,6 +105,7 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
         saved = manual,
         hidden = hidden.mapTo(HashSet()) { it.udn },
         names = names,
+        pinned = pinnedList,
     )
     // the spinner shows while the bridge is inside a multicast search window (Bridge.searching) and, at the start, until
     // the search is first seen; once it has been idle for SEARCH_IDLE_GRACE_MS with nothing found, the Refresh button shows instead
@@ -123,6 +127,7 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
         castingNow = castingNow,
         busy = busy,
         names = names,
+        pinned = pinnedUdns,
         showAudioFormat = settings.showAudioFormat,
         presenter = presenter,
         renamingState = renaming,

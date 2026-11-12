@@ -15,6 +15,7 @@ import dev.dialup.app.model.SearchThrottle
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
+import dev.t2u.renderer.PinnedSpeaker
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.renderer.parseManualIp
@@ -129,6 +130,8 @@ class AppModel private constructor(context: Context) {
             if (bridge == null || !bridge.hide(speaker.udn)) {
                 SpeakerStores.of(appContext).hidden.add(HiddenSpeaker(speaker.udn, speaker.name, speaker.address))
             }
+            // a hidden card loses its pin
+            SpeakerStores.of(appContext).pinned.remove(speaker.udn)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -196,6 +199,24 @@ class AppModel private constructor(context: Context) {
         }
     }
 
+    /** The pinned speakers, in the order they were pinned; the store lives with the process, so the list is right with the bridge off too. */
+    val pinned: StateFlow<List<PinnedSpeaker>> = SpeakerStores.of(context).pinned.entries
+
+    /**
+     * Pins [speaker] to the top of the list (with [pin] false, unpins it). The name and address are kept so the card can be
+     * drawn greyed while the bridge is off. Fire-and-forget: a failure leaves the pin as it was.
+     */
+    fun setPinned(speaker: SpeakerUi, pin: Boolean): Job = scope.launch {
+        try {
+            val store = SpeakerStores.of(appContext).pinned
+            if (pin) store.add(PinnedSpeaker(speaker.udn, speaker.name, speaker.address)) else store.remove(speaker.udn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Failures.report("speaker:pin", e)
+        }
+    }
+
     /** The speakers added by address; the store lives with the process, so the list is right while the bridge is off too. */
     val manual: StateFlow<List<ManualSpeaker>> = SpeakerStores.of(context).manual.entries
 
@@ -212,6 +233,7 @@ class AppModel private constructor(context: Context) {
             if (bridge == null || !bridge.removeManual(udn)) stores.manual.remove(udn)
             stores.hidden.remove(udn)
             stores.names.remove(udn)
+            stores.pinned.remove(udn)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

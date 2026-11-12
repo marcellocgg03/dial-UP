@@ -5,6 +5,8 @@ package dev.dialup.app.model
 import dev.dialup.app.AppModel
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.renderer.ManualSpeaker
+import dev.t2u.renderer.PinnedSpeaker
+import dev.t2u.renderer.pinnedSpeakerCard
 import dev.t2u.renderer.SpeakerAction
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.renderer.savedSpeakerCards
@@ -54,7 +56,7 @@ fun playPauseAction(p: PlayPause): SpeakerAction? = when (p) {
  * Whether a card offers Hide: when the renderer answers, or when it is saved by address, so its greyed card can be
  * hidden too. An offline card that is not saved has nothing to hide.
  */
-fun hideOffered(s: SpeakerUi): Boolean = s.online || s.manual
+fun hideOffered(s: SpeakerUi, pinned: Boolean = false): Boolean = s.online || s.manual || pinned
 
 /**
  * Whether hiding this card ends a cast: an answering speaker that is playing, paused or loading is stopped by Hide, so the card
@@ -105,10 +107,22 @@ fun rendererListing(
     saved: List<ManualSpeaker>,
     hidden: Set<String>,
     names: Map<String, String>,
+    pinned: List<PinnedSpeaker> = emptyList(),
 ): RendererListing {
     val showLive = !savedManualVisible(switchOn, serviceUp, bridgeUp)
-    val shownLive = if (showLive) live else emptyList()
-    val shownSaved = if (showLive) emptyList() else savedSpeakerCards(saved, hidden, names)
+    // pinned cards go first in each list, keeping the order they had otherwise; a hidden speaker is never pinned
+    val pinnedUdns = pinned.mapTo(HashSet()) { it.udn } - hidden
+    fun List<SpeakerUi>.pinnedFirst() = sortedBy { it.udn !in pinnedUdns }
+    val shownLive = if (showLive) live.pinnedFirst() else emptyList()
+    val shownSaved = if (showLive) {
+        emptyList()
+    } else {
+        // the greyed cards of the speakers saved by address, then of the pinned ones that are not
+        val savedCards = savedSpeakerCards(saved, hidden, names)
+        val known = savedCards.mapTo(HashSet()) { it.udn }
+        val pinnedCards = pinned.filter { it.udn !in hidden && it.udn !in known }.map { pinnedSpeakerCard(it, names) }
+        (savedCards + pinnedCards).pinnedFirst()
+    }
     val note = when {
         shownLive.isNotEmpty() || waitingForWifi || !switchOn -> null
         else -> ListNote.LOOKING

@@ -52,6 +52,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () ->
                 onHide = { if (hideEndsCast(speaker)) ui.confirmingHide = speaker.udn else model.hide(speaker) },
                 onRename = { ui.renaming = speaker.udn },
                 onDelete = { model.deleteManual(speaker.udn) },
+                pinned = speaker.udn in ui.pinned,
+                onTogglePin = { model.setPinned(speaker, speaker.udn !in ui.pinned) },
                 showAudioFormat = ui.showAudioFormat,
             )
         }
@@ -64,6 +66,8 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () ->
                 onHide = { model.hide(card) },
                 onRename = { ui.renaming = card.udn },
                 onDelete = { model.deleteManual(card.udn) },
+                pinned = card.udn in ui.pinned,
+                onTogglePin = { model.setPinned(card, card.udn !in ui.pinned) },
             )
         }
     }
