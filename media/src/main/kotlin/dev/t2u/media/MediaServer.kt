@@ -36,7 +36,9 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -77,6 +79,8 @@ class MediaServer(
     private val ffmpegLogLevel: String = "error",
     /** Which resolved URLs ffmpeg may read; the default is the direct proxy's googlevideo rule. */
     private val ffmpegUrlPolicy: FfmpegUrlPolicy = FfmpegUrlPolicy.GOOGLEVIDEO,
+    /** The most ffmpeg processes the server runs at once for GETs. */
+    private val maxConcurrentFfmpeg: Int = MAX_CONCURRENT_FFMPEG,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -92,6 +96,16 @@ class MediaServer(
 
     /** Token to the release of the cache pin a file token holds from registration. Each release is one-shot. */
     private val tokenPins = ConcurrentHashMap<String, () -> Unit>()
+
+    /** Permits for ffmpeg processes the server starts for GETs; a GET that finds none left is answered 503 with Retry-After. */
+    private val ffmpegSlots = Semaphore(maxConcurrentFfmpeg)
+    private val ffmpegRejected = AtomicLong()
+
+    /** ffmpeg processes the server holds a permit for now (live pipes, range fills, buffered runs). */
+    fun ffmpegInUse(): Int = maxConcurrentFfmpeg - ffmpegSlots.availablePermits()
+
+    /** GETs answered 503 because every ffmpeg permit was taken, since the server was created. */
+    fun ffmpegRejectedCount(): Long = ffmpegRejected.get()
 
     private val directRelay = DirectRelay(resolver, upstream)
     private val byteRanges = ByteRangeResponder()
@@ -545,12 +559,31 @@ class MediaServer(
         // give them a complete, length-delimited body instead.
         val dir = bufferDir
         if (call.request.httpVersion == "HTTP/1.0" && dir != null) {
-            serveBuffered(call, entry, attempts, l, tail, dir, out)
+            if (!ffmpegSlots.tryAcquire()) return respondBusy(call, out)
+            try {
+                serveBuffered(call, entry, attempts, l, tail, dir, out)
+            } finally {
+                ffmpegSlots.release()
+            }
             return
         }
         val cache = if (src is StreamSource.VideoPipe) rangeCache else null
         if (cache != null && serveFromRangeCache(call, entry, cache, token, attempts, l, tail, out)) return
-        serveLive(call, entry, cache, token, attempts, l, tail, out)
+        if (!ffmpegSlots.tryAcquire()) return respondBusy(call, out)
+        try {
+            serveLive(call, entry, cache, token, attempts, l, tail, out)
+        } finally {
+            ffmpegSlots.release()
+        }
+    }
+
+    /** Every ffmpeg permit is taken: 503 with Retry-After, nothing started. */
+    private suspend fun respondBusy(call: ApplicationCall, out: Outcome) {
+        ffmpegRejected.incrementAndGet()
+        out.status = 503
+        out.note = "too many ffmpeg processes ($maxConcurrentFfmpeg)"
+        call.response.header(HttpHeaders.RetryAfter, RETRY_AFTER_SECONDS.toString())
+        call.respond(HttpStatusCode.ServiceUnavailable)
     }
 
     /** Headers only, no process and no resolve (a HEAD must never start ffmpeg). */
@@ -664,6 +697,23 @@ class MediaServer(
         outputArgs: List<String>,
         out: Outcome,
     ): CachedStream? {
+        // no permit: no fill; the live path that follows then answers 503
+        if (!ffmpegSlots.tryAcquire()) return null
+        try {
+            return coldFillHoldingSlot(cache, token, attempts, l, outputArgs, out)
+        } finally {
+            ffmpegSlots.release()
+        }
+    }
+
+    private suspend fun coldFillHoldingSlot(
+        cache: PipeRangeCache,
+        token: String,
+        attempts: List<PipeAttempt>,
+        l: PipeLauncher,
+        outputArgs: List<String>,
+        out: Outcome,
+    ): CachedStream? {
         val part = withContext(Dispatchers.IO) { cache.newPartFile() } ?: return null
         var handedOver = false
         try {
@@ -769,6 +819,10 @@ class MediaServer(
 
     companion object {
         const val MAX_TOKENS = 256
+
+        /** Default for [MediaServer]'s maxConcurrentFfmpeg. */
+        const val MAX_CONCURRENT_FFMPEG = 3
+        private const val RETRY_AFTER_SECONDS = 5
         private const val MP3_BITRATE = "192k"
         private const val FILL_POLL_MS = 50L
 
