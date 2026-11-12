@@ -14,6 +14,13 @@ import androidx.core.app.NotificationManagerCompat
 internal fun guestNoticeText(remote: String, speaker: String): String = "$remote started a cast on $speaker"
 
 /**
+ * The notice text for a guest cast, or null when the Settings switch ([notifyGuests]) is off. The one place the switch is
+ * decided, so a test can reach it without a Context.
+ */
+internal fun guestNoticeFor(notifyGuests: Boolean, remote: String, speaker: String): String? =
+    if (notifyGuests) guestNoticeText(remote, speaker) else null
+
+/**
  * The notification id for [remote]: the same address always gets the same id, so a second launch from it replaces its
  * notification (without alerting again) instead of piling up. Kept clear of the bridge notification's id.
  */

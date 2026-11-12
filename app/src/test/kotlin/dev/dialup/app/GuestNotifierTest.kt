@@ -3,6 +3,7 @@ package dev.dialup.app
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GuestNotifierTest {
@@ -16,5 +17,11 @@ class GuestNotifierTest {
         assertEquals(guestNoticeId("192.168.86.31"), guestNoticeId("192.168.86.31"))
         assertNotEquals(guestNoticeId("192.168.86.31"), guestNoticeId("192.168.86.32"))
         assertTrue(guestNoticeId("192.168.86.31") > CastNotifier.NOTIFICATION_ID)
+    }
+
+    @Test
+    fun `the switch decides whether there is a notice at all`() {
+        assertEquals("192.168.86.31 started a cast on Kitchen", guestNoticeFor(true, "192.168.86.31", "Kitchen"))
+        assertNull(guestNoticeFor(false, "192.168.86.31", "Kitchen"))
     }
 }

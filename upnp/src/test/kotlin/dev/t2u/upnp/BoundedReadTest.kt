@@ -77,4 +77,29 @@ class BoundedReadTest {
             }
         }
     }
+
+    @Test
+    fun aDescriptionExactlyAtTheCapIsStillRead() {
+        val prefix = """<?xml version="1.0"?><root><device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>""" +
+            "<friendlyName>Cap</friendlyName><UDN>uuid:cap</UDN></device><!--"
+        val suffix = "--></root>"
+        val body = prefix + "x".repeat(MAX_DESCRIPTION_BYTES.toInt() - prefix.length - suffix.length) + suffix
+        assertEquals(MAX_DESCRIPTION_BYTES.toInt(), body.toByteArray().size)
+        val server = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            try {
+                server.accept().use { s ->
+                    s.getInputStream().read(ByteArray(4096))
+                    s.getOutputStream().write(
+                        ("HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n" + body).toByteArray(),
+                    )
+                }
+            } catch (_: IOException) {
+            }
+        }
+        server.use {
+            val d = runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000) }
+            assertEquals("Cap", d.friendlyName)
+        }
+    }
 }

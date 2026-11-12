@@ -103,7 +103,7 @@ class DialAccessTest {
     @Test
     fun lanModeAnswersSsdpOnlyFromPrivateLanSources() {
         val lan = policy(DialAccessMode.LAN)
-        for (ok in listOf("192.168.50.45", "10.1.2.3", "172.16.0.9", "169.254.1.1", "127.0.0.1", "::1", "fe80::1", "fd12:3456::1")) {
+        for (ok in listOf("192.168.50.45", "10.1.2.3", "172.16.0.9", "169.254.1.1", "127.0.0.1", "::1", "fe80::1", "fd12:3456::1", "::ffff:192.168.50.45", "::ffff:10.0.0.1")) {
             assertTrue(lan.allowsSsdp(InetAddress.getByName(ok)), "should answer $ok")
         }
         for (no in listOf("8.8.8.8", "203.0.113.7", "100.64.0.1", "172.32.0.1", "2001:db8::1", "2606:4700::1111", "::ffff:8.8.8.8")) {

@@ -66,6 +66,14 @@ class DialServerTest {
     }
 
     @Test
+    fun aUuidWithMarkupOrForbiddenCharactersIsEscapedAndStillParses() = testApplication {
+        application { DialServer(config.copy(uuid = "a&b<c>\u0000\u0001d"), { }).configure(this) }
+        val xml = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(xml.contains("<UDN>uuid:a&amp;b&lt;c&gt;d</UDN>"), xml)
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml.byteInputStream())
+    }
+
+    @Test
     fun aRenameChangesTheFriendlyNameAtOnceAndEscapesIt() = testApplication {
         val server = DialServer(config) { }
         application { server.configure(this) }

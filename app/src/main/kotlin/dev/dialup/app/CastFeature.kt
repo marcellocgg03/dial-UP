@@ -458,7 +458,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 onDialRequest = { onDialRequest(h, it) },
                 // another device started a cast: tell the author, unless the Settings switch is off
                 onGuestLaunch = { speaker, remote ->
-                    if (appSettings.data.value.notifyGuests) GuestNotifier(h.context).notify(speaker, remote)
+                    if (guestNoticeFor(appSettings.data.value.notifyGuests, remote, speaker) != null) GuestNotifier(h.context).notify(speaker, remote)
                 },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
                 // Housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
