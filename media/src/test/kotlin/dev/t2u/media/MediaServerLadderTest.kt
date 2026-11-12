@@ -140,7 +140,7 @@ class MediaServerLadderTest {
         host: String = "127.0.0.1",
         pipeRanges: PipeRangeConfig = PipeRangeConfig(enabled = true),
     ): MediaServer =
-        MediaServer(host, 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges).also {
+        MediaServer(host, 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges, ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP).also {
             it.start()
             server = it
         }
@@ -397,24 +397,24 @@ class MediaServerLadderTest {
     @Test
     fun urlInputArgsMatchTheNodeArgumentList() {
         val info = ResolvedInfo(
-            "https://h.example/v?x=1", "m4a", "audio/mp4",
+            "https://rr1---sn-x.googlevideo.com/v?x=1", "m4a", "audio/mp4",
             linkedMapOf("User-Agent" to "ua", "Accept" to "*/*"), "t", "a", "", "", 1.0, 0, null,
         )
         assertEquals(
             listOf(
-                "-hide_banner", "-loglevel", "error",
+                "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "https,tls,tcp,crypto",
                 "-headers", "User-Agent: ua\r\nAccept: */*\r\n",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-                "-ss", "30", "-i", "https://h.example/v?x=1", "-vn",
+                "-ss", "30", "-i", "https://rr1---sn-x.googlevideo.com/v?x=1", "-vn",
             ),
             urlInputArgs(info, 30),
         )
         val bare = urlInputArgs(info.copy(headers = emptyMap()), 0)
         assertEquals(
             listOf(
-                "-hide_banner", "-loglevel", "error",
+                "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "https,tls,tcp,crypto",
                 "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-                "-i", "https://h.example/v?x=1", "-vn",
+                "-i", "https://rr1---sn-x.googlevideo.com/v?x=1", "-vn",
             ),
             bare,
         )
@@ -714,7 +714,7 @@ class MediaServerLadderTest {
         assertEquals(PipeRangeStats(0, 0), off.rangeCacheStats())
         off.stop()
 
-        val bare = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, null, TestResolver(okUrls()), PipeRangeConfig(enabled = true))
+        val bare = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, null, TestResolver(okUrls()), PipeRangeConfig(enabled = true), ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP)
         bare.start()
         server = bare
         val bPath = bare.registerVideo(VideoEntry("bbbbbbbbbbb", "adts", startAt = 10))

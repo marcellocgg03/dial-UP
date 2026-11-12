@@ -75,6 +75,8 @@ class MediaServer(
     private val prepareTimeoutMs: Long = 120_000,
     private val mp3Bitrate: String = MP3_BITRATE,
     private val ffmpegLogLevel: String = "error",
+    /** Which resolved URLs ffmpeg may read; the default is the direct proxy's googlevideo rule. */
+    private val ffmpegUrlPolicy: FfmpegUrlPolicy = FfmpegUrlPolicy.GOOGLEVIDEO,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -497,10 +499,10 @@ class MediaServer(
             val id = src.entry.videoId
             val startAt = src.entry.startAt
             val attempts = mutableListOf(
-                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel) },
+                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy) },
                 PipeAttempt("a fresh extraction") {
                     r.invalidate(id)
-                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel)
+                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy)
                 },
             )
             files?.let { f ->

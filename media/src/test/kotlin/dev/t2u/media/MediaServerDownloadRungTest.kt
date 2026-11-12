@@ -128,7 +128,7 @@ class MediaServerDownloadRungTest {
     ): MediaServer =
         MediaServer(
             "127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "pipe"), resolver,
-            files = files, prepareTimeoutMs = prepareTimeoutMs,
+            files = files, prepareTimeoutMs = prepareTimeoutMs, ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP,
         ).also {
             it.start()
             servers.add(it)

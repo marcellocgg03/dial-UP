@@ -18,6 +18,7 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.Sender
 import dev.t2u.lounge.Video
+import dev.t2u.media.FfmpegUrlPolicy
 import dev.t2u.media.JvmPipeLauncher
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.MediaServer
@@ -164,7 +165,7 @@ class G4SonosMimicTest {
         }
 
         launcher = CountingLauncher(JvmPipeLauncher(ffmpeg))
-        server = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges).also { it.start() }
+        server = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges, ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP).also { it.start() }
 
         fake = FakeRenderer(neverPlay = true).also { it.start() } // the mimic decides when the speaker is PLAYING
         mimic = SonosMimic(fake, offsets = offsets, earlyWindowMs = earlyWindowMs)
