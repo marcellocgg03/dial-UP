@@ -73,10 +73,13 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
     for (list in dev.kids("serviceList")) {
         for (s in list.kids("service")) {
             val short = s.childText("serviceId").substringAfterLast(':')
+            val control = abs(s.childText("controlURL"))
+            // a description may not aim the phone's SOAP calls at another host or port than the one it was fetched from
+            require(control.isEmpty() || sameAuthority(control, location)) { "controlURL is not on the LOCATION host" }
             services["urn:upnp-org:serviceId:$short"] = UpnpService(
                 serviceType = s.childText("serviceType"),
                 scpdURL = abs(s.childText("SCPDURL")),
-                controlURL = abs(s.childText("controlURL")),
+                controlURL = control,
                 eventSubURL = abs(s.childText("eventSubURL")),
             )
         }
@@ -92,6 +95,18 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
         udn = dev.childText("UDN"),
         services = services,
     )
+}
+
+/** True when [url] and [location] name the same host (ignoring case) and the same effective port. */
+private fun sameAuthority(url: String, location: String): Boolean {
+    fun authority(u: String): Pair<String, Int>? {
+        val uri = try { URI(u) } catch (_: Exception) { return null }
+        val host = uri.host?.lowercase() ?: return null
+        val port = if (uri.port != -1) uri.port else if (uri.scheme.equals("https", ignoreCase = true)) 443 else 80
+        return host to port
+    }
+    val a = authority(url) ?: return false
+    return a == authority(location)
 }
 
 /** GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>". */

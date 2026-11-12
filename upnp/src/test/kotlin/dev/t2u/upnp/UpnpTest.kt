@@ -118,9 +118,29 @@ class UpnpTest {
     @Test
     fun `URLBase is honoured and urls resolve against it`() {
         val xml = root(device(mr, "R", services = avt), urlBase = "http://10.0.0.5:1400/")
-        val s = parseDescription(xml, "http://127.0.0.1:9/some/desc.xml").services.getValue("urn:upnp-org:serviceId:AVTransport")
+        val s = parseDescription(xml, "http://10.0.0.5:1400/some/desc.xml").services.getValue("urn:upnp-org:serviceId:AVTransport")
         assertEquals("http://10.0.0.5:1400/ctl/AVTransport", s.controlURL)
         assertEquals("http://10.0.0.5:1400/scpd/AVTransport.xml", s.scpdURL)
+    }
+
+    @Test
+    fun `a controlURL on another host or port than the LOCATION is refused`() {
+        val location = "http://10.0.0.5:1400/xml/desc.xml"
+        fun control(url: String) = service("urn:upnp-org:serviceId:AVTransport", "AVTransport")
+            .replace("/ctl/AVTransport", url)
+        for (bad in listOf("http://10.0.0.9:1400/ctl", "http://10.0.0.5:8080/ctl", "http://127.0.0.1:1400/ctl", "http://10.0.0.5/ctl", "http://[::1]:1400/ctl")) {
+            val e = assertFailsWith<IllegalArgumentException>(bad) { parseDescription(root(device(mr, "R", services = control(bad))), location) }
+            assertEquals("controlURL is not on the LOCATION host", e.message)
+        }
+        // a hostile URLBase moves relative URLs the same way
+        assertFailsWith<IllegalArgumentException> {
+            parseDescription(root(device(mr, "R", services = avt), urlBase = "http://10.0.0.9:1400/"), location)
+        }
+        for (ok in listOf("http://10.0.0.5:1400/other/ctl", "/ctl", "ctl", "HTTP://10.0.0.5:1400/ctl")) {
+            assertEquals(1, parseDescription(root(device(mr, "R", services = control(ok))), location).services.size, ok)
+        }
+        // the default port counts as the explicit one
+        assertEquals(1, parseDescription(root(device(mr, "R", services = control("http://10.0.0.5:80/ctl"))), "http://10.0.0.5/d.xml").services.size)
     }
 
     @Test
