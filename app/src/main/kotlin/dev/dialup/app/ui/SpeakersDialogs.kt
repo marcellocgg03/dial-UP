@@ -6,6 +6,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import dev.dialup.app.AppModel
@@ -19,6 +21,8 @@ import dev.t2u.renderer.SpeakerUi
  */
 @Composable
 internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: () -> Unit = {}, onRestart: () -> Unit = {}) {
+    val settings by model.settings.data.collectAsStateWithLifecycle()
+    val prefix = settings.namePrefix
     if (ui.adding) AddSpeakerDialog(model, onDismiss = { ui.adding = false })
     ui.confirmingHide?.let { udn ->
         val card = ui.listing.live.firstOrNull { it.udn == udn }
@@ -62,7 +66,7 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             ui.renaming = null
         } else {
             RenameDialog(
-                current = card.name,
+                current = ui.names[udn] ?: card.name.removePrefixText(prefix),
                 custom = udn in ui.names,
                 onSave = { model.rename(udn, it, live = ui.bridgeUp && ui.castingNow == 0); renamed(ui, onRenamed) },
                 onReset = { model.rename(udn, null, live = ui.bridgeUp && ui.castingNow == 0); renamed(ui, onRenamed) },
@@ -141,4 +145,10 @@ internal fun RenameRestartDialog(onRestart: () -> Unit, onLater: () -> Unit) {
         },
         modifier = Modifier.testTag("dialog-rename-restart"),
     )
+}
+
+/** [this] without the cast-menu [prefix] and the space after it, when it starts with them; the name the rename field starts from. */
+private fun String.removePrefixText(prefix: String): String {
+    val p = prefix.trim()
+    return if (p.isNotEmpty() && startsWith("$p ")) removePrefix("$p ").trim() else this
 }

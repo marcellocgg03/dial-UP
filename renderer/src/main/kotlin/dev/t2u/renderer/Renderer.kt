@@ -332,7 +332,7 @@ class Renderer(
 
         val described = receiverName(deps.nameTemplate(), desc.friendlyName, desc.manufacturer, desc.modelName)
         describedName = described
-        val displayName = shownRendererName(deps.userName(udn), described)
+        val displayName = shownName(deps.userName(udn), described, desc)
         name = displayName
 
         soap.safeCall(CONNECTION_MANAGER, "GetProtocolInfo")?.let { formats.setProtocols(parseSink(it["Sink"])) }
@@ -387,7 +387,7 @@ class Renderer(
     suspend fun rename(userName: String?) {
         val described = describedName ?: return
         if (destroyed) return
-        val shown = shownRendererName(userName, described)
+        val shown = shownName(userName, described, description)
         name = shown
         receiverOptions = receiverOptions?.copy(name = shown, screenName = shown)
         val rec = receiver ?: return
@@ -398,6 +398,15 @@ class Renderer(
         } catch (e: Exception) {
             note("warn", "Cast receiver could not take the new name (${e.javaClass.simpleName})")
         }
+    }
+
+    /**
+     * The name the speaker shows: the author's [userName] goes through the name template like the speaker's own name does, so
+     * the prefix stays in front of it; without a usable one, or before the description is read, the [described] name.
+     */
+    private fun shownName(userName: String?, described: String, desc: DeviceDescription?): String {
+        val own = userName?.let { cleanRendererName(it) }
+        return if (own != null && desc != null) receiverName(deps.nameTemplate(), own, desc.manufacturer, desc.modelName) else described
     }
 
     /**

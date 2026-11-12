@@ -21,8 +21,8 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import dev.t2u.renderer.rendererNameProblem
 
 /**
- * Rename renderer: a text field prefilled with the [current] shown name. The name replaces the whole
- * shown name exactly as typed, trimmed; Save is on only for a usable name ([rendererNameProblem]: not blank, at most 63
+ * Rename renderer: a text field prefilled with the [current] name, without the Settings name prefix, which is added in front of
+ * whatever is saved. The name is used as typed, trimmed; Save is on only for a usable name ([rendererNameProblem]: not blank, at most 63
  * characters, no line breaks or tabs); a blank field saves as Reset name (the default name). Reset name is offered only when the
  * renderer has a user name ([custom]). The content sets [testTagsAsResourceId] itself because a dialog is its own window.
  */
@@ -55,7 +55,7 @@ fun RenameDialog(
                     } else if (blank) {
                         Text("Leave empty to use the default name")
                     } else {
-                        Text("Shown on this card and in the YouTube and YouTube Music cast menus; they may take a moment to update")
+                        Text("The name prefix from Settings is added in front of it")
                     }
                 },
                 modifier = Modifier.fillMaxWidth().testTag("field-rename"),

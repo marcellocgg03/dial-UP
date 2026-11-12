@@ -49,6 +49,9 @@ internal class SpeakersUiState(
     restartAfterRenameState: MutableState<Boolean>,
     renamedNoticeState: MutableState<Boolean>,
 ) {
+    /** True while the empty list shows its spinner; the Refresh button beside Add is shown exactly when this is false. */
+    val spinnerShown: Boolean get() = listing.note == ListNote.LOOKING && phase == EmptyPhase.SPINNER
+
     var renaming: String? by renamingState
     var adding: Boolean by addingState
     var confirmingHide: String? by confirmingHideState

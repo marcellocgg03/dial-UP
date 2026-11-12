@@ -48,8 +48,8 @@ class BridgeRenameTest {
 
         assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Kitchen"))
 
-        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "Kitchen" }
-        assertEquals("Kitchen", friendlyName(bridge))
+        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "🔊 Kitchen" }
+        assertEquals("🔊 Kitchen", friendlyName(bridge))
         assertTrue(File(h.dataDir, "names.json").readText().let { it.contains(HARNESS_RENDERER_UDN) && it.contains("Kitchen") })
         assertEquals(1, bridge.castCount.value.total, "the receiver was not rebuilt")
     }
@@ -81,9 +81,9 @@ class BridgeRenameTest {
         assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Kitchen"))
         prefix = "🔔"
         bridge.refreshNames()
-        h.awaitUntil("the settle") { true }
-        assertEquals("Kitchen", bridge.speakers.value.single().name, "a name the author gave is kept")
-        assertEquals("Kitchen", friendlyName(bridge))
+        h.awaitUntil("the card takes the prefix before the author's name") { bridge.speakers.value.singleOrNull()?.name == "🔔 Kitchen" }
+        assertEquals("🔔 Kitchen", bridge.speakers.value.single().name, "a name the author gave keeps the prefix in front")
+        assertEquals("🔔 Kitchen", friendlyName(bridge))
     }
 
     @Test
@@ -100,9 +100,9 @@ class BridgeRenameTest {
         val second = h.newBridge(names = names)
         second.start()
         awaitSpeakerUp(second)
-        assertEquals("Kitchen", second.speakers.value.single().name)
+        assertEquals("🔊 Kitchen", second.speakers.value.single().name)
         h.awaitUntil("a DIAL search reply") { h.dialSearchAt(second, h.loopback) != null }
-        assertEquals("Kitchen", friendlyName(second))
+        assertEquals("🔊 Kitchen", friendlyName(second))
 
         assertTrue(second.rename(HARNESS_RENDERER_UDN, null))
 
@@ -137,19 +137,19 @@ class BridgeRenameTest {
         bridge.start()
         awaitSpeakerUp(bridge)
         assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Kitchen"))
-        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "Kitchen" }
+        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "🔊 Kitchen" }
 
         assertTrue(bridge.hide(HARNESS_RENDERER_UDN))
 
         h.awaitUntil("the list empty") { bridge.speakers.value.isEmpty() }
         val entry = hidden.entries.value.single()
         assertEquals(HARNESS_RENDERER_UDN, entry.udn)
-        assertEquals("Kitchen", entry.name)
+        assertEquals("🔊 Kitchen", entry.name)
         assertTrue(File(h.dataDir, "hidden.json").readText().contains(HARNESS_RENDERER_UDN))
 
         assertTrue(bridge.unhide(HARNESS_RENDERER_UDN))
 
-        h.awaitUntil("the speaker back, named Kitchen", timeoutMs = 15_000) { bridge.speakers.value.singleOrNull()?.name == "Kitchen" }
+        h.awaitUntil("the speaker back, named Kitchen", timeoutMs = 15_000) { bridge.speakers.value.singleOrNull()?.name == "🔊 Kitchen" }
     }
 
     @Test
@@ -163,16 +163,16 @@ class BridgeRenameTest {
         h.awaitUntil("a DIAL search reply") { h.dialSearchAt(bridge, h.loopback) != null }
 
         assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Phone name"))
-        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "Phone name" }
+        h.awaitUntil("the card renamed") { bridge.speakers.value.singleOrNull()?.name == "🔊 Phone name" }
         assertFalse(
-            h.events.any { it.first == "ssdp-tx" && it.second["device"] == "Phone name" },
+            h.events.any { it.first == "ssdp-tx" && it.second["device"] == "🔊 Phone name" },
             "no NOTIFY in phone-only mode: ${h.events.filter { it.first == "ssdp-tx" }.takeLast(5)}",
         )
 
         h.accessMode = DialAccessMode.LAN
         assertTrue(bridge.rename(HARNESS_RENDERER_UDN, "Lan name"))
         h.awaitUntil("an ssdp:alive for the new name") {
-            h.events.any { it.first == "ssdp-tx" && it.second["device"] == "Lan name" && it.second["nts"] == "ssdp:alive" }
+            h.events.any { it.first == "ssdp-tx" && it.second["device"] == "🔊 Lan name" && it.second["nts"] == "ssdp:alive" }
         }
     }
 }
