@@ -46,12 +46,22 @@ class FileCache(
     private val lock = Any()
     private val pins = HashMap<String, Int>()
     private val transientManifest = File(this.dir, ".transient")
-    private val transient = if (transientManifest.isFile) {
-        transientManifest.readLines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
-    } else {
-        mutableSetOf()
-    }
+    private val transient: MutableSet<String> = loadTransient()
     private val disposalRequested = HashSet<String>()
+
+    /** The names the manifest lists; an unreadable or corrupt manifest is reported and treated as empty, never thrown. */
+    private fun loadTransient(): MutableSet<String> {
+        if (!transientManifest.isFile) return mutableSetOf()
+        return try {
+            transientManifest.readLines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
+        } catch (e: IOException) {
+            emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
+            mutableSetOf()
+        } catch (e: RuntimeException) {
+            emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
+            mutableSetOf()
+        }
+    }
 
     private fun saveTransient() {
         if (transient.isEmpty()) {
