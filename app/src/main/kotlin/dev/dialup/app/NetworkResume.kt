@@ -2,7 +2,6 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app
 
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -88,16 +87,6 @@ object NetworkResume {
         }
         return false
     }
-
-    /**
-     * Builds before 0.9.0-beta.1 created a second notification channel for the tap-to-resume notification. Deleting it is
-     * idempotent and harmless when it is absent.
-     */
-    // fun removeLegacyChannel(context: Context) {
-    //     runCatching {
-    //         context.getSystemService(NotificationManager::class.java)?.deleteNotificationChannel("dialup-resume")
-    //     }
-    // }
 }
 
 /** Receives the Wi-Fi network events of [NetworkResume.arm]; acts only while armed, with the switch on, and with a Wi-Fi address. */

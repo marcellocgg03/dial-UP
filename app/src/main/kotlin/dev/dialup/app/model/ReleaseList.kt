@@ -9,9 +9,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import java.net.URI
 
-/** The repository the update check reads and the only one whose release pages are ever offered. */
-const val DIALUP_REPO = "marcellocgg03/dial-UP"
-
 /** The releases list (newest 30). Plain https, no redirect is followed. */
 const val RELEASES_API_URL = "https://api.github.com/repos/marcellocgg03/dial-UP/releases?per_page=30"
 

@@ -102,8 +102,6 @@ internal class ReadAheadStore(private val totalBytes: Long) {
 
     fun heldBytes(): Long = synchronized(lock) { held() }
 
-    fun windowCount(): Int = synchronized(lock) { windows.size }
-
     private fun held(): Long = windows.values.sumOf { it.bytes.size.toLong() } + reserved
 }
 
