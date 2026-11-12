@@ -410,7 +410,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val client = ssdp
         if (networkDown || client == null || !client.isBound()) return searchNow(trigger)
         registry?.removeAll(clearSpeakers = clearOnCastEndNow(), stopSpeakers = true)
-        return searchNow(trigger)
+        val sent = searchNow(trigger)
+        // a speaker whose setup failed is otherwise held back for minutes, and its search replies are ignored meanwhile
+        if (sent) handlerScope.launch { registry?.retryFailedNow() }
+        return sent
     }
 
     /**

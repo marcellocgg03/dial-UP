@@ -377,6 +377,23 @@ class RendererRegistry(
         return due.size
     }
 
+    /**
+     * A manual Refresh: every speaker whose setup threw is set up again now instead of at the end of its hold, through
+     * [retryDue] (at most [RETRY_PARALLEL] at a time, one attempt per speaker). A device refused as not a usable renderer
+     * has no source address and keeps its hold. Returns the number of setup attempts made.
+     */
+    suspend fun retryFailedNow(): Int {
+        lock.withLock {
+            val now = clock()
+            for ((udn, skip) in skipped.entries.toList()) {
+                if (skip.src != null && isWaiting(skip, now)) {
+                    skipped[udn] = Skip(skip.location, now, skip.src, skip.maxAge, skip.attempts)
+                }
+            }
+        }
+        return retryDue()
+    }
+
     private suspend fun reviveReceivers() {
         val live = lock.withLock { running.values.toList() }
         for (r in live) {

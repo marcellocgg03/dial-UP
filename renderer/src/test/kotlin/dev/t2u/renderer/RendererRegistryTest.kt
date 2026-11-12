@@ -515,6 +515,32 @@ class RendererRegistryTest {
     }
 
     @Test
+    @DisplayName("retryFailedNow sets a failed speaker up again at once, not a refused one, and a second call before it works tries it again")
+    fun retryFailedNowSkipsTheHold() = runBlocking {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(initBehaviour = { if (failures.incrementAndGet() <= 2) throw java.io.IOException("boom") else true })
+        h.alive()
+        assertEquals(0, h.registry.count.value)
+        h.now.addAndGet(60_000L)
+        assertEquals(0, h.registry.retryDue(), "the hold has 4 minutes left")
+
+        assertEquals(1, h.registry.retryFailedNow(), "Refresh does not wait for the hold")
+        assertEquals(0, h.registry.count.value, "the second attempt failed too")
+        assertEquals(1, h.registry.retryFailedNow())
+        assertEquals(1, h.registry.count.value, "the third attempt works")
+        assertEquals(0, h.registry.retryFailedNow(), "nothing is left to retry")
+    }
+
+    @Test
+    @DisplayName("retryFailedNow leaves a device that answered but is not a usable renderer alone")
+    fun retryFailedNowLeavesRefusedDevices() = runBlocking {
+        val h = Harness(initBehaviour = { false })
+        h.alive()
+        assertEquals(0, h.registry.retryFailedNow())
+        assertEquals(1, h.created.size)
+    }
+
+    @Test
     @DisplayName("a device whose setup returned false is never attempted by the retry timer")
     fun retryNeverTouchesRejectedDevice() = runBlocking {
         val h = Harness(initBehaviour = { false })
