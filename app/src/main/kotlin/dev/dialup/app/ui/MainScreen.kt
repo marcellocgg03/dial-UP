@@ -112,7 +112,12 @@ fun MainScreen(
                     SettingsTab(settings, model, Modifier.weight(1f))
                 } else {
                     UpdateCard(appUpdates, updateCheckEnabled, version)
-                    SpeakersTab(model, Modifier.weight(1f), onRenamed = settings::onRenamed)
+                    SpeakersTab(
+                        model,
+                        Modifier.weight(1f),
+                        onRenamed = settings::onRenamed,
+                        onRestart = { settings.restart.requestRestart(model.casting.value) },
+                    )
                 }
             }
         }

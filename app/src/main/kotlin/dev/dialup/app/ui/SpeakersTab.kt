@@ -34,7 +34,7 @@ import dev.dialup.app.model.hideEndsCast
  * service waiting for Wi-Fi) the saved manual speakers are listed as greyed cards that can be hidden.
  */
 @Composable
-fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () -> Unit = {}) {
+fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () -> Unit = {}, onRestart: () -> Unit = {}) {
     val ui = rememberSpeakersUiState(model)
     val listing = ui.listing
     LazyColumn(
@@ -67,7 +67,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () ->
             )
         }
     }
-    SpeakersDialogs(model, ui, onRenamed)
+    SpeakersDialogs(model, ui, onRenamed, onRestart)
 }
 
 /** The add and refresh buttons above the list. */

@@ -18,7 +18,7 @@ import dev.t2u.renderer.SpeakerUi
  * longer casts, the rename dialog when its card is gone.
  */
 @Composable
-internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: () -> Unit = {}) {
+internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: () -> Unit = {}, onRestart: () -> Unit = {}) {
     if (ui.adding) AddSpeakerDialog(model, onDismiss = { ui.adding = false })
     ui.confirmingHide?.let { udn ->
         val card = ui.listing.live.firstOrNull { it.udn == udn }
@@ -37,6 +37,13 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             model.rediscoverRenderers()
         })
     }
+    if (ui.restartAfterRename) {
+        RenameRestartDialog(
+            onRestart = { ui.restartAfterRename = false; onRestart() },
+            // Later: the restart card keeps the offer
+            onLater = { ui.restartAfterRename = false; onRenamed() },
+        )
+    }
     ui.renaming?.let { udn ->
         // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
         val card = (ui.listing.live + ui.listing.saved).firstOrNull { it.udn == udn }
@@ -46,8 +53,8 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             RenameDialog(
                 current = card.name,
                 custom = udn in ui.names,
-                onSave = { model.rename(udn, it); onRenamed() },
-                onReset = { model.rename(udn, null); onRenamed() },
+                onSave = { model.rename(udn, it); renamed(ui, onRenamed) },
+                onReset = { model.rename(udn, null); renamed(ui, onRenamed) },
                 onDismiss = { ui.renaming = null },
             )
         }
@@ -85,5 +92,32 @@ internal fun RefreshConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) 
             TextButton(onClick = onDismiss, modifier = Modifier.testTag("btn-refresh-cancel")) { Text("Cancel") }
         },
         modifier = Modifier.testTag("dialog-refresh"),
+    )
+}
+
+/** A rename shows on the speaker only after a bridge restart, so with the bridge up the dialog offers it at once; without it the card does. */
+private fun renamed(ui: SpeakersUiState, showCard: () -> Unit) {
+    if (ui.bridgeUp) ui.restartAfterRename = true else showCard()
+}
+
+/** Offers the restart a rename needs, and says the YouTube apps must be cleared from recents to show the new name. */
+@Composable
+internal fun RenameRestartDialog(onRestart: () -> Unit, onLater: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onLater,
+        title = { Text("Restart the bridge?") },
+        text = {
+            Text(
+                "The new name shows after the bridge restarts. Then clear YouTube and YouTube Music from recents to see it. " +
+                    "A restart disconnects current casts.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onRestart, modifier = Modifier.testTag("btn-rename-restart")) { Text("Restart") }
+        },
+        dismissButton = {
+            TextButton(onClick = onLater, modifier = Modifier.testTag("btn-rename-later")) { Text("Later") }
+        },
+        modifier = Modifier.testTag("dialog-rename-restart"),
     )
 }

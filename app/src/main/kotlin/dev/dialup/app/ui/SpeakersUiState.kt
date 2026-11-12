@@ -46,11 +46,15 @@ internal class SpeakersUiState(
     addingState: MutableState<Boolean>,
     confirmingHideState: MutableState<String?>,
     confirmingRefreshState: MutableState<Boolean>,
+    restartAfterRenameState: MutableState<Boolean>,
 ) {
     var renaming: String? by renamingState
     var adding: Boolean by addingState
     var confirmingHide: String? by confirmingHideState
     var confirmingRefresh: Boolean by confirmingRefreshState
+
+    /** The dialog that offers the bridge restart a rename needs (the speaker keeps its old name until then). */
+    var restartAfterRename: Boolean by restartAfterRenameState
 }
 
 /** Collects the flows the Renderers tab reads, keeps its dialog flags and computes the listing and the empty-list phase. */
@@ -69,6 +73,7 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
     val confirmingHide = rememberSaveable { mutableStateOf<String?>(null) }
     val castingNow by model.casting.collectAsStateWithLifecycle()
     val confirmingRefresh = rememberSaveable { mutableStateOf(false) }
+    val restartAfterRename = rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -116,5 +121,6 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
         addingState = adding,
         confirmingHideState = confirmingHide,
         confirmingRefreshState = confirmingRefresh,
+        restartAfterRenameState = restartAfterRename,
     )
 }
