@@ -77,7 +77,10 @@ fun deleteOffered(s: SpeakerUi): Boolean = s.manual
  */
 fun savedManualVisible(switchOn: Boolean, serviceUp: Boolean, bridgeUp: Boolean): Boolean = !(switchOn && serviceUp && bridgeUp)
 
-/** What the empty Renderers list shows: [LOOKING] the spinner (the bridge is starting or searching). With the bridge off or waiting for Wi-Fi it shows nothing. */
+/**
+ * What the empty Renderers list shows: [LOOKING] the spinner (the bridge is starting or searching). With the bridge off or
+ * waiting for Wi-Fi it shows nothing.
+ */
 enum class ListNote { LOOKING }
 
 /** The Renderers list as drawn: the running bridge's cards [live], the greyed [saved] cards, and the [note] when [live] is empty. */
@@ -89,8 +92,9 @@ data class RendererListing(val live: List<SpeakerUi>, val saved: List<SpeakerUi>
  * is on and the service and the bridge are both up, and then [saved] is not drawn (the bridge's list already merges it). In every
  * other case [live] is empty and [saved] are the greyed saved cards ([savedSpeakerCards]: hidden UDNs are skipped, user [names]
  * applied), so Hide and Restore are unchanged and a saved renderer that is also discovered shows once. The note is null while
- * live cards are shown, while [waitingForWifi] and while the switch is off; otherwise "looking" (the spinner). [switchOn] is the switch as the bridge sees it: on and the battery exemption held. The DIAL targets go
- * with the bridge stop (Bridge.stop, registry.removeAll), not with this rule.
+ * live cards are shown, while [waitingForWifi] and while the switch is off; otherwise "looking" (the spinner). [switchOn] is the
+ * switch as the bridge sees it: on and the battery exemption held. The DIAL targets go with the bridge stop (Bridge.stop,
+ * registry.removeAll), not with this rule.
  */
 fun rendererListing(
     switchOn: Boolean,

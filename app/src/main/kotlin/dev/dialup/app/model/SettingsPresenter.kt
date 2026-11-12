@@ -61,7 +61,10 @@ interface BridgePort {
 
     suspend fun clearCache(): Int?
 
-    /** Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then); true when cleared. */
+    /**
+     * Empties the event log. Unlike the other calls it works with the bridge off too (the files are deleted directly then);
+     * true when cleared.
+     */
     suspend fun clearLog(): Boolean
     suspend fun cacheInfo(): CacheInfo?
     suspend fun updateNow(): YtDlpUpdateOutcome?
@@ -181,7 +184,8 @@ fun clearedMessage(count: Int): String = "Cleared $count ${if (count == 1) "file
 
 /**
  * The Settings tab's brain: shows the effective value of each setting and writes the author's change to
- * settings.json at once. Pure: no Android types, so it is tested with fakes. It offers only enumerated values, so a setting never takes a value outside its list.
+ * settings.json at once. Pure: no Android types, so it is tested with fakes. It offers only enumerated values, so a setting never
+ * takes a value outside its list.
  */
 class SettingsPresenter(
     private val scope: CoroutineScope,
@@ -532,6 +536,7 @@ class SettingsPresenter(
     )
 
     private fun upToDate(check: YtDlpCheck) = YtDlpUpdateOutcome(
-        ok = true, trigger = "ui", channel = check.channel, before = check.current, after = check.current, status = "ALREADY_UP_TO_DATE", ms = 0,
+        ok = true, trigger = "ui", channel = check.channel, before = check.current, after = check.current,
+        status = "ALREADY_UP_TO_DATE", ms = 0,
     )
 }

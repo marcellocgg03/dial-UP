@@ -23,8 +23,8 @@ import dev.t2u.renderer.rendererNameProblem
 /**
  * Rename renderer: a text field prefilled with the [current] shown name. The name replaces the whole
  * shown name exactly as typed, trimmed; Save is on only for a usable name ([rendererNameProblem]: not blank, at most 63
- * characters, no line breaks or tabs); a blank field saves as Reset name (the default name). Reset name is offered only when the renderer has a user name ([custom]). The content sets
- * [testTagsAsResourceId] itself because a dialog is its own window.
+ * characters, no line breaks or tabs); a blank field saves as Reset name (the default name). Reset name is offered only when the
+ * renderer has a user name ([custom]). The content sets [testTagsAsResourceId] itself because a dialog is its own window.
  */
 @Composable
 fun RenameDialog(
