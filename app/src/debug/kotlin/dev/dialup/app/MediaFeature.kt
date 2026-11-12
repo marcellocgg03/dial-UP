@@ -97,7 +97,10 @@ class MediaFeature : SpikeFeature {
         if (sine.isFile && sine.length() > 0) return sine
         val r = runner ?: error("ffmpeg runner not ready")
         val code = r.runToCompletion(
-            listOf("-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=30", "-c:a", "aac", "-b:a", "128k", "-f", "ipod", sine.absolutePath),
+            listOf(
+                "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=30",
+                "-c:a", "aac", "-b:a", "128k", "-f", "ipod", sine.absolutePath,
+            ),
             60,
         )
         check(code == 0 && sine.length() > 0) { "ffmpeg could not generate the tone (exit $code)" }
@@ -265,7 +268,10 @@ class MediaFeature : SpikeFeature {
             if (ok) reg(StreamSource.FileSource(file), meta.first, meta.second, meta.third, "file")
         }
         writeTokens(h, input, srv, tokens, source.source)
-        h.evidence.event("cmd-done", mapOf("cmd" to "pipe-test", "input" to input, "base" to base(srv), "tokens" to tokens.size, "fileBuilds" to results))
+        h.evidence.event(
+            "cmd-done",
+            mapOf("cmd" to "pipe-test", "input" to input, "base" to base(srv), "tokens" to tokens.size, "fileBuilds" to results),
+        )
     }
 
     // ----- evidence ------------------------------------------------------------------------------------
@@ -337,7 +343,10 @@ class MediaFeature : SpikeFeature {
             try {
                 block()
             } catch (t: Throwable) {
-                h.evidence.event("feature-error", mapOf("feature" to name, "job" to label, "error" to t.javaClass.name, "message" to t.message))
+                h.evidence.event(
+                    "feature-error",
+                    mapOf("feature" to name, "job" to label, "error" to t.javaClass.name, "message" to t.message),
+                )
             } finally {
                 busyWith = null
                 jobLock.unlock()

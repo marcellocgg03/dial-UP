@@ -350,7 +350,9 @@ class ResolverFeature : SpikeFeature {
         // Out template built from the validated ID; %(ext)s is expanded by yt-dlp
         val template = File(dir, "$id.%(ext)s").absolutePath
         val result = gw.run(downloadCall(id, template, null))
-        val produced = dir.listFiles { f -> f.isFile && f.name.startsWith("$id.") && !f.name.endsWith(".part") && !f.name.endsWith(".ytdl") }
+        val produced = dir.listFiles { f ->
+            f.isFile && f.name.startsWith("$id.") && !f.name.endsWith(".part") && !f.name.endsWith(".ytdl")
+        }
             ?.maxByOrNull { it.lastModified() }
         if (result.exitCode != 0 || produced == null) {
             val why = if (result.exitCode != 0) Resolver.errorTail(result.stderrTail) else "no output file"
@@ -375,7 +377,10 @@ class ResolverFeature : SpikeFeature {
                 put("bytes", bytes)
             }.toString(),
         )
-        h.evidence.event("download", mapOf("id" to id, "ok" to true, "bytes" to bytes, "wallMs" to result.wallMs, "ext" to produced.extension))
+        h.evidence.event(
+            "download",
+            mapOf("id" to id, "ok" to true, "bytes" to bytes, "wallMs" to result.wallMs, "ext" to produced.extension),
+        )
         writeEvidenceFile(
             "download-$id.json",
             buildJsonObject {
@@ -399,7 +404,10 @@ class ResolverFeature : SpikeFeature {
             try {
                 block()
             } catch (t: Throwable) {
-                h.evidence.event("feature-error", mapOf("feature" to name, "job" to label, "error" to t.javaClass.name, "message" to t.message))
+                h.evidence.event(
+                    "feature-error",
+                    mapOf("feature" to name, "job" to label, "error" to t.javaClass.name, "message" to t.message),
+                )
             } finally {
                 busyWith = null
                 jobLock.unlock()

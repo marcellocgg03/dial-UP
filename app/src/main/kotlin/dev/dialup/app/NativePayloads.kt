@@ -85,7 +85,13 @@ object NativePayloads {
         } catch (t: Throwable) {
             evidence.event(
                 "payload-init",
-                mapOf("step" to step, "ok" to false, "ms" to SystemClock.elapsedRealtime() - t0, "error" to t.javaClass.name, "message" to t.message),
+                mapOf(
+                    "step" to step,
+                    "ok" to false,
+                    "ms" to SystemClock.elapsedRealtime() - t0,
+                    "error" to t.javaClass.name,
+                    "message" to t.message,
+                ),
             )
             throw t
         }

@@ -60,7 +60,8 @@ class MainActivity : ComponentActivity() {
      */
     private val opens = MutableStateFlow(0)
 
-    // Read-only views made once: a Flow operator called inside setContent makes a new Flow on every recomposition (lint FlowOperatorInvokedInComposition).
+    // Read-only views made once: a Flow operator called inside setContent makes a new Flow on every recomposition
+    // (lint FlowOperatorInvokedInComposition).
     private val permissionsView = permissionState.asStateFlow()
     private val opensView = opens.asStateFlow()
 
