@@ -291,6 +291,22 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun aTokenRefreshDoesNotDropTheConnectedSenderBecauseTheFreshStatusOmitsIt() = run {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        val refreshes = count("cl", "onVolumeChanged")
+        // the next post fails once, which refreshes the token; the fresh bind session's status lists no remote controls
+        fake.failNextSends.set(1)
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "30") })
+        awaitUntil(what = "the retry after the refresh") { count("cl", "onVolumeChanged") > refreshes }
+        barrier("cl")
+        assertTrue(disconnects.isEmpty(), "no implicit disconnect: ${disconnects.toList()}")
+        assertEquals(listOf("dev-1"), a.connectedSenders.map { it.id })
+        assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
     fun anImplicitDisconnectKeepsThePlayerWhenOnlyExplicitDisconnectsReset() = run {
         startedApp(AppOptions("T2U test", "T2U", "Test", store, resetPlayerOnDisconnect = ResetPlayerOnDisconnectPolicy.ALL_EXPLICITLY_DISCONNECTED))
         connect()
