@@ -337,7 +337,8 @@ internal class DirectRelay(
                         withContext(Dispatchers.IO) {
                             val buf = ByteArray(FILE_CHUNK)
                             while (true) {
-                                val n = body.read(buf) // a failing upstream read propagates: the connection drops and the speaker sees a short body
+                                // a failing upstream read propagates: the connection drops and the speaker sees a short body
+                                val n = body.read(buf)
                                 if (n < 0) break
                                 try {
                                     channel.writeFully(buf, 0, n)
@@ -345,7 +346,8 @@ internal class DirectRelay(
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Throwable) {
-                                    out.note = "client closed: ${e.javaClass.simpleName}" // the speaker hung up; serveDirect closes the upstream
+                                    // the speaker hung up; serveDirect closes the upstream
+                                    out.note = "client closed: ${e.javaClass.simpleName}"
                                     break
                                 }
                                 out.bytes += n

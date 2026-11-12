@@ -444,7 +444,13 @@ class YouTubeApp(
         if (replies.isNotEmpty()) post(session, replies)
     }
 
-    private suspend fun handleStatusMessage(name: String, aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> =
+    private suspend fun handleStatusMessage(
+        name: String,
+        aid: Int,
+        payload: JsonObject?,
+        session: Session,
+        isActive: Boolean,
+    ): List<OutgoingMessage> =
         if (name == "loungeStatus") {
             handleLoungeStatus(aid, payload, session, isActive)
         } else {
@@ -497,7 +503,13 @@ class YouTubeApp(
         return emptyList()
     }
 
-    private suspend fun handleSetVolume(name: String, aid: Int, payload: JsonObject?, session: Session, isActive: Boolean): List<OutgoingMessage> {
+    private suspend fun handleSetVolume(
+        name: String,
+        aid: Int,
+        payload: JsonObject?,
+        session: Session,
+        isActive: Boolean,
+    ): List<OutgoingMessage> {
         if (!isActive) return emptyList()
         val level = jsParseInt(payload.text("volume"))
         if (level == null) {
@@ -652,7 +664,13 @@ class YouTubeApp(
         }
     }
 
-    private suspend fun handlePlaylistMessage(name: String, aid: Int, payload: JsonObject, session: Session, client: Client): List<OutgoingMessage> {
+    private suspend fun handlePlaylistMessage(
+        name: String,
+        aid: Int,
+        payload: JsonObject,
+        session: Session,
+        client: Client,
+    ): List<OutgoingMessage> {
         val out = ArrayList<OutgoingMessage>()
         // Dismiss the autoplay video first when the queue's last video is about to change.
         val payloadLast = payload.text("videoIds")?.split(',')?.last()
@@ -670,7 +688,9 @@ class YouTubeApp(
 
         if (before.autoplay?.id != after.autoplay?.id) out.add(OutgoingMessage.autoplayUpNext(aid, after.autoplay?.id))
 
-        if (name == "setPlaylist" && (before.current?.id != after.current?.id || before.current?.context?.index != after.current?.context?.index)) {
+        if (name == "setPlaylist" &&
+            (before.current?.id != after.current?.id || before.current?.context?.index != after.current?.context?.index)
+        ) {
             if (player.status != PlayerStatus.STOPPED) player.stop(aid)
             val video = after.current
             if (video != null) player.play(video, (jsParseInt(payload.text("currentTime")) ?: 0).toDouble(), aid)
@@ -795,14 +815,24 @@ class YouTubeApp(
     }
 
     private fun postVolume(session: Session, aid: Int?, volume: Volume, defer: Boolean = true) {
-        post(session, listOf(OutgoingMessage.onVolumeChanged(aid, volume)), VOLUME_SEND_KEY, if (defer) LoungeConstants.VOLUME_DEFER_MS else 0)
+        post(
+            session,
+            listOf(OutgoingMessage.onVolumeChanged(aid, volume)),
+            VOLUME_SEND_KEY,
+            if (defer) LoungeConstants.VOLUME_DEFER_MS else 0,
+        )
     }
 
     /**
      * Sends without waiting for the lounge. The send is queued before this returns (the coroutine starts undispatched
      * and Session.sendMessage queues before it suspends), so messages leave in the order they were posted.
      */
-    private fun post(session: Session, messages: List<OutgoingMessage>, deferKey: String? = null, deferMs: Long = LoungeConstants.VOLUME_DEFER_MS) {
+    private fun post(
+        session: Session,
+        messages: List<OutgoingMessage>,
+        deferKey: String? = null,
+        deferMs: Long = LoungeConstants.VOLUME_DEFER_MS,
+    ) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 session.sendMessage(messages, deferKey, deferMs)
@@ -833,7 +863,12 @@ class YouTubeApp(
     }
 
     private fun problem(where: String, e: Throwable) {
-        note("error", "where" to where, "error" to (e::class.simpleName ?: "Throwable"), "message" to Redact.text(e.message ?: "").take(300))
+        note(
+            "error",
+            "where" to where,
+            "error" to (e::class.simpleName ?: "Throwable"),
+            "message" to Redact.text(e.message ?: "").take(300),
+        )
     }
 }
 

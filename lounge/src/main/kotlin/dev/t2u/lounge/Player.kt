@@ -120,7 +120,10 @@ abstract class Player {
         return t.position + (clockMs() - t.atMs) / 1000.0
     }
 
-    /** The last state emitted to the senders: the position the sender's bar was given, when, and the status it showed (LOADING while buffering). */
+    /**
+     * The last state emitted to the senders: the position the sender's bar was given, when, and the status it showed
+     * (LOADING while buffering).
+     */
     private class Told(val position: Double, val atMs: Long, val status: PlayerStatus)
 
     @Volatile
@@ -436,7 +439,11 @@ abstract class Player {
 
     private suspend fun emitState(event: PlayerStateEvent) {
         // A bar that is buffering does not count on: it stays where it was told until the next state.
-        told = Told(event.current.position, clockMs(), if (event.current.senderCode == PlayerStatus.LOADING.code) PlayerStatus.LOADING else event.current.status)
+        told = Told(
+            event.current.position,
+            clockMs(),
+            if (event.current.senderCode == PlayerStatus.LOADING.code) PlayerStatus.LOADING else event.current.status,
+        )
         for (listener in listeners) {
             try {
                 listener.onState(event)

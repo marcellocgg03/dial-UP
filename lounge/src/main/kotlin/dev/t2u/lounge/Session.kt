@@ -312,7 +312,11 @@ class Session(
     private suspend fun getLoungeToken(): LoungeToken {
         val id = checkNotNull(screenId) { "getLoungeToken called before a screen id exists" }
         val body = formEncode(listOf("screen_ids" to id)).toRequestBody(formType)
-        val request = Request.Builder().url(endpoints.getLoungeTokenBatch).header("User-Agent", LoungeConstants.USER_AGENT).post(body).build()
+        val request = Request.Builder()
+            .url(endpoints.getLoungeTokenBatch)
+            .header("User-Agent", LoungeConstants.USER_AGENT)
+            .post(body)
+            .build()
         val text = execute(request).use { r ->
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
@@ -350,7 +354,10 @@ class Session(
         return messages
     }
 
-    /** Updates the bind parameters (AID, SID, gsessionid) and hands the batch to the listener. A listener failure is reported, never fatal. */
+    /**
+     * Updates the bind parameters (AID, SID, gsessionid) and hands the batch to the listener. A listener failure is
+     * reported, never fatal.
+     */
     private suspend fun handleMessages(messages: List<IncomingMessage>) {
         bind.updateWithMessages(messages)
         registerSecrets()

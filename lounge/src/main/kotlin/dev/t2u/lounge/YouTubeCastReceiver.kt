@@ -270,7 +270,9 @@ class YouTubeCastReceiver(
                 dial = created
                 dialConfig = moved
                 bindHost = newHost
-                deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, "http://$newHost:$port${moved.prefix}/ssdp/device-desc.xml"))
+                deps.advertiser.advertise(
+                    SsdpDevice(friendlyName, id, deps.serverHeader, "http://$newHost:$port${moved.prefix}/ssdp/device-desc.xml"),
+                )
                 note("rebound", "port" to port)
             } catch (e: CancellationException) {
                 throw e

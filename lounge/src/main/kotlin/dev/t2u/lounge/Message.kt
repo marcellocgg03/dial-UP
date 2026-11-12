@@ -85,7 +85,11 @@ data class OutgoingMessage(val aid: Int?, val name: String, val payload: Map<Str
             OutgoingMessage(aid, "onAutoplayModeChanged", linkedMapOf("autoplayMode" to (mode ?: AutoplayMode.UNSUPPORTED).name))
 
         fun onHasPreviousNextChanged(aid: Int?, nav: NavInfo?): OutgoingMessage =
-            OutgoingMessage(aid, "onHasPreviousNextChanged", linkedMapOf("hasPrevious" to (nav?.hasPrevious == true), "hasNext" to (nav?.hasNext == true)))
+            OutgoingMessage(
+                aid,
+                "onHasPreviousNextChanged",
+                linkedMapOf("hasPrevious" to (nav?.hasPrevious == true), "hasNext" to (nav?.hasNext == true)),
+            )
 
         /** What is queued for autoplay; no video gives an empty payload. */
         fun autoplayUpNext(aid: Int?, videoId: String?): OutgoingMessage =

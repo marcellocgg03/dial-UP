@@ -52,7 +52,9 @@ object Redact {
         var out = s
         for (key in SECRET_KEYS) {
             val k = Regex.escape(key)
-            out = Regex("(\"$k\"\\s*:\\s*\")([^\"]*)(\")").replace(out) { m -> m.groupValues[1] + marker(m.groupValues[2].length) + m.groupValues[3] }
+            out = Regex("(\"$k\"\\s*:\\s*\")([^\"]*)(\")").replace(out) { m ->
+                m.groupValues[1] + marker(m.groupValues[2].length) + m.groupValues[3]
+            }
             out = Regex("((?:^|[?&])$k=)([^&\\s]*)").replace(out) { m -> m.groupValues[1] + marker(m.groupValues[2].length) }
         }
         return LONG_RUN.replace(out) { marker(it.value.length) }
@@ -116,7 +118,8 @@ class LoungeLog(private val sink: EventSink, private val theme: String) {
         }
     }
 
-    private fun clip(s: String): String = if (s.length <= MAX_PAYLOAD_CHARS) s else s.take(MAX_PAYLOAD_CHARS) + "...[+${s.length - MAX_PAYLOAD_CHARS} chars]"
+    private fun clip(s: String): String =
+        if (s.length <= MAX_PAYLOAD_CHARS) s else s.take(MAX_PAYLOAD_CHARS) + "...[+${s.length - MAX_PAYLOAD_CHARS} chars]"
 
     fun rx(messages: List<IncomingMessage>) {
         for (m in messages) {
@@ -141,7 +144,16 @@ class LoungeLog(private val sink: EventSink, private val theme: String) {
                     }
                 },
             )
-            emit("lounge", mapOf("theme" to theme, "dir" to "tx", "aid" to m.aid, "name" to m.name, "payload" to clip(scrub(Redact.json(body).toString()))))
+            emit(
+                "lounge",
+                mapOf(
+                    "theme" to theme,
+                    "dir" to "tx",
+                    "aid" to m.aid,
+                    "name" to m.name,
+                    "payload" to clip(scrub(Redact.json(body).toString())),
+                ),
+            )
         }
     }
 
@@ -171,7 +183,12 @@ class LoungeLog(private val sink: EventSink, private val theme: String) {
     fun error(where: String, t: Throwable) {
         emit(
             "lounge-error",
-            mapOf("theme" to theme, "where" to where, "type" to (t::class.simpleName ?: "Throwable"), "message" to clip(scrub(Redact.text(t.message ?: "")))),
+            mapOf(
+                "theme" to theme,
+                "where" to where,
+                "type" to (t::class.simpleName ?: "Throwable"),
+                "message" to clip(scrub(Redact.text(t.message ?: ""))),
+            ),
         )
     }
 
