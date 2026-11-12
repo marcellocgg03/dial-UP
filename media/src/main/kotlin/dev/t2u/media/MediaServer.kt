@@ -98,7 +98,7 @@ class MediaServer(
     private val rangeCache: PipeRangeCache? =
         if (pipeRanges.enabled && bufferDir != null) PipeRangeCache(File(bufferDir, "range-cache"), pipeRanges) else null
 
-    fun start() {
+    suspend fun startSuspending() {
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
         files?.start() // keeps the finished files of an earlier run, drops half-written ones
@@ -106,12 +106,20 @@ class MediaServer(
     }
 
     /**
-     * Binds and starts the engine for [start] and [rebindHost]. A busy address throws [BindException] to the caller:
+     * Blocking form of [startSuspending], for tests and callers that are not in a coroutine. Production calls
+     * [startSuspending]: a blocking start inside a coroutine would hold its dispatcher thread through the bind.
+     */
+    fun start() {
+        runBlocking { startSuspending() }
+    }
+
+    /**
+     * Binds and starts the engine for [startSuspending] and [rebindHostSuspending]. A busy address throws [BindException] to the caller:
      * Ktor CIO binds inside its accept job, where a failure is uncaught and ends the process, so the address
      * is probed first (reuseAddress, as for the real bind: a restart must not hit EADDRINUSE from TIME_WAIT) and the
      * engine gets a supervisor that records a failure that slips past the probe. A failed call leaves [server] untouched.
      */
-    private fun startEngine(bindHost: String, bindPort: Int) {
+    private suspend fun startEngine(bindHost: String, bindPort: Int) {
         if (bindPort != 0) requireBindable(bindHost, bindPort)
         val asyncFailure = AtomicReference<Throwable?>(null)
         val handler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
@@ -129,7 +137,7 @@ class MediaServer(
         }
         try {
             s.start(wait = false)
-            boundPort = runBlocking { s.engine.resolvedConnectors().first().port }
+            boundPort = s.engine.resolvedConnectors().first().port
         } catch (e: Throwable) {
             runCatching { s.stop(0, 0) }
             val cause = asyncFailure.get() ?: e
@@ -158,7 +166,7 @@ class MediaServer(
      * cache, releases every pin and closes the file builder, which would 404 the track that is playing. A bind failure
      * propagates and leaves the server not listening ([isListening] is false, [isRunning] stays true, so the call can be repeated).
      */
-    fun rebindHost(newHost: String) {
+    suspend fun rebindHostSuspending(newHost: String) {
         check(server != null) { "not started" }
         val keepPort = boundPort
         listening = false
@@ -166,6 +174,11 @@ class MediaServer(
         server?.stop(200, 1000)
         host = newHost
         startEngine(newHost, keepPort)
+    }
+
+    /** Blocking form of [rebindHostSuspending], for tests and callers that are not in a coroutine; production calls the suspend form. */
+    fun rebindHost(newHost: String) {
+        runBlocking { rebindHostSuspending(newHost) }
     }
 
     fun stop() {
@@ -177,7 +190,7 @@ class MediaServer(
         files?.close()
     }
 
-    /** Only says the server object was started and not stopped. After a failed [rebindHost] it stays true; [isListening] is the truth about the socket. */
+    /** Only says the server object was started and not stopped. After a failed [rebindHostSuspending] it stays true; [isListening] is the truth about the socket. */
     fun isRunning(): Boolean = server != null
 
     /** True while the socket is bound and accepting. A housekeeping pass rebinds a running server that is not listening. */
