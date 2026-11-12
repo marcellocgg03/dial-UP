@@ -593,6 +593,8 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                 ReceiverDeps(
                     bindHost = net.wifiIp.hostAddress.orEmpty(),
                     accessPolicy = policy::allowsHttp,
+                    isGuest = policy::isGuest,
+                    onGuestLaunch = deps.onGuestLaunch,
                     advertiser = advertiser,
                     serverHeader = deps.serverHeader,
                     http = deps.http.newBuilder().build(),

@@ -51,6 +51,10 @@ data class ReceiverDeps(
     val sink: EventSink = NoEvents,
     val scope: CoroutineScope,
     val onDialRequest: (DialRequest) -> Unit = {},
+    /** True for a caller served only because the LAN is allowed. */
+    val isGuest: (String) -> Boolean = { false },
+    /** A guest started a cast launch: the speaker's name and the caller's address. */
+    val onGuestLaunch: (speaker: String, remote: String) -> Unit = { _, _ -> },
 )
 
 private val UUID_SHAPE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -170,6 +174,8 @@ class YouTubeCastReceiver(
                     modelName = options.model,
                     pid = app.pid,
                     accessPolicy = deps.accessPolicy,
+                    isGuest = deps.isGuest,
+                    onGuestLaunch = { remote -> deps.onGuestLaunch(friendlyName, remote) },
                 )
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
                 withContext(Dispatchers.IO) { created.startSuspending() }

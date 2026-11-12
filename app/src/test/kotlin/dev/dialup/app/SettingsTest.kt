@@ -135,6 +135,7 @@ class SettingsTest {
         assertEquals(DialAccessMode.PHONE, d.dialAccess)
         assertFalse(d.clearOnCastEnd)
         assertFalse(d.showAudioFormat)
+        assertTrue(d.notifyGuests, "the guest notice is on by default")
         assertEquals(ThemeMode.SYSTEM, d.theme)
         assertEquals(null, d.logEnabled)
         assertEquals(null, d.gapless)
@@ -357,5 +358,17 @@ class SettingsTest {
     @Test
     fun theUpdateCheckIsNotAConfigOverride() {
         assertTrue(settingsOverrideKeys(AppSettingsData(updateCheckEnabled = false)).isEmpty())
+    }
+
+    @Test
+    fun theGuestNoticeSwitchRoundTripsAndOnlyOffIsWritten() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        s.update { it.copy(notifyGuests = false) }
+        assertFalse(settings(f).data.value.notifyGuests)
+        assertTrue(f.readText().contains(""""notifyGuests":false"""))
+        s.update { it.copy(notifyGuests = true) }
+        assertTrue(settings(f).data.value.notifyGuests)
+        assertFalse(f.readText().contains("notifyGuests"))
     }
 }

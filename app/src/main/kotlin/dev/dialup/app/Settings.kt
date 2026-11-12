@@ -64,6 +64,9 @@ data class AppSettingsData(
     val dialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS,
     val clearOnCastEnd: Boolean = false,
     val showAudioFormat: Boolean = false,
+
+    /** Tell the author when another device on the LAN starts a cast on a speaker (LAN mode only). */
+    val notifyGuests: Boolean = true,
     /** The text before a speaker's own name in the cast menu. Empty is allowed. Read live; a change renames the running speakers. */
     val namePrefix: String = DEFAULT_NAME_PREFIX,
     val theme: ThemeMode = DEFAULT_THEME,
@@ -96,6 +99,7 @@ private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
 private const val KEY_SHOW_AUDIO_FORMAT = "showAudioFormat"
+private const val KEY_NOTIFY_GUESTS = "notifyGuests"
 private const val KEY_NAME_PREFIX = "namePrefix"
 private const val KEY_THEME = "theme"
 private const val KEY_UPDATE_CHECK = "updateCheckEnabled"
@@ -106,7 +110,7 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NOTIFY_GUESTS, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
     KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
@@ -156,6 +160,7 @@ fun parseSettings(text: String): ParsedSettings {
     }
     bool(KEY_CLEAR_ON_CAST_END)?.let { data = data.copy(clearOnCastEnd = it) }
     bool(KEY_SHOW_AUDIO_FORMAT)?.let { data = data.copy(showAudioFormat = it) }
+    bool(KEY_NOTIFY_GUESTS)?.let { data = data.copy(notifyGuests = it) }
     o[KEY_NAME_PREFIX]?.let { e ->
         val text = (e as? JsonPrimitive)?.takeIf { it.isString }?.content
         if (text != null) data = data.copy(namePrefix = text) else problems += KEY_NAME_PREFIX
@@ -195,6 +200,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
     if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
     if (data.showAudioFormat) known[KEY_SHOW_AUDIO_FORMAT] = JsonPrimitive(true)
+    if (!data.notifyGuests) known[KEY_NOTIFY_GUESTS] = JsonPrimitive(false)
     if (data.namePrefix != DEFAULT_NAME_PREFIX) known[KEY_NAME_PREFIX] = JsonPrimitive(data.namePrefix)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)

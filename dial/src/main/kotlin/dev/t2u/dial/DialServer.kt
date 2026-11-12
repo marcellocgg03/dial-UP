@@ -55,6 +55,10 @@ data class DialConfig(
     val pid: String? = null,
     /** Decides per request, from the remote address string, whether a call is served. */
     val accessPolicy: (String) -> Boolean = { true },
+    /** True for a caller that is served only because the LAN is allowed (another device, not the phone). */
+    val isGuest: (String) -> Boolean = { false },
+    /** Called with the caller's address after a cast launch from a guest was accepted. Must not throw; a throw is dropped. */
+    val onGuestLaunch: ((remote: String) -> Unit)? = null,
 )
 
 /** One handled HTTP call, reported after the response was produced (404s included). */
@@ -235,6 +239,14 @@ class DialServer(
                             } catch (_: Throwable) {
                                 sendStatus(call, HttpStatusCode.ServiceUnavailable)
                                 return@post
+                            }
+                        }
+                        val caller = call.request.local.remoteAddress
+                        if (config.isGuest(caller)) {
+                            try {
+                                config.onGuestLaunch?.invoke(caller)
+                            } catch (_: Exception) {
+                                // a notice never changes the answer to the caller
                             }
                         }
                         if (!locationPid.isNullOrEmpty()) call.response.header("LOCATION", "${baseUrl(call)}/apps/$APP/$locationPid")
