@@ -85,7 +85,7 @@ class RestartPrompt(
      */
     val namesChanged: StateFlow<Boolean> = names.asStateFlow()
 
-    /** True while the info card is shown: the bridge restarted for a new name and only the YouTube apps are left to refresh. */
+    /** True while the info card is shown: a new name was applied live and only the YouTube apps are left to refresh. */
     val notice: StateFlow<Boolean> = noticeCard.asStateFlow()
 
     /** Hides the info card (its close icon). */
@@ -97,20 +97,16 @@ class RestartPrompt(
     }
 
     /**
-     * A new name with nothing cast: restarts the bridge at once, as nothing is lost, and with [showCard] shows the info card
-     * (no button) for [NOTICE_MS] that says to clear the YouTube apps from recents.
+     * A new prefix applied live with nothing cast: shows the info card (no button) for [NOTICE_MS], which says to clear the
+     * YouTube apps from recents.
      */
     @Synchronized
-    fun restartForNames(showCard: Boolean) {
-        dismiss()
-        run(AUTO_RESTART_SOURCE)
-        if (showCard) {
-            noticeTimer?.cancel()
-            noticeCard.value = true
-            noticeTimer = scope.launch {
-                delay(NOTICE_MS)
-                noticeCard.value = false
-            }
+    fun showNamesNotice() {
+        noticeTimer?.cancel()
+        noticeCard.value = true
+        noticeTimer = scope.launch {
+            delay(NOTICE_MS)
+            noticeCard.value = false
         }
     }
 

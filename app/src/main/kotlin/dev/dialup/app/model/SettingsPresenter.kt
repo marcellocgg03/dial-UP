@@ -58,6 +58,9 @@ interface BridgePort {
     /** How many renderers are being cast to now; 0 while there is no bridge. Update now is not offered while it is above 0. */
     val casting: StateFlow<Int> get() = NOT_CASTING
 
+    /** The name prefix changed: the running speakers take their new names at once. The default does nothing. */
+    suspend fun refreshNames() {}
+
     /** Whether there is a running bridge now. */
     val running: Boolean get() = instance.value != null
 
@@ -375,27 +378,26 @@ class SettingsPresenter(
 
     /**
      * The text before each speaker's own name in the cast menu. Control characters are dropped and the text is cut to
-     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. The running speakers keep their names until the bridge restarts (the
-     * restart card is shown), so DialUP and YouTube never disagree. Returns the prefix that was saved.
+     * [MAX_NAME_PREFIX_LENGTH]; empty is allowed. With nothing cast the running speakers take the new name at once and an info
+     * card says to clear the YouTube apps from recents; with a cast the names stay until the bridge restarts (the restart
+     * card asks for it), so a cast is never cut. Returns the prefix that was saved.
      */
     fun setNamePrefix(text: String): String {
         val clean = text.filter { !it.isISOControl() }.take(MAX_NAME_PREFIX_LENGTH).trim()
         settings.update { it.copy(namePrefix = clean) }
-        namesChanged(SettingKey.NAME_PREFIX, showCard = true)
+        if (bridge.running && bridge.casting.value == 0) {
+            // nothing cast: the running speakers take the name at once and only the YouTube apps are left to refresh
+            scope.launch { bridge.refreshNames() }
+            restart.showNamesNotice()
+        } else {
+            changed(SettingKey.NAME_PREFIX)
+        }
         return clean
     }
 
     /** A renderer was renamed or reset while something is cast: the new name is used at the next bridge start, so the restart card is shown. */
     fun onRenamed() {
         changed(SettingKey.RENAME)
-    }
-
-    /**
-     * Nothing cast: the bridge restarts at once (nothing is lost) and only the YouTube apps are left to refresh, which the info
-     * card says when [showCard]. Something cast: the restart card asks, as for any setting that needs a restart.
-     */
-    private fun namesChanged(key: SettingKey, showCard: Boolean) {
-        if (bridge.running && bridge.casting.value == 0) restart.restartForNames(showCard) else changed(key)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {

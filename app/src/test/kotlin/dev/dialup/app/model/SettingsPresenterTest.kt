@@ -61,6 +61,12 @@ class FakeBridgePort(
     override val casting: StateFlow<Int> get() = castingFlow
     override val instance: StateFlow<Any?> get() = flow
 
+    var refreshCalls = 0
+
+    override suspend fun refreshNames() {
+        refreshCalls++
+    }
+
     var cleared: Int? = 3
     var info: CacheInfo? = CacheInfo(files = 2, bytes = 5_000_000, limitBytes = 256L * 1024 * 1024)
     var outcome: YtDlpUpdateOutcome? = null
@@ -169,7 +175,7 @@ class SettingsPresenterTest {
     }
 
     @Test
-    fun `name prefix is cleaned, may be empty, and restarts an idle bridge with an info card`() = runTest {
+    fun `name prefix is cleaned, may be empty, and applies live with an info card when nothing is cast`() = runTest {
         val settings = FakeSettingsPort()
         val bridge = FakeBridgePort()
         val p = presenter(settings, bridge)
@@ -179,7 +185,8 @@ class SettingsPresenterTest {
         runCurrent()
         assertEquals("🎵", settings.data.value.namePrefix)
         assertEquals("🎵", p.state.value.namePrefix)
-        assertEquals(1, bridge.restartCalls)
+        assertEquals(1, bridge.refreshCalls)
+        assertEquals(0, bridge.restartCalls)
         assertTrue(p.restart.notice.value)
         assertFalse(p.restart.visible.value)
 
@@ -200,6 +207,7 @@ class SettingsPresenterTest {
         assertTrue(p.restart.visible.value)
         assertTrue(p.restart.namesChanged.value)
         assertFalse(p.restart.notice.value)
+        assertEquals(0, bridge.refreshCalls)
         assertEquals(0, bridge.restartCalls)
     }
 
