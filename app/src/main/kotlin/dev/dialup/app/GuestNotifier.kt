@@ -15,7 +15,7 @@ internal fun guestNoticeText(remote: String, speaker: String): String = "$remote
 
 /**
  * The notification id for [remote]: the same address always gets the same id, so a second launch from it replaces its
- * notification (and alerts again) instead of piling up. Kept clear of the bridge notification's id.
+ * notification (without alerting again) instead of piling up. Kept clear of the bridge notification's id.
  */
 internal fun guestNoticeId(remote: String): Int = GuestNotifier.ID_BASE + (remote.hashCode() and 0xFFFF)
 
@@ -40,7 +40,7 @@ internal class GuestNotifier(private val context: Context) {
                 .setContentText(guestNoticeText(remote, speaker))
                 .setContentIntent(open)
                 .setAutoCancel(true)
-                .setOnlyAlertOnce(false)
+                .setOnlyAlertOnce(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .build()
             val manager = NotificationManagerCompat.from(context)

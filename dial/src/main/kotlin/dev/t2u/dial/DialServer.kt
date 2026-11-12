@@ -57,8 +57,15 @@ data class DialConfig(
     val accessPolicy: (String) -> Boolean = { true },
     /** True for a caller that is served only because the LAN is allowed (another device, not the phone). */
     val isGuest: (String) -> Boolean = { false },
-    /** Called with the caller's address after a cast launch from a guest was accepted. Must not throw; a throw is dropped. */
+    /**
+     * Called with the caller's address after a cast launch from a guest was accepted (the launch callback returned a pid), at
+     * most once per address per [guestNoticeIntervalMs]. Must not throw; a throw is dropped.
+     */
     val onGuestLaunch: ((remote: String) -> Unit)? = null,
+    /** Minimum time between two [onGuestLaunch] calls for the same remote address. */
+    val guestNoticeIntervalMs: Long = 30_000L,
+    /** Monotonic milliseconds; replaceable so tests need not wait. */
+    val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
 )
 
 /** One handled HTTP call, reported after the response was produced (404s included). */
@@ -242,7 +249,8 @@ class DialServer(
                             }
                         }
                         val caller = call.request.local.remoteAddress
-                        if (config.isGuest(caller)) {
+                        // only an accepted launch (the callback returned a pid) is worth a notice, and one per address per window
+                        if (!locationPid.isNullOrEmpty() && config.isGuest(caller) && guestNoticeDue(caller)) {
                             try {
                                 config.onGuestLaunch?.invoke(caller)
                             } catch (_: Exception) {
@@ -274,6 +282,23 @@ class DialServer(
                 }
             }
         }
+    }
+
+    private val lastGuestNotice = HashMap<String, Long>()
+
+    /** True when [remote] has not been reported within [DialConfig.guestNoticeIntervalMs]; records the report. */
+    private fun guestNoticeDue(remote: String): Boolean = synchronized(lastGuestNotice) {
+        val now = config.clockMs()
+        val last = lastGuestNotice[remote]
+        if (last != null && now - last < config.guestNoticeIntervalMs) return false
+        if (lastGuestNotice.size >= MAX_GUEST_ENTRIES) {
+            lastGuestNotice.values.removeAll { now - it >= config.guestNoticeIntervalMs }
+            if (lastGuestNotice.size >= MAX_GUEST_ENTRIES) {
+                lastGuestNotice.entries.minByOrNull { it.value }?.let { lastGuestNotice.remove(it.key) }
+            }
+        }
+        lastGuestNotice[remote] = now
+        true
     }
 
     private fun baseUrl(call: ApplicationCall): String = "http://${call.request.host()}:$boundPort${config.prefix}"
@@ -320,6 +345,7 @@ class DialServer(
 
     companion object {
         const val MAX_BODY = 4096
+        private const val MAX_GUEST_ENTRIES = 256
         private const val APP = "YouTube"
         private val XML_UTF8 = ContentType.parse("application/xml; charset=utf-8")
         private val BODY_KEY = AttributeKey<String>("dial-body")
