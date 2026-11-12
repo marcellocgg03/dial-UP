@@ -180,8 +180,8 @@ class Renderer(
     /** Numbers the pending Seeks, so a poll can tell that the state it read is from before the Seek it sees. */
     private val seekSeq = AtomicInteger()
 
-    /** Consecutive polls that found the speaker away from the sender's seekbar; only the poll touches it. */
-    private var driftPolls = 0
+    /** Consecutive polls that found the speaker away from the sender's seekbar; moved by the poll and reset from command paths, so atomic. */
+    private val driftPolls = AtomicInteger()
 
     /** When the sender's seekbar was last corrected, for the minimum gap; only moved by [correctSender]. */
     @Volatile private var lastCorrectionAt: Long = Long.MIN_VALUE / 2
@@ -223,7 +223,7 @@ class Renderer(
      * Consecutive polls that read a non-empty speaker URI that is not one of our own streams while we hold a track.
      * Two of them mean another source took the speaker over. Only the poll moves it, [adopt] resets it.
      */
-    private var foreignPolls = 0
+    private val foreignPolls = AtomicInteger()
 
     /** The speaker's own track metadata is reported once per load (reset in [adopt]). */
     @Volatile private var metaReported = false
@@ -265,7 +265,7 @@ class Renderer(
      * Polls in a row that read STOPPED at the end of a track while the speaker already held the queued stream.
      * Touched only by the poll; reset by [adopt] and by any poll that reads PLAYING.
      */
-    private var stopGracePolls = 0
+    private val stopGracePolls = AtomicInteger()
 
     /** True only while the hand-off's own [next] runs: the one Stop that may be skipped because the speaker already moved on. */
     @Volatile private var handingOff = false
@@ -957,8 +957,8 @@ class Renderer(
             formats.markPlayed(item.current.format)
         }
         metaReported = false
-        foreignPolls = 0
-        stopGracePolls = 0
+        foreignPolls.set(0)
+        stopGracePolls.set(0)
         expectStop = false
         loadedThisSession = true
         pollLoop.start()
@@ -1499,7 +1499,7 @@ class Renderer(
     /** Tells the sender the speaker's position again; every such correction counts for the minimum gap and ends a drift streak. */
     private suspend fun correctSender() {
         lastCorrectionAt = deps.clock()
-        driftPolls = 0
+        driftPolls.set(0)
         notifyPositionCorrection()
     }
 
@@ -1518,14 +1518,14 @@ class Renderer(
         if (state != "PLAYING" || polledRaw == null || expected == null || status != PlayerStatus.PLAYING ||
             pending != null || c == null || !c.playSent
         ) {
-            driftPolls = 0
+            driftPolls.set(0)
             return
         }
         if (Math.abs(polledRaw - expected) <= SEEK_CORRECTION_TOLERANCE_S) {
-            driftPolls = 0
+            driftPolls.set(0)
             return
         }
-        if (++driftPolls < DRIFT_CONFIRM_POLLS) return
+        if (driftPolls.incrementAndGet() < DRIFT_CONFIRM_POLLS) return
         if (deps.clock() - lastCorrectionAt < DRIFT_MIN_GAP_MS) return
         note(
             "info",
@@ -1839,7 +1839,7 @@ class Renderer(
 
     /** The speaker reads PLAYING. True when the poll is over (it followed the queued track). */
     private suspend fun pollPlaying(c: Current?): Boolean {
-        stopGracePolls = 0
+        stopGracePolls.set(0)
         if (!sawPlaying) {
             sawPlaying = true
             if (c != null) confirmFormat(c)
@@ -1872,15 +1872,15 @@ class Renderer(
             // The speaker took the queued track as its next one but did not play on into it.
             // A Sonos may report STOPPED for a moment while it switches: while it already holds the queued stream
             // the poll waits a few polls instead of reloading it (a reload would start the track twice).
-            if (stopGracePolls < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
+            if (stopGracePolls.get() < GAPLESS_STOP_GRACE_POLLS && speakerHolds(accepted)) {
                 if (destroyed || epoch != commandEpoch.get()) return
-                if (stopGracePolls == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
-                stopGracePolls++
+                if (stopGracePolls.get() == 0) note("info", "Speaker stopped at the switch - waiting for it to play the queued track")
+                stopGracePolls.incrementAndGet()
                 return
             }
             if (destroyed || epoch != commandEpoch.get()) return
             // It stopped instead of switching, or held the stream and never played it: what it was believed to do is wrong.
-            stopGracePolls = 0
+            stopGracePolls.set(0)
             prefetch.gaplessSupported = null
             store?.set(LEARNED_GAPLESS_KEY, null)
             note("info", "Speaker stopped at the end instead of playing the queued track - gapless support forgotten")
@@ -1916,11 +1916,10 @@ class Renderer(
     private fun countForeignPoll(foreign: Boolean): Boolean {
         if (expectStop || destroyed || loadsBeforeUri.get() > 0 || uriInFlight.isNotEmpty()) return false
         if (!foreign) {
-            foreignPolls = 0
+            foreignPolls.set(0)
             return false
         }
-        foreignPolls++
-        return foreignPolls >= FOREIGN_POLLS_FOR_TAKEOVER
+        return foreignPolls.incrementAndGet() >= FOREIGN_POLLS_FOR_TAKEOVER
     }
 
     /**
@@ -1931,7 +1930,7 @@ class Renderer(
      */
     private fun releaseTakenOverSpeaker(uri: String?) {
         pollLoop.stop()
-        foreignPolls = 0
+        foreignPolls.set(0)
         forgetTrack()
         val scheme = uri?.substringBefore(':', "")
             ?.filter { it.isLetterOrDigit() || it == '-' || it == '+' || it == '.' }
