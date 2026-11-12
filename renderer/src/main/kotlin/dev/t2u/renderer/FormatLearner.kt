@@ -5,6 +5,7 @@ package dev.t2u.renderer
 import dev.t2u.media.FALLBACK_CHAIN
 import dev.t2u.upnp.SinkProtocol
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The speaker's format knowledge: the sink protocols it listed, the format remembered in its store, and the formats
@@ -22,7 +23,7 @@ internal class FormatLearner(
     @Volatile private var learnedFormat: String? = null
 
     /** Formats that reached PLAYING on this speaker since this renderer started; a start failure never forgets one of these. */
-    private val playedFormats: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val playedFormats: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun setProtocols(sink: List<SinkProtocol>?) {
         protocols = sink

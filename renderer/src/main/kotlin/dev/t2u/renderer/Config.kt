@@ -5,6 +5,7 @@ package dev.t2u.renderer
 import dev.t2u.media.YTDLP_CHANNELS
 import dev.t2u.media.YTDLP_DEFAULT_CHANNEL
 import java.io.File
+import java.util.regex.PatternSyntaxException
 
 /** Name shown in the YouTube cast menu. Placeholders: {name} {manufacturer} {model}. */
 const val DEFAULT_NAME_TEMPLATE = "🔊 {name}"
@@ -65,7 +66,7 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
         fun compileOrNull(pattern: String): Regex? =
             try {
                 Regex(pattern, RegexOption.IGNORE_CASE)
-            } catch (_: java.util.regex.PatternSyntaxException) {
+            } catch (_: PatternSyntaxException) {
                 null
             }
     }

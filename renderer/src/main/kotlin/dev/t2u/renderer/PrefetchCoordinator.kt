@@ -7,6 +7,7 @@ import dev.t2u.upnp.UpnpError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Keeps the next track prepared while the current one plays and hands it to the speaker as its next one (renderer.js
@@ -58,7 +59,7 @@ internal class PrefetchCoordinator(
     private val prefetchBackoff = PrefetchBackoff(PREFETCH_RETRY_MS, PREFETCH_RETRY_MAX_MS, PREFETCH_FAILURES_KEPT)
 
     /** True while one prefetch coroutine runs: they go one at a time, and the poll never waits for one. */
-    private val prefetching = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val prefetching = AtomicBoolean(false)
 
     /** Empties the slot and returns what it held, without freeing the stream. */
     fun takeQueued(): Queued? = synchronized(queueLock) { queued.also { queued = null } }
