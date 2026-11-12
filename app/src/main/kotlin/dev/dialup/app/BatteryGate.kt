@@ -40,8 +40,8 @@ fun startReasonOf(intentIsNull: Boolean, action: String?, reasonExtra: String?):
 fun gateDecision(exempt: Boolean, enabled: Boolean, reason: StartReason): Boolean = exempt && enabled
 
 /**
- * Whether BOOT_COMPLETED may start the bridge: the author's switch is on and the exemption is held. It is checked before the service is started, so the system never gets a foreground-service
- * start the service would immediately deny.
+ * Whether BOOT_COMPLETED may start the bridge: the author's switch is on and the exemption is held. It is checked before the
+ * service is started, so the system never gets a foreground-service start the service would immediately deny.
  */
 fun bootStartDecision(enabled: Boolean, exempt: Boolean): Boolean = enabled && exempt
 

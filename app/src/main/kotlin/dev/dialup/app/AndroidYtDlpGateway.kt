@@ -107,7 +107,8 @@ class AndroidYtDlpGateway(
         )
         val body = (result as? FetchResult.Body)?.text ?: return null
         return try {
-            (Json.parseToJsonElement(body) as? JsonObject)?.get("tag_name")?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            (Json.parseToJsonElement(body) as? JsonObject)
+                ?.get("tag_name")?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
         } catch (_: Exception) {
             null
         }

@@ -97,7 +97,10 @@ fun isBindFailure(t: Throwable): Boolean {
     return false
 }
 
-/** Delay of the start retry after [attempt] earlier consecutive bind failures (0 for the first retry); other failures wait [START_RETRY_MS]. */
+/**
+ * Delay of the start retry after [attempt] earlier consecutive bind failures (0 for the first retry); other failures wait
+ * [START_RETRY_MS].
+ */
 fun startRetryDelayMs(attempt: Int, bindFailure: Boolean): Long =
     if (bindFailure && attempt < QUICK_BIND_RETRIES) QUICK_BIND_RETRY_MS else START_RETRY_MS
 
