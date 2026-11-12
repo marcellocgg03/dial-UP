@@ -131,7 +131,9 @@ class AppModel private constructor(context: Context) {
                 SpeakerStores.of(appContext).hidden.add(HiddenSpeaker(speaker.udn, speaker.name, speaker.address))
             }
             // a hidden card loses its pin
-            SpeakerStores.of(appContext).pinned.remove(speaker.udn)
+            if (SpeakerStores.of(appContext).pinned.remove(speaker.udn)) {
+                ServiceHub.service?.evidence?.event("unpinned", mapOf("udn" to speaker.udn, "source" to "hide"))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -210,6 +212,7 @@ class AppModel private constructor(context: Context) {
         try {
             val store = SpeakerStores.of(appContext).pinned
             if (pin) store.add(PinnedSpeaker(speaker.udn, speaker.name, speaker.address)) else store.remove(speaker.udn)
+            ServiceHub.service?.evidence?.event(if (pin) "pinned" else "unpinned", mapOf("udn" to speaker.udn, "source" to "menu"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -233,7 +236,7 @@ class AppModel private constructor(context: Context) {
             if (bridge == null || !bridge.removeManual(udn)) stores.manual.remove(udn)
             stores.hidden.remove(udn)
             stores.names.remove(udn)
-            stores.pinned.remove(udn)
+            if (stores.pinned.remove(udn)) ServiceHub.service?.evidence?.event("unpinned", mapOf("udn" to udn, "source" to "delete"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
