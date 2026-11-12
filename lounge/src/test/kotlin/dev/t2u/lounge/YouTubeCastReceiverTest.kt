@@ -116,7 +116,12 @@ class YouTubeCastReceiverTest {
         dataStore = dataStore,
     )
 
-    private fun deps(adv: DialAdvertiser = advertiser, accessPolicy: (String) -> Boolean = { true }) = ReceiverDeps(
+    private fun deps(
+        adv: DialAdvertiser = advertiser,
+        accessPolicy: (String) -> Boolean = { true },
+        isGuest: (String) -> Boolean = { false },
+        onGuestLaunch: (String, String) -> Unit = { _, _ -> },
+    ) = ReceiverDeps(
         bindHost = "127.0.0.1",
         accessPolicy = accessPolicy,
         advertiser = adv,
@@ -125,6 +130,8 @@ class YouTubeCastReceiverTest {
         endpoints = fake.endpoints,
         sink = sink,
         scope = scope,
+        isGuest = isGuest,
+        onGuestLaunch = onGuestLaunch,
     )
 
     private fun receiver(
@@ -191,6 +198,39 @@ class YouTubeCastReceiverTest {
         // and the player's state goes back to the sender
         awaitUntil { fake.sentNames("cl").flatten().let { "nowPlaying" in it && "onStateChange" in it } }
         assertTrue(fake.sentNames("cl").flatten().containsAll(listOf("nowPlaying", "onStateChange")))
+    }
+
+    @Test
+    fun anAcceptedLaunchFromAGuestReportsTheSpeakersNameAndTheCallersAddressAndARejectedOneDoesNot() = run {
+        val guests = CopyOnWriteArrayList<Pair<String, String>>()
+        val r = YouTubeCastReceiver(
+            player,
+            options("🔊 Kitchen"),
+            deps(isGuest = { true }, onGuestLaunch = { speaker, remote -> guests.add(speaker to remote) }),
+        ).also { receivers.add(it) }
+        r.start()
+        val port = dialPort()
+
+        // no pairing code: the lounge side refuses it, no LOCATION, and nobody is told a cast started
+        val rejected = launchPost(port, "theme=cl")
+        assertEquals(200, rejected.statusCode())
+        assertFalse(rejected.headers().firstValue("LOCATION").isPresent)
+        assertEquals(emptyList(), guests.toList())
+
+        val accepted = launchPost(port, "pairingCode=ABCDEF&theme=cl")
+        assertTrue(accepted.headers().firstValue("LOCATION").isPresent)
+        assertEquals(listOf("🔊 Kitchen" to "127.0.0.1"), guests.toList())
+
+        // a caller that is not a guest is never reported
+        val ownerAdv = RecordingAdvertiser()
+        val owner = YouTubeCastReceiver(
+            player,
+            options("🔊 Owner"),
+            deps(adv = ownerAdv, isGuest = { false }, onGuestLaunch = { s, r -> guests.add(s to r) }),
+        ).also { receivers.add(it) }
+        owner.start()
+        launchPost(dialPort(ownerAdv), "pairingCode=ABCDEF&theme=cl")
+        assertEquals(1, guests.size)
     }
 
     private fun freePort(): Int = java.net.ServerSocket(0).use { it.localPort }
