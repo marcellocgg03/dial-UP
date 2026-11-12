@@ -20,8 +20,9 @@ internal class SoapTransport(
     private val destroyed: () -> Boolean,
     private val clock: () -> Long,
     private val note: (level: String, message: String) -> Unit,
+    allowLoopback: Boolean = false,
 ) {
-    private val soap = SoapClient(http)
+    private val soap = SoapClient(http, allowLoopback)
 
     suspend fun call(svc: String, action: String, vararg params: Pair<String, Any?>): Map<String, String> {
         val service = description()?.services?.get(SERVICE_ID_PREFIX + svc)

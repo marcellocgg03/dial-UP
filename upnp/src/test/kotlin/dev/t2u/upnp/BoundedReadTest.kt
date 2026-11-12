@@ -59,7 +59,7 @@ class BoundedReadTest {
         server.use {
             val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://127.0.0.1:${server.localPort}/ctl", "", "")
             val e = assertFailsWith<UpnpError> {
-                runBlocking { SoapClient(lanHttpClient()).callAction(svc, "Play", timeoutMs = 10_000) }
+                runBlocking { SoapClient(lanHttpClient(), allowLoopback = true).callAction(svc, "Play", timeoutMs = 10_000) }
             }
             assertEquals("ENETWORK", e.code)
         }

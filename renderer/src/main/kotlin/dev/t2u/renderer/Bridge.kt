@@ -560,6 +560,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
                     nameTemplate = deps.namePrefix?.let { prefix -> { nameTemplateFor(prefix()) } } ?: { config.nameTemplate },
                     userName = { deps.names?.get(it) },
+                    allowLoopbackSpeakers = deps.allowLoopbackSpeakers,
                     // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
                     playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
                 ),

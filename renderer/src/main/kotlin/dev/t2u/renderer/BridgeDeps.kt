@@ -88,6 +88,8 @@ data class BridgeDeps(
      * Null means the fixed [Config.nameTemplate] decides; the app passes a supplier over its settings.
      */
     val namePrefix: (() -> String)? = null,
+    /** Test seam, passed to every renderer: see [RendererDeps.allowLoopbackSpeakers]. */
+    val allowLoopbackSpeakers: Boolean = false,
     /**
      * The cache cap in MiB, read by the file cache at every prune so a size changed in the app applies without a
      * restart. Null, or a supplier that throws, means [Config.cacheMb] decides.

@@ -145,6 +145,7 @@ class Renderer(
         destroyed = { destroyed },
         clock = deps.clock,
         note = { level, message -> note(level, message) },
+        allowLoopback = deps.allowLoopbackSpeakers,
     )
 
     private val formats = FormatLearner(

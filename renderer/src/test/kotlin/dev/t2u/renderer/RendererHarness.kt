@@ -163,6 +163,7 @@ internal class RendererHarness(
             playlistRequestHandlerFactory = playlistRequestHandlerFactory,
             clock = clock,
             pause = pause,
+            allowLoopbackSpeakers = true,
         ),
     )
 

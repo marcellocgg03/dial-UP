@@ -272,6 +272,7 @@ internal class BridgeHarness(
             config, resolver, launcher, lanHttpClient(), { check(!accessModeFails) { "access mode unavailable" }; accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
             loungeEndpoints = lounge.endpoints,
             innerTubeEndpoints = innerTube.endpoints,
+            allowLoopbackSpeakers = true,
             sourceDownloader = sourceDownloader,
             // null: leave BridgeDeps' own default (googlevideo over https only) in place
             upstreamPolicy = upstreamPolicy ?: UpstreamPolicy.GOOGLEVIDEO,

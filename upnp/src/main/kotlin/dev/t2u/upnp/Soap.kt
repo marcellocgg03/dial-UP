@@ -95,7 +95,7 @@ private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
  * [http] must be [lanHttpClient] or derived from it with newBuilder(), so SOAP can only reach
  * private LAN addresses; the no-argument constructor does exactly that.
  */
-class SoapClient(private val http: OkHttpClient) {
+class SoapClient(private val http: OkHttpClient, private val allowLoopback: Boolean = false) {
     constructor() : this(lanHttpClient())
 
 
@@ -118,6 +118,11 @@ class SoapClient(private val http: OkHttpClient) {
                 .build()
         } catch (e: IllegalArgumentException) {
             throw UpnpError("$action: bad control URL (${e.message})", "ENETWORK")
+        }
+        // A speaker is another device: a control URL on this device's own loopback is a description aiming the call at the
+        // phone itself. The LAN guard allows 127/8 (tests run against loopback fakes), so this is refused here unless [allowLoopback].
+        if (!allowLoopback && isLoopbackHost(request.url.host)) {
+            throw UpnpError("$action: control URL is on this device (refused)", "ENETWORK")
         }
         val call = http.newCall(request)
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -187,6 +192,17 @@ internal suspend fun executeForText(call: Call, maxBytes: Long): Pair<Int, Strin
             }
         },
     )
+}
+
+/** True for `localhost`, 127/8, `::1` and the IPv4-mapped forms of them; never resolves a name. */
+internal fun isLoopbackHost(host: String): Boolean {
+    val h = host.trim().trimEnd('.').lowercase()
+    if (h == "localhost" || h.endsWith(".localhost")) return true
+    val literal = when {
+        h.contains(':') -> try { java.net.InetAddress.getByName(h) } catch (_: Exception) { null }
+        else -> parseIpv4Literal(h)
+    }
+    return literal?.isLoopbackAddress == true
 }
 
 private fun localName(tag: String): String = tag.substringAfterLast(':')

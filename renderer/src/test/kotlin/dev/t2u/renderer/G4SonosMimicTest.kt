@@ -192,6 +192,7 @@ class G4SonosMimicTest {
                 createReceiver = ReceiverFactory { _, _ -> receiver },
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
+                allowLoopbackSpeakers = true,
             ),
         )
         runBlocking { assertTrue(renderer.init()) }

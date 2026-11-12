@@ -124,6 +124,7 @@ class BridgeClearTest {
                 bufferDir = null,
                 loungeEndpoints = lounge.endpoints,
                 innerTubeEndpoints = innerTube.endpoints,
+                allowLoopbackSpeakers = true,
             ),
         )
         bridges.add(bridge)
