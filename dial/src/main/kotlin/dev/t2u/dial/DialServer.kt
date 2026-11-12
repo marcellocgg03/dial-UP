@@ -195,7 +195,7 @@ class DialServer(
 
         // Plugins runs before routing: a refused call never reads its body and never reaches onLaunch.
         app.intercept(ApplicationCallPipeline.Plugins) {
-            if (!config.accessPolicy(call.request.local.remoteAddress)) {
+            if (!config.accessPolicy(call.request.local.remoteAddress) || !originAllowed(call.request.headers[HttpHeaders.Origin])) {
                 sendStatus(call, HttpStatusCode.Forbidden)
                 finish()
             }
@@ -283,6 +283,9 @@ class DialServer(
             }
         }
     }
+
+    /** DIAL asks a receiver to refuse browsers: a request with an Origin is served only for an app origin (`package:...`). */
+    private fun originAllowed(origin: String?): Boolean = origin == null || origin.startsWith("package:")
 
     private val lastGuestNotice = HashMap<String, Long>()
 

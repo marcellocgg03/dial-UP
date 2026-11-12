@@ -233,6 +233,33 @@ class DialServerTest {
         }
     }
 
+    // ----- origin -----------------------------------------------------------------------------
+
+    @Test
+    fun aBrowserOriginIsRefusedButNoOriginAndAnAppOriginAreServed() {
+        val launches = CopyOnWriteArrayList<String>()
+        testApplication {
+            application { DialServer(config, { }, { _, body -> launches.add(body); "pid-1" }).configure(this) }
+            suspend fun status(path: String, origin: String?, post: Boolean = false): HttpStatusCode {
+                val block: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {
+                    header(HttpHeaders.Host, "192.168.50.239:3000")
+                    if (origin != null) header(HttpHeaders.Origin, origin)
+                    if (post) setBody("x=1")
+                }
+                return (if (post) client.post(path, block) else client.get(path, block)).status
+            }
+            assertEquals(HttpStatusCode.OK, status("/ytcr/ssdp/device-desc.xml", null))
+            assertEquals(HttpStatusCode.OK, status("/ytcr/ssdp/device-desc.xml", "package:com.google.android.youtube"))
+            for (bad in listOf("https://evil.example", "http://192.168.50.38:3000", "null", "", "Package:x")) {
+                assertEquals(HttpStatusCode.Forbidden, status("/ytcr/ssdp/device-desc.xml", bad), "GET with Origin '$bad'")
+                assertEquals(HttpStatusCode.Forbidden, status("/ytcr/apps/YouTube", bad, post = true), "POST with Origin '$bad'")
+            }
+            assertEquals(emptyList(), launches.toList(), "a refused request never reaches the launch callback")
+            assertEquals(HttpStatusCode.OK, status("/ytcr/apps/YouTube", "package:com.google.android.youtube", post = true))
+            assertEquals(1, launches.size)
+        }
+    }
+
     // ----- guest launches ---------------------------------------------------------------------
 
     @Test
