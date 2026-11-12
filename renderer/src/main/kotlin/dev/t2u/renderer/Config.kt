@@ -166,7 +166,7 @@ fun receiverName(template: String, friendlyName: String, manufacturer: String, m
     }.trim()
 }
 
-private val PLACEHOLDER = Regex("""\{(name|manufacturer|model)}""")
+private val PLACEHOLDER = Regex("""\{(name|manufacturer|model)\}""")
 
 /**
  * The name template for the author's [prefix]: "<prefix> {name}", or just "{name}" when the prefix is blank. The prefix is
