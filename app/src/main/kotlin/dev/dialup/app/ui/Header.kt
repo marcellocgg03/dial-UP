@@ -43,9 +43,10 @@ import dev.dialup.app.model.toggleUi
 /**
  * The bridge card at the top of both tabs: its switch turns the whole bridge off and on, and turning
  * it off while anything plays asks first. The only subtitle is "Waiting for Wi-Fi", shown when the
- * switch is on, the exemption is held and the phone has no Wi-Fi or hotspot address; otherwise there is none. The switch is labelled "Enable" and is greyed out while the battery exemption is missing; it
- * opens no request itself, the exemption is granted from the battery banner (MainActivity owns the launcher). A grant
- * only makes the switch usable and never flips it: it keeps showing the persisted state.
+ * switch is on, the exemption is held and the phone has no Wi-Fi or hotspot address; otherwise there is none. The switch is
+ * labelled "Enable" and is greyed out while the battery exemption is missing; it opens no request itself, the exemption is
+ * granted from the battery banner (MainActivity owns the launcher). A grant only makes the switch usable and never flips it: it
+ * keeps showing the persisted state.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable

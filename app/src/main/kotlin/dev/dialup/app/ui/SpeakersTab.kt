@@ -55,9 +55,16 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier) {
                 showAudioFormat = ui.showAudioFormat,
             )
         }
-        // the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown (a hidden one is skipped)
+        // the saved manual speakers stay listed, greyed, and can be hidden whenever the bridge's list is not shown
+        // (a hidden one is skipped)
         items(listing.saved, key = { "manual-${it.udn}" }) { card ->
-            SpeakerCard(card, buttons = buttonsFor(card, busy = false), onHide = { model.hide(card) }, onRename = { ui.renaming = card.udn }, onDelete = { model.deleteManual(card.udn) })
+            SpeakerCard(
+                card,
+                buttons = buttonsFor(card, busy = false),
+                onHide = { model.hide(card) },
+                onRename = { ui.renaming = card.udn },
+                onDelete = { model.deleteManual(card.udn) },
+            )
         }
     }
     SpeakersDialogs(model, ui)

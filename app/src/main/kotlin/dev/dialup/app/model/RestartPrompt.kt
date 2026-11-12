@@ -47,7 +47,8 @@ fun autoRestartOnOpen(running: RestartFields?, saved: RestartFields, switchedOn:
  *
  * The card shows after a setting that needs a restart while the bridge runs, and hides itself after [visibleMs]. Hiding only
  * hides: the timer never runs [action]. Pressing Restart goes through [restartStep]: with nothing loading, playing or paused the
- * action runs at once, otherwise [confirmPending] asks first and [confirmRestart] runs it. The action runs once at a time, so a double tap cannot restart twice.
+ * action runs at once, otherwise [confirmPending] asks first and [confirmRestart] runs it. The action runs once at a time, so a
+ * double tap cannot restart twice.
  * The action gets the source of the restart ([RESTART_SOURCE], or [AUTO_RESTART_SOURCE] for [restartNow]).
  *
  * Opening the app with a restart owed: [restartNow] runs the action at once, and [showUntilCastEnds]

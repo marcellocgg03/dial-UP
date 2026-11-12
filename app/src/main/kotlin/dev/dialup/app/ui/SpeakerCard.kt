@@ -100,13 +100,19 @@ fun SpeakerCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (artist != null) Text(artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (artist != null) Text(
+                        artist,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 audioFormatLabel(speaker, showAudioFormat)?.let { label ->
                     Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("audio-format-$udn"))
                 }
             }
-            // the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one; Delete only on a renderer saved by address.
+            // the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one;
+            // Delete only on a renderer saved by address.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("btn-menu-$udn")) {
@@ -149,7 +155,11 @@ fun SpeakerCard(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            IconButton(onClick = { onAction(SpeakerAction.PREVIOUS) }, enabled = buttons.previous, modifier = Modifier.testTag("btn-prev-$udn")) {
+            IconButton(
+                onClick = { onAction(SpeakerAction.PREVIOUS) },
+                enabled = buttons.previous,
+                modifier = Modifier.testTag("btn-prev-$udn"),
+            ) {
                 Icon(SkipPreviousIcon, contentDescription = "Previous")
             }
             val pause = buttons.playPause == PlayPause.PAUSE
