@@ -98,7 +98,7 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
 suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000): DeviceDescription {
     val call = http.newCall(Request.Builder().url(location).build())
     call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
-    val (status, text) = executeForText(call)
+    val (status, text) = executeForText(call, MAX_DESCRIPTION_BYTES)
     if (status !in 200..299) throw IOException("HTTP $status fetching $location")
     return parseDescription(text, location)
 }
