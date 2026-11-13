@@ -10,6 +10,12 @@ internal class Outcome {
     var label: String? = null
     var note: String? = null
 
+    /** True when the answer was the server's own busy limit (503 with Retry-After), not a failure to produce the stream. */
+    var busy: Boolean = false
+
+    /** With [busy]: the refusal was the token's own cap, not the global limit. */
+    var perTokenBusy: Boolean = false
+
     /** The upstream calls of this request, for the log (direct only). */
     val upstream = CopyOnWriteArrayList<UpstreamTiming>()
 }

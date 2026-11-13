@@ -972,6 +972,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             )
             put("ffmpegLive", mediaServer?.ffmpegInUse() ?: 0)
             put("ffmpegRejected", mediaServer?.ffmpegRejectedCount() ?: 0L)
+            put("ffmpegRejectedPerToken", mediaServer?.ffmpegRejectedPerTokenCount() ?: 0L)
             put("casting", castCount.value.casting)
             put("total", castCount.value.total)
         }

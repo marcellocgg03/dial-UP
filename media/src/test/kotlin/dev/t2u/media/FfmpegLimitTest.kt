@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-/** F-07: at most [LIMIT] ffmpeg processes at once; the next GET is answered 503 with Retry-After and starts nothing. */
+/** F-07: at most [LIMIT] ffmpeg processes at once (the server's default); the next GET is answered 503 with Retry-After and starts nothing. */
 class FfmpegLimitTest {
     @TempDir lateinit var dir: File
 
@@ -56,8 +56,8 @@ class FfmpegLimitTest {
         RawHttp.request(server.resolvedPort(), "GET", path, headers, "HTTP/1.1")
 
     @Test
-    fun theFourthConcurrentPipeGetIsRefusedWithRetryAfterAndStartsNoProcess() {
-        val server = MediaServer("127.0.0.1", 0, launcher, { }, File(dir, "buffer"), maxConcurrentFfmpeg = LIMIT)
+    fun thePipeGetBeyondTheLimitIsRefusedWithRetryAfterAndStartsNoProcess() {
+        val server = MediaServer("127.0.0.1", 0, launcher, { }, File(dir, "buffer"))
         server.start()
         val holders = ArrayList<Thread>()
         try {
@@ -100,6 +100,6 @@ class FfmpegLimitTest {
     }
 
     private companion object {
-        const val LIMIT = 3
+        const val LIMIT = MediaServer.MAX_CONCURRENT_FFMPEG
     }
 }

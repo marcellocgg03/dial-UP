@@ -15,6 +15,11 @@ data class VideoEntry(
     val sourceMime: String? = null,
     val onRequest: (() -> Unit)? = null,
     val onFailure: (() -> Unit)? = null,
+    /**
+     * Runs when a GET of this entry is answered 503 because the server is at its ffmpeg limit. That is not a failure of the
+     * format, so [onFailure] does not run; the renderer may try the same format again later.
+     */
+    val onBusy: (() -> Unit)? = null,
 )
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
