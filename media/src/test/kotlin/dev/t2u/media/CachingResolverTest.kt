@@ -175,6 +175,39 @@ class CachingResolverTest {
         assertEquals(setOf("miss", "coalesced"), events.map { it["result"] }.toSet(), events.toString())
     }
 
+    @Test
+    fun aLookupThatWasInvalidatedWhileRunningIsNotCachedAndTheNextResolveDoesNotJoinIt() = runBlocking {
+        val first = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val order = AtomicInteger()
+        val gw = object : YtDlpGateway {
+            override fun run(call: YtDlpCall): GatewayResult {
+                val n = order.incrementAndGet()
+                if (n == 1) {
+                    first.countDown()
+                    check(releaseFirst.await(10, TimeUnit.SECONDS)) { "first lookup never released" }
+                }
+                return ok("https://$host/videoplayback?itag=140&n=$n")
+            }
+
+            override fun version(): String? = "fake"
+
+            override fun update(channel: String): String = "DONE"
+        }
+        val r = CachingResolver(gw, "/c/yt-dlp", { now })
+        val stale = async(Dispatchers.Default) { r.resolve("dQw4w9WgXcQ") }
+        assertTrue(first.await(10, TimeUnit.SECONDS), "first lookup never reached the gateway")
+        r.invalidate("dQw4w9WgXcQ")
+        assertEquals(1, r.inFlightCount(), "the detached lookup still counts while it runs")
+        val fresh = r.resolve("dQw4w9WgXcQ")
+        assertTrue(fresh.url.endsWith("n=2"), "a new lookup, not the one that was running: ${fresh.url.substringAfterLast('?')}")
+        releaseFirst.countDown()
+        assertTrue(stale.await().url.endsWith("n=1"), "its own callers still get its answer")
+        awaitInFlight(r, 0)
+        assertTrue(r.resolve("dQw4w9WgXcQ").url.endsWith("n=2"), "the late result did not replace the fresh one")
+        assertEquals(2, order.get(), "served from the cache, no third lookup")
+    }
+
     private fun awaitInFlight(r: CachingResolver, expected: Int) {
         // the entry is removed by the lookup's completion handler, a moment after the caller got its answer
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

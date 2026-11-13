@@ -4,7 +4,7 @@ package dev.t2u.renderer
 // fix, quick task 261021-c6t. GPL-3.0-only.
 //
 // The real Renderer talks SOAP to a SonosMimic (FakeRenderer plus a Lamp-like HTTP client, see SonosMimic.kt); the
-// token URL it hands the speaker is served by the real MediaServer, which launches the real /usr/bin/ffmpeg on a
+// token URL it hands the speaker is served by the real MediaServer, which launches the real ffmpeg (from PATH) on a
 // 90 s fragmented M4A held by a local upstream HTTP server (the same setup kind as MediaServerLadderTest). The
 // sender side is driven through Player.pause()/resume(). Nothing leaves 127.0.0.1: no LAN, device, adb or speaker.
 //
@@ -18,6 +18,7 @@ import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.Sender
 import dev.t2u.lounge.Video
+import dev.t2u.media.FfmpegUrlPolicy
 import dev.t2u.media.JvmPipeLauncher
 import dev.t2u.media.MediaRequest
 import dev.t2u.media.MediaServer
@@ -60,7 +61,7 @@ private const val CAST_AT = 30.0
 class G4SonosMimicTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
+    private val ffmpeg = ToolPaths.ffmpeg
     private lateinit var upstream: HttpServer
     private lateinit var base: String
     private lateinit var launcher: CountingLauncher
@@ -164,7 +165,7 @@ class G4SonosMimicTest {
         }
 
         launcher = CountingLauncher(JvmPipeLauncher(ffmpeg))
-        server = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges).also { it.start() }
+        server = MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, pipeRanges, ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP).also { it.start() }
 
         fake = FakeRenderer(neverPlay = true).also { it.start() } // the mimic decides when the speaker is PLAYING
         mimic = SonosMimic(fake, offsets = offsets, earlyWindowMs = earlyWindowMs)
@@ -191,6 +192,7 @@ class G4SonosMimicTest {
                 createReceiver = ReceiverFactory { _, _ -> receiver },
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
+                allowLoopbackSpeakers = true,
             ),
         )
         runBlocking { assertTrue(renderer.init()) }
@@ -428,7 +430,7 @@ class G4SonosMimicTest {
         private val sourceFile: File by lazy {
             val f = File.createTempFile("g4-source-", ".m4a").also { it.deleteOnExit() }
             val p = ProcessBuilder(
-                "/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=90",
+                ToolPaths.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=90",
                 "-c:a", "aac", "-b:a", "128k", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov", f.absolutePath,
             ).redirectErrorStream(true).start()
             val log = p.inputStream.readBytes().toString(Charsets.UTF_8)

@@ -56,6 +56,24 @@ class DialServerTest {
     }
 
     @Test
+    fun aNameWithCharactersXml10ForbidsStillGivesAParseableDocument() = testApplication {
+        val server = DialServer(config) { }
+        application { server.configure(this) }
+        server.rename("Kit\u0000chen \u0007\uD800\uFFFE")
+        val xml = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(xml.contains("<friendlyName>Kitchen </friendlyName>"), xml)
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml.byteInputStream())
+    }
+
+    @Test
+    fun aUuidWithMarkupOrForbiddenCharactersIsEscapedAndStillParses() = testApplication {
+        application { DialServer(config.copy(uuid = "a&b<c>\u0000\u0001d"), { }).configure(this) }
+        val xml = client.get("/ytcr/ssdp/device-desc.xml") { header(HttpHeaders.Host, "192.168.50.239:3000") }.bodyAsText()
+        assertTrue(xml.contains("<UDN>uuid:a&amp;b&lt;c&gt;d</UDN>"), xml)
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml.byteInputStream())
+    }
+
+    @Test
     fun aRenameChangesTheFriendlyNameAtOnceAndEscapesIt() = testApplication {
         val server = DialServer(config) { }
         application { server.configure(this) }
@@ -233,31 +251,63 @@ class DialServerTest {
         }
     }
 
-    // ----- guest launches ---------------------------------------------------------------------
+    // ----- origin -----------------------------------------------------------------------------
 
     @Test
-    fun aGuestLaunchIsReportedOncePerLaunchAndNotForOtherCalls() {
-        val guests = CopyOnWriteArrayList<String>()
-        dialTest(config.copy(isGuest = { true }, onGuestLaunch = { guests.add(it) })) {
-            get("/ytcr/ssdp/device-desc.xml")
-            get("/ytcr/apps/YouTube")
-            assertEquals(0, guests.size, "reads alone do not notify")
-            repeat(2) {
-                val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
-                assertEquals(HttpStatusCode.OK, r.status)
+    fun aBrowserOriginIsRefusedButNoOriginAndAnAppOriginAreServed() {
+        val launches = CopyOnWriteArrayList<String>()
+        testApplication {
+            application { DialServer(config, { }, { _, body -> launches.add(body); "pid-1" }).configure(this) }
+            suspend fun status(path: String, origin: String?, post: Boolean = false): HttpStatusCode {
+                val block: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {
+                    header(HttpHeaders.Host, "192.168.50.239:3000")
+                    if (origin != null) header(HttpHeaders.Origin, origin)
+                    if (post) setBody("x=1")
+                }
+                return (if (post) client.post(path, block) else client.get(path, block)).status
             }
+            assertEquals(HttpStatusCode.OK, status("/ytcr/ssdp/device-desc.xml", null))
+            assertEquals(HttpStatusCode.OK, status("/ytcr/ssdp/device-desc.xml", "package:com.google.android.youtube"))
+            for (bad in listOf("https://evil.example", "http://192.168.50.38:3000", "null", "", "Package:x")) {
+                assertEquals(HttpStatusCode.Forbidden, status("/ytcr/ssdp/device-desc.xml", bad), "GET with Origin '$bad'")
+                assertEquals(HttpStatusCode.Forbidden, status("/ytcr/apps/YouTube", bad, post = true), "POST with Origin '$bad'")
+            }
+            assertEquals(emptyList(), launches.toList(), "a refused request never reaches the launch callback")
+            assertEquals(HttpStatusCode.OK, status("/ytcr/apps/YouTube", "package:com.google.android.youtube", post = true))
+            assertEquals(1, launches.size)
         }
-        assertEquals(2, guests.size, "every launch notifies, with no cooldown")
+    }
+
+    // ----- caller addresses (the sources behind the guest notice) -------------------------------
+
+    @Test
+    fun everyCallerIsReportedBeforeTheAccessDecisionAndLaunchesStillWork() {
+        val callers = CopyOnWriteArrayList<String>()
+        val launches = CopyOnWriteArrayList<String>()
+        testApplication {
+            application {
+                DialServer(config.copy(onCaller = { callers.add(it) }), { }, { _, body -> launches.add(body); "pid-1" }).configure(this)
+            }
+            assertEquals(HttpStatusCode.OK, client.get("/ytcr/ssdp/device-desc.xml").status)
+            val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
+            assertEquals(HttpStatusCode.OK, r.status)
+            assertEquals("http://192.168.50.239:3000/ytcr/apps/YouTube/pid-1", r.headers["LOCATION"])
+        }
+        assertEquals(2, callers.size, "one report per request, reads and launches alike")
+        assertEquals(listOf("x=1"), launches.toList(), "the launch callback still runs for a cast from the phone")
     }
 
     @Test
-    fun aLaunchFromTheOwnerIsNotReportedAndAThrowingCallbackDoesNotChangeTheAnswer() {
-        val guests = CopyOnWriteArrayList<String>()
-        dialTest(config.copy(isGuest = { false }, onGuestLaunch = { guests.add(it) })) {
-            client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
+    fun aRefusedCallerIsStillReportedAndAThrowingCallbackDoesNotChangeTheAnswer() {
+        val callers = CopyOnWriteArrayList<String>()
+        testApplication {
+            application {
+                DialServer(config.copy(accessPolicy = { false }, onCaller = { callers.add(it) }), { }, { _, _ -> "pid-1" }).configure(this)
+            }
+            assertEquals(HttpStatusCode.Forbidden, client.get("/ytcr/ssdp/device-desc.xml").status)
         }
-        assertEquals(0, guests.size)
-        dialTest(config.copy(isGuest = { true }, onGuestLaunch = { error("boom") })) {
+        assertEquals(1, callers.size, "the source of a refused call is known too")
+        dialTest(config.copy(onCaller = { error("boom") })) {
             val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
             assertEquals(HttpStatusCode.OK, r.status)
         }

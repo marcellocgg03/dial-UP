@@ -55,6 +55,14 @@ class PrivateLanGuardTest {
     }
 
     @Test
+    fun `mapped, unspecified and multicast addresses follow the range of what they carry`() {
+        for (h in listOf("::ffff:192.168.50.45", "::ffff:10.0.0.1", "::ffff:127.0.0.1")) assertTrue(allowed(h), "$h should be allowed")
+        for (h in listOf("::ffff:8.8.8.8", "0.0.0.0", "::", "224.0.0.1", "239.255.255.250", "255.255.255.255", "ff02::1")) {
+            assertFalse(allowed(h), "$h should be refused")
+        }
+    }
+
+    @Test
     fun `cleartext to a hostname is refused before any DNS lookup`() {
         val guard = PrivateLanGuard()
         assertFailsWith<IOException> { guard.checkCleartext("http://example.com/".toHttpUrl()) }
@@ -73,6 +81,20 @@ class PrivateLanGuardTest {
         for (u in listOf("http://8.8.8.8/", "http://172.32.0.1/", "http://[2001:4860:4860::8888]/", "http://0x7f.0.0.1/", "http://010.0.0.1/")) {
             assertFailsWith<IOException>(u) { guard.checkCleartext(u.toHttpUrl()) }
         }
+    }
+
+    @Test
+    fun `a trailing dot or a bracketed mapped address does not slip past the rule`() {
+        val guard = PrivateLanGuard()
+        for (u in listOf(
+            "http://8.8.8.8./", "http://localhost./", "http://example.com./", "http://[::ffff:8.8.8.8]/", "http://[::ffff:808:808]/",
+            "http://[::]/", "http://0.0.0.0/", "http://224.0.0.1/",
+        )) {
+            assertFailsWith<IOException>(u) { guard.checkCleartext(u.toHttpUrl()) }
+        }
+        // a private address with a trailing dot is not an IP literal to the guard: refused rather than guessed at
+        assertFailsWith<IOException> { guard.checkCleartext("http://192.168.1.10./".toHttpUrl()) }
+        guard.checkCleartext("http://[::ffff:192.168.1.10]/".toHttpUrl())
     }
 
     @Test

@@ -93,6 +93,8 @@ class SsdpResponder(
     private val replyPolicy: (InetAddress) -> Boolean = { true },
     /** Whether [announce] may send ssdp:alive (false in phone-only mode); byebye is always sent. */
     private val announcePolicy: () -> Boolean = { true },
+    /** Told the source of every M-SEARCH that is not our own probe, before any access decision. Must not throw; a throw is dropped. */
+    private val onSearchSource: (InetAddress) -> Unit = {},
     /** Where NOTIFY goes; null means the SSDP group on [groupPort]. Tests point it at a unicast socket. */
     private val notifyTarget: InetSocketAddress? = null,
     /** Where [selfProbe] sends its datagram; null means the first listener on loopback, else the SSDP group on [groupPort]. */
@@ -112,7 +114,7 @@ class SsdpResponder(
     private val bound = ConcurrentHashMap<String, Int>()
 
     /** Reply timestamps per source IP for the reflection cap. */
-    private val replyTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    private val replyLimiter = ReplyLimiter(MAX_REPLIES_PER_SECOND, WINDOW_NANOS, MAX_TRACKED_SOURCES, clockNanos)
 
     @Volatile private var replySocket: MulticastSocket? = null
 
@@ -339,6 +341,11 @@ class SsdpResponder(
             pendingProbes[st.removePrefix(PROBE_ST_PREFIX)]?.countDown()
             return
         }
+        try {
+            onSearchSource(src.address)
+        } catch (_: Exception) {
+            // a note about who is searching never changes the answer
+        }
         // searches for types none of our devices answers are not ours to refuse or log
         if (devices.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return
         if (!replyPolicy(src.address)) {
@@ -357,18 +364,7 @@ class SsdpResponder(
     }
 
     /** At most [MAX_REPLIES_PER_SECOND] replies in any rolling second to one source IP. */
-    private fun allowReply(src: InetSocketAddress): Boolean {
-        if (replyTimes.size > 4096) replyTimes.clear()
-        val key = src.address.hostAddress
-        val times = replyTimes.computeIfAbsent(key) { ArrayDeque() }
-        val now = clockNanos()
-        synchronized(times) {
-            while (times.isNotEmpty() && now - times.peekFirst() >= WINDOW_NANOS) times.pollFirst()
-            if (times.size >= MAX_REPLIES_PER_SECOND) return false
-            times.addLast(now)
-            return true
-        }
-    }
+    private fun allowReply(src: InetSocketAddress): Boolean = replyLimiter.allow(src.address.hostAddress.orEmpty())
 
     private fun sendReply(dest: InetSocketAddress, device: SsdpDevice, st: String) {
         val sock = replySocket ?: return
@@ -386,5 +382,42 @@ class SsdpResponder(
         const val PROBE_ST_PREFIX = "urn:dev-t2u:probe:"
         const val MAX_REPLIES_PER_SECOND = 32
         const val WINDOW_NANOS = 1_000_000_000L
+        const val MAX_TRACKED_SOURCES = 4096
     }
 }
+
+/**
+ * The per-source reply cap: at most [maxPerWindow] [allow]s per key in any rolling [windowNanos]. At most [maxKeys] keys are
+ * remembered; a new key at the limit first drops the keys whose window has passed and, if that is not enough, the oldest
+ * quarter, so a flood of spoofed sources cannot reset the limit of everyone else at once.
+ */
+internal class ReplyLimiter(
+    private val maxPerWindow: Int,
+    private val windowNanos: Long,
+    private val maxKeys: Int,
+    private val clockNanos: () -> Long,
+) {
+    private val times = HashMap<String, ArrayDeque<Long>>()
+
+    @Synchronized
+    fun allow(key: String): Boolean {
+        val now = clockNanos()
+        if (key !in times && times.size >= maxKeys) evict(now)
+        val q = times.getOrPut(key) { ArrayDeque() }
+        while (q.isNotEmpty() && now - q.peekFirst()!! >= windowNanos) q.pollFirst()
+        if (q.size >= maxPerWindow) return false
+        q.addLast(now)
+        return true
+    }
+
+    @Synchronized
+    fun size(): Int = times.size
+
+    private fun evict(now: Long) {
+        times.values.removeAll { it.isEmpty() || now - it.peekLast()!! >= windowNanos }
+        if (times.size < maxKeys) return
+        val drop = (maxKeys / 4).coerceAtLeast(1)
+        times.entries.sortedBy { it.value.peekLast() }.take(drop).forEach { times.remove(it.key) }
+    }
+}
+

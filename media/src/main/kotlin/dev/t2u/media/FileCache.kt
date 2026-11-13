@@ -7,6 +7,8 @@ package dev.t2u.media
 
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -46,12 +48,28 @@ class FileCache(
     private val lock = Any()
     private val pins = HashMap<String, Int>()
     private val transientManifest = File(this.dir, ".transient")
-    private val transient = if (transientManifest.isFile) {
-        transientManifest.readLines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
-    } else {
-        mutableSetOf()
-    }
+    private val transient: MutableSet<String> = loadTransient()
     private val disposalRequested = HashSet<String>()
+
+    /** The names the manifest lists; an unreadable or corrupt manifest is reported and treated as empty, never thrown. */
+    private fun loadTransient(): MutableSet<String> {
+        if (!transientManifest.isFile) return mutableSetOf()
+        return try {
+            // strict decoding: readLines would quietly replace bytes that are not UTF-8, hiding a damaged file
+            val text = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(Files.readAllBytes(transientManifest.toPath())))
+                .toString()
+            text.lines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
+        } catch (e: IOException) {
+            emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
+            mutableSetOf()
+        } catch (e: RuntimeException) {
+            emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
+            mutableSetOf()
+        }
+    }
 
     private fun saveTransient() {
         if (transient.isEmpty()) {

@@ -22,15 +22,15 @@ import kotlin.test.assertTrue
 
 /**
  * Port of the remux.test.js titles that belong to the file format (mp4) and to the download retries,
- * against real /usr/bin/ffmpeg and ffprobe. The source a track is "downloaded" from is a generated 60 s fragmented
+ * against real ffmpeg (from PATH) and ffprobe. The source a track is "downloaded" from is a generated 60 s fragmented
  * M4A (what YouTube serves); no network is involved. WSL has ffmpeg 4.4.2, the phone 7.1.1: these tests prove the
  * arguments and the file structure, seek accuracy on 7.1.1 is a device check.
  */
 class MediaServerRemuxTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
-    private val ffprobe = "/usr/bin/ffprobe"
+    private val ffmpeg = ToolPaths.ffmpeg
+    private val ffprobe = ToolPaths.ffprobe
     private lateinit var source: File
     private lateinit var buildDir: File
     private lateinit var launcher: CountingLauncher

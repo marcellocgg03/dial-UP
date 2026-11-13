@@ -8,6 +8,7 @@ package dev.t2u.renderer
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -17,7 +18,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RendererNamesTest {
-    private fun tempDir(): File = Files.createTempDirectory("names-").toFile().also { it.deleteOnExit() }
+    @TempDir lateinit var tempRoot: File
+
+    // under the per-test @TempDir, so the JUnit extension removes it (deleteOnExit does not remove a directory that has files in it)
+    private fun tempDir(): File = Files.createTempDirectory(tempRoot.toPath(), "names-").toFile()
 
     private class Warnings : (String) -> Unit {
         val lines = CopyOnWriteArrayList<String>()
@@ -122,5 +126,16 @@ class RendererNamesTest {
         assertEquals("D", shownRendererName(null, "D"))
         assertEquals("Kitchen", shownRendererName("Kitchen", "D"))
         assertEquals("D", shownRendererName("   ", "D"))
+    }
+
+    @Test
+    fun cleanDisplayNameDropsInvalidXmlCharsTurnsControlsIntoSpacesAndCuts() {
+        assertEquals("Kitchen", cleanDisplayName("  Kitchen \u0000"))
+        assertEquals("a b", cleanDisplayName("a\tb"))
+        assertEquals("ab", cleanDisplayName("a\uD800b"))
+        assertEquals("🔊 Lamp", cleanDisplayName("🔊 Lamp"))
+        assertEquals("", cleanDisplayName("\u0001"))
+        assertEquals(3, cleanDisplayName("🔊🔊🔊🔊🔊", 3).codePointCount(0, cleanDisplayName("🔊🔊🔊🔊🔊", 3).length))
+        assertEquals(63, cleanDisplayName("y".repeat(100)).length)
     }
 }

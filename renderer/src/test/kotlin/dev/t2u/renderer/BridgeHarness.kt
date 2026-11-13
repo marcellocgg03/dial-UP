@@ -272,6 +272,7 @@ internal class BridgeHarness(
             config, resolver, launcher, lanHttpClient(), { check(!accessModeFails) { "access mode unavailable" }; accessMode }, "Linux/6 UPnP/1.1 test/0", sink, scope, bufferDir,
             loungeEndpoints = lounge.endpoints,
             innerTubeEndpoints = innerTube.endpoints,
+            allowLoopbackSpeakers = true,
             sourceDownloader = sourceDownloader,
             // null: leave BridgeDeps' own default (googlevideo over https only) in place
             upstreamPolicy = upstreamPolicy ?: UpstreamPolicy.GOOGLEVIDEO,
@@ -480,7 +481,7 @@ internal class BridgeHarness(
     }
 
     /** The first ffmpeg binary found, or null. */
-    fun findFfmpeg(): String? = listOf("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg").firstOrNull { File(it).canExecute() }
+    fun findFfmpeg(): String? = ToolPaths.ffmpeg.takeIf { File(it).canExecute() }
 
     /** Makes a [seconds]-second sine source (AAC in m4a) at [target] with the real ffmpeg; false when ffmpeg is absent or failed. */
     fun makeSineSource(target: File, seconds: Int = 3): Boolean {

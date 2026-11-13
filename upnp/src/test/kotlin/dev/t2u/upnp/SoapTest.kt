@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
  * byte-accurate length'); the finer cases here are Kotlin additions.
  */
 class SoapTest {
-    private val soap = SoapClient(OkHttpClient())
+    private val soap = SoapClient(OkHttpClient(), allowLoopback = true)
 
     private fun avTransport(fake: FakeRenderer) = UpnpService(
         serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
@@ -144,6 +144,24 @@ class SoapTest {
         val err = assertFailsWith<UpnpError> { runBlocking { soap.callAction(svc, "Stop") } }
         assertEquals("ENETWORK", err.code)
         assertTrue(err.message!!.startsWith("Stop: "), err.message)
+    }
+
+    @Test
+    fun `a control URL on this device's own loopback is refused unless the test seam allows it`() {
+        val strict = SoapClient(OkHttpClient())
+        for (host in listOf("127.0.0.1", "127.5.5.5", "[::1]", "localhost", "[::ffff:127.0.0.1]", "LOCALHOST.")) {
+            val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://$host:9/ctl", "", "")
+            val err = assertFailsWith<UpnpError>(host) { runBlocking { strict.callAction(svc, "Stop") } }
+            assertEquals("ENETWORK", err.code, host)
+            assertTrue(err.message!!.contains("on this device"), err.message)
+        }
+        // another private address is not loopback: it gets as far as the network (nothing listens, so a connection error)
+        val lan = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://192.168.50.45:9/ctl", "", "")
+        val err = assertFailsWith<UpnpError> { runBlocking { strict.callAction(lan, "Stop", timeoutMs = 300) } }
+        assertTrue(!err.message!!.contains("on this device"), err.message)
+        // and the production default constructor is the strict one
+        val viaDefault = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://127.0.0.1:9/ctl", "", "")
+        assertTrue(assertFailsWith<UpnpError> { runBlocking { SoapClient().callAction(viaDefault, "Stop") } }.message!!.contains("on this device"))
     }
 
     @Test

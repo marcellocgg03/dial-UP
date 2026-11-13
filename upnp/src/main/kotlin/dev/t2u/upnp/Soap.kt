@@ -95,7 +95,7 @@ private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
  * [http] must be [lanHttpClient] or derived from it with newBuilder(), so SOAP can only reach
  * private LAN addresses; the no-argument constructor does exactly that.
  */
-class SoapClient(private val http: OkHttpClient) {
+class SoapClient(private val http: OkHttpClient, private val allowLoopback: Boolean = false) {
     constructor() : this(lanHttpClient())
 
 
@@ -119,11 +119,16 @@ class SoapClient(private val http: OkHttpClient) {
         } catch (e: IllegalArgumentException) {
             throw UpnpError("$action: bad control URL (${e.message})", "ENETWORK")
         }
+        // A speaker is another device: a control URL on this device's own loopback is a description aiming the call at the
+        // phone itself. The LAN guard allows 127/8 (tests run against loopback fakes), so this is refused here unless [allowLoopback].
+        if (!allowLoopback && isLoopbackHost(request.url.host)) {
+            throw UpnpError("$action: control URL is on this device (refused)", "ENETWORK")
+        }
         val call = http.newCall(request)
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
 
         val (status, text) = try {
-            executeForText(call)
+            executeForText(call, MAX_SOAP_REPLY_BYTES)
         } catch (e: IOException) {
             val timedOut = e is InterruptedIOException || e.message?.contains("timeout", ignoreCase = true) == true
             throw UpnpError("$action: ${if (timedOut) "timed out" else (e.message ?: e.javaClass.simpleName)}", "ENETWORK")
@@ -149,11 +154,18 @@ class SoapClient(private val http: OkHttpClient) {
     }
 }
 
+/** Largest device description [fetchDescription] reads. */
+internal const val MAX_DESCRIPTION_BYTES = 256L * 1024
+
+/** Largest SOAP reply [SoapClient.callAction] reads. */
+internal const val MAX_SOAP_REPLY_BYTES = 1024L * 1024
+
 /**
- * Runs [call] without blocking a thread and returns the HTTP status and the whole body as text.
- * Cancelling the coroutine cancels the call. Shared by [SoapClient] and [fetchDescription].
+ * Runs [call] without blocking a thread and returns the HTTP status and the body as text, reading at most [maxBytes] of it:
+ * a longer body fails with [IOException] instead of filling the heap. Cancelling the coroutine cancels the call.
+ * Shared by [SoapClient] and [fetchDescription].
  */
-internal suspend fun executeForText(call: Call): Pair<Int, String> = suspendCancellableCoroutine { cont ->
+internal suspend fun executeForText(call: Call, maxBytes: Long): Pair<Int, String> = suspendCancellableCoroutine { cont ->
     cont.invokeOnCancellation { call.cancel() }
     call.enqueue(
         object : Callback {
@@ -163,14 +175,34 @@ internal suspend fun executeForText(call: Call): Pair<Int, String> = suspendCanc
 
             override fun onResponse(call: Call, response: Response) {
                 try {
-                    val text = response.use { it.body.string() }
+                    val text = response.use {
+                        val body = it.body
+                        if (body.contentLength() > maxBytes) throw IOException("response body larger than $maxBytes bytes")
+                        val source = body.source()
+                        if (source.request(maxBytes + 1)) throw IOException("response body larger than $maxBytes bytes")
+                        source.readString(body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
+                    }
                     if (cont.isActive) cont.resume(response.code to text)
                 } catch (e: IOException) {
                     if (cont.isActive) cont.resumeWithException(e)
+                } catch (e: RuntimeException) {
+                    // a failure here would end the OkHttp dispatcher thread's task uncaught and leave the caller waiting
+                    if (cont.isActive) cont.resumeWithException(IOException("unreadable response: ${e.javaClass.simpleName}", e))
                 }
             }
         },
     )
+}
+
+/** True for `localhost`, 127/8, `::1` and the IPv4-mapped forms of them; never resolves a name. */
+internal fun isLoopbackHost(host: String): Boolean {
+    val h = host.trim().trimEnd('.').lowercase()
+    if (h == "localhost" || h.endsWith(".localhost")) return true
+    val literal = when {
+        h.contains(':') -> try { java.net.InetAddress.getByName(h) } catch (_: Exception) { null }
+        else -> parseIpv4Literal(h)
+    }
+    return literal?.isLoopbackAddress == true
 }
 
 private fun localName(tag: String): String = tag.substringAfterLast(':')

@@ -8,6 +8,7 @@ package dev.t2u.renderer
 
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.stringOrNull
+import dev.t2u.upnp.stripInvalidXmlChars
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,17 @@ fun rendererNameProblem(raw: String): String? {
         text.codePointCount(0, text.length) > MAX_RENDERER_NAME -> "At most $MAX_RENDERER_NAME characters"
         else -> null
     }
+}
+
+/**
+ * [raw] as text that is safe to show and to put in an XML document: characters outside XML 1.0 are dropped, other control
+ * characters (line breaks, tabs) become a space, the result is trimmed and cut to [maxCodePoints] code points. The one cleaner
+ * for a name that comes from a speaker and for the author's prefix.
+ */
+fun cleanDisplayName(raw: String, maxCodePoints: Int = MAX_RENDERER_NAME): String {
+    val text = stripInvalidXmlChars(raw).map { if (Character.isISOControl(it)) ' ' else it }.joinToString("").trim()
+    if (text.codePointCount(0, text.length) <= maxCodePoints) return text
+    return text.substring(0, text.offsetByCodePoints(0, maxCodePoints)).trim()
 }
 
 /** The trimmed [raw] when it is a usable name, else null. */

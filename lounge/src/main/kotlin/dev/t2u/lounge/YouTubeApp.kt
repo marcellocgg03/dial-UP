@@ -92,8 +92,7 @@ class YouTubeApp(
     @Volatile
     private var autoplayOnConnect: AutoplayMode = AutoplayMode.ENABLED
 
-    @Volatile
-    private var resetPolicy: ResetPlayerOnDisconnectPolicy = options.resetPlayerOnDisconnect
+    private val resetPolicy: ResetPlayerOnDisconnectPolicy = options.resetPlayerOnDisconnect
 
     private var autoplayBeforeUnsupported: AutoplayMode? = null
 
@@ -121,10 +120,6 @@ class YouTubeApp(
 
     fun enableAutoplayOnConnect(value: Boolean) {
         autoplayOnConnect = if (value) AutoplayMode.ENABLED else AutoplayMode.DISABLED
-    }
-
-    fun setResetPlayerOnDisconnectPolicy(value: ResetPlayerOnDisconnectPolicy) {
-        resetPolicy = value
     }
 
     /** Remember existing senders before lounge reports their network-related disappearance. */

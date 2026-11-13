@@ -40,6 +40,8 @@ data class RendererDeps(
     val userName: (String) -> String? = { null },
     /** The template of a name shown in the cast menu ({name} {manufacturer} {model}), read at setup and on [Renderer.refreshName]. */
     val nameTemplate: () -> String = { config.nameTemplate },
+    /** Test seam: speakers on 127/8 are the fakes of the tests. Production refuses a control URL on the phone's own loopback. */
+    val allowLoopbackSpeakers: Boolean = false,
 )
 
 /** What the speaker is playing, for the status UI and the notification. */

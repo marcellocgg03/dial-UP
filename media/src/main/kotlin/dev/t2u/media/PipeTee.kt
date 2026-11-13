@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 private const val PIPE_CHUNK = 16 * 1024
 private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
@@ -24,6 +25,23 @@ internal suspend fun killAndWait(proc: Process) {
         proc.destroyForcibly()
         runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
     }
+}
+
+/**
+ * Starts [args] and hands the process to the caller, or kills it when the caller is cancelled on the way. `withContext`
+ * discards its result when the caller is cancelled as it resumes (even if the block itself cannot be cancelled), so a
+ * process returned from it would have no owner. The block therefore leaves the process in a holder, and a cancellation that
+ * arrives with the process already started kills it before it continues.
+ */
+internal suspend fun PipeLauncher.startOwned(args: List<String>): Process {
+    val holder = AtomicReference<Process?>()
+    try {
+        withContext(Dispatchers.IO) { holder.set(start(args)) }
+    } catch (e: CancellationException) {
+        holder.get()?.let { killAndWait(it) }
+        throw e
+    }
+    return checkNotNull(holder.get()) { "the launcher returned no process" }
 }
 
 /**
@@ -43,7 +61,7 @@ internal class PipeTee(private val launcher: PipeLauncher) {
         token: String,
         args: List<String>,
     ): String? {
-        val proc = withContext(Dispatchers.IO) { launcher.start(args) }
+        val proc = launcher.startOwned(args)
         try {
             val stdout = proc.inputStream
             val buf = ByteArray(PIPE_CHUNK)

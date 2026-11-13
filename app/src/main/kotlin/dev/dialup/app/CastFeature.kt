@@ -4,6 +4,7 @@ package dev.dialup.app
 // foreground service: every speaker found on the Wi-Fi becomes a cast target in YouTube and YouTube Music.
 // GPL-3.0-only.
 
+import android.os.Build
 import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.RestartFields
@@ -177,8 +178,15 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         }
     }
 
+    /** Once per device name per 30 s across bridge restarts: a guest that drops and reconnects is announced once. */
+    private val guestNoticeGate = GuestNoticeGate()
+
     private val warmed = AtomicBoolean(false)
     private val denied = AtomicInteger()
+
+    /** Media requests that named no registered token; every one is counted, few are logged. */
+    private val unknownTokens = AtomicInteger()
+    private val unknownTokenLog = SourceLogLimiter(DENIED_LOG_WINDOW_NS, 1024)
 
     /** Last time a DIAL denial was logged per source IP (one event per source per minute). */
     private val deniedLogged = ConcurrentHashMap<String, Long>()
@@ -345,6 +353,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val extra = mapOf(
             "dialAccess" to JsonPrimitive(settings?.dialAccess?.value?.wire),
             "denied" to JsonPrimitive(denied.get()),
+            "unknownTokens" to JsonPrimitive(unknownTokens.get()),
         )
         val config = configSummaryJson
         return JsonObject(if (config == null) base + extra else base + extra + ("config" to config))
@@ -424,6 +433,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             verbose = loaded.config.ytdlpVerbose,
         )
         this.resolver = resolver
+        // read at connect time, so the Settings switch applies to the running bridge
+        val guestNotices = GuestNoticeDecider(OwnDevice(Build.MANUFACTURER, Build.MODEL), { appSettings.data.value.notifyGuests }, guestNoticeGate)
         val b = Bridge(
             network,
             BridgeDeps(
@@ -451,9 +462,13 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 bufferDir = mediaBufferDir(h.context),
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
-                // another device started a cast: tell the author, unless the Settings switch is off
-                onGuestLaunch = { speaker, remote ->
-                    if (appSettings.data.value.notifyGuests) GuestNotifier(h.context).notify(speaker, remote)
+                // a lounge sender connected: another device's cast is told to the author, unless the Settings switch is off
+                onSenderConnected = { speaker, senderName, recentGuest ->
+                    val notice = guestNotices.decide(speaker, senderName, recentGuest)
+                    if (notice != null) {
+                        h.evidence.event("guest-notice", mapOf("speaker" to speaker, "basis" to if (notice.seenOnLan) "lan-address" else "name-only"))
+                        GuestNotifier(h.context).notify(speaker, senderName)
+                    }
                 },
                 sourceDownloader = YtDlpSourceDownloader(gateway, cacheDir.absolutePath),
                 // Housekeeping reads this to skip while there is no Wi-Fi and to refuse a repair onto a
@@ -574,13 +589,19 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     // ----- evidence mapping ----------------------------------------------------------------------
 
     private fun onMediaRequest(h: SpikeHost, req: MediaRequest) {
+        // A scan of the media port answers 404 for every probe: count them, log one line per source per minute
+        var suppressed: Int? = null
+        if (isUnregisteredTokenMiss(req.status, req.label, req.note)) {
+            unknownTokens.incrementAndGet()
+            suppressed = unknownTokenLog.admit(req.remoteHost) ?: return
+        }
         val self = req.remoteHost == lastIp || req.remoteHost.startsWith("127.") || req.remoteHost == "::1"
         h.evidence.event(
             "http-req",
             mapOf(
                 "server" to "media",
                 "method" to req.method,
-                "uri" to req.uri,
+                "uri" to redactStreamToken(req.uri),
                 "httpVersion" to req.httpVersion,
                 "src" to "${req.remoteHost}:${req.remotePort}",
                 "self" to self,
@@ -592,6 +613,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 "label" to req.label,
                 "note" to req.note,
                 "upstream" to req.upstream,
+                "suppressed" to suppressed?.takeIf { it > 0 },
             ),
         )
     }

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
@@ -44,6 +45,25 @@ class EvidenceLogTest {
         assertTrue(waitFor { writers() == before }, "writer thread still alive after close")
         log.close()
         assertEquals(before, writers())
+    }
+
+    @Test
+    fun `a writer that is far behind drops lines with a counter instead of queueing without limit`() {
+        val log = EvidenceLog(File(tmp, "flood"), monoNanos = { 1L }, logcat = {}, maxPending = 3)
+        opened += log
+        val gate = java.util.concurrent.CountDownLatch(1)
+        log.beforeAppend = { gate.await(10, TimeUnit.SECONDS) }
+        repeat(10) { log.event("probe", mapOf("n" to it)) }
+        assertEquals(7L, log.droppedCount(), "3 queued, 7 dropped")
+        log.beforeAppend = {}
+        gate.countDown()
+        log.flush()
+        log.event("after")
+        log.flush()
+        val text = log.currentFile().readText()
+        assertEquals(4, Regex("\"probe\"|\"after\"").findAll(text).count(), text)
+        assertTrue("log-dropped" in text && "\"count\":7" in text.replace(" ", ""), "a marker says how many were left out: $text")
+        assertEquals(7L, log.droppedCount())
     }
 
     @Test

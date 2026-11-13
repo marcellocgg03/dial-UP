@@ -187,6 +187,20 @@ class RendererRegistry(
         if (first) log("skipped", udn, location = location, reason = reason)
     }
 
+    /** One `renderer-moved-refused` event per UDN and pair of addresses, however many datagrams repeat it. */
+    private suspend fun logMoveRefusedOnce(udn: String, existing: ManagedRenderer, newAddress: String, location: String) {
+        val first = lock.withLock {
+            if (guardLogged.size >= MAX_REMEMBERED_GUARD_HITS) guardLogged.clear()
+            guardLogged.add("$udn|moved-refused|$newAddress")
+        }
+        if (first) {
+            log(
+                "renderer-moved-refused", udn, existing.name, location,
+                reason = "kept ${existing.address}, refused a move to $newAddress while the entry is fresh",
+            )
+        }
+    }
+
     /**
      * The LOCATION must name the host that sent the datagram, and it must be a private LAN address
      * (otherwise any device could make the app fetch an arbitrary URL). Names are refused
@@ -248,7 +262,14 @@ class RendererRegistry(
                 existing.refresh(age)
                 return
             }
-            // Same device, new description URL (rebooted, DHCP change, random port): rebuild.
+            // Same address, new description URL (rebooted, random port): rebuild. Another address while the entry is still
+            // fresh is refused: UPnP does not bind a UDN to a host, so any device could otherwise take a speaker over by
+            // repeating its UDN. A speaker that really moved is accepted once its old entry is stale or said byebye.
+            val newAddress = src.address?.hostAddress.orEmpty()
+            if (existing.address != newAddress && !existing.isStale(clock())) {
+                logMoveRefusedOnce(udn, existing, newAddress, location)
+                return
+            }
             removeRenderer(udn, "moved", "now at $location")
         }
 

@@ -101,6 +101,39 @@ class DialAccessTest {
     }
 
     @Test
+    fun lanModeWithAKnownSubnetAnswersSsdpOnlyFromThatSubnet() {
+        var subnet: Pair<InetAddress, Int>? = InetAddress.getByName(phoneIp) to 24
+        val lan = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(phoneIp) }, { subnet })
+        for (ok in listOf("192.168.50.45", "192.168.50.1", "192.168.50.254", phoneIp, "127.0.0.1", "::1", "fe80::1", "::ffff:192.168.50.45")) {
+            assertTrue(lan.allowsSsdp(InetAddress.getByName(ok)), "should answer $ok")
+        }
+        for (no in listOf("192.168.51.45", "10.8.0.2", "172.16.0.9", "192.168.49.255", "::ffff:10.0.0.1", "8.8.8.8")) {
+            assertFalse(lan.allowsSsdp(InetAddress.getByName(no)), "should refuse $no")
+        }
+        subnet = InetAddress.getByName("10.1.2.3") to 20 // /20: 10.1.0.0 - 10.1.15.255
+        assertTrue(lan.allowsSsdp(InetAddress.getByName("10.1.15.200")))
+        assertFalse(lan.allowsSsdp(InetAddress.getByName("10.1.16.1")))
+        subnet = null // not known: the private-source rule alone, as before
+        assertTrue(lan.allowsSsdp(InetAddress.getByName("10.8.0.2")))
+        // phone mode never widens
+        assertFalse(DialAccessPolicy({ DialAccessMode.PHONE }, { setOf(phoneIp) }, { InetAddress.getByName(phoneIp) to 24 })
+            .allowsSsdp(InetAddress.getByName("192.168.50.45")))
+    }
+
+    @Test
+    fun lanModeAnswersSsdpOnlyFromPrivateLanSources() {
+        val lan = policy(DialAccessMode.LAN)
+        for (ok in listOf("192.168.50.45", "10.1.2.3", "172.16.0.9", "169.254.1.1", "127.0.0.1", "::1", "fe80::1", "fd12:3456::1", "::ffff:192.168.50.45", "::ffff:10.0.0.1")) {
+            assertTrue(lan.allowsSsdp(InetAddress.getByName(ok)), "should answer $ok")
+        }
+        for (no in listOf("8.8.8.8", "203.0.113.7", "100.64.0.1", "172.32.0.1", "2001:db8::1", "2606:4700::1111", "::ffff:8.8.8.8")) {
+            assertFalse(lan.allowsSsdp(InetAddress.getByName(no)), "should refuse $no")
+        }
+        val phone = policy(DialAccessMode.PHONE)
+        assertFalse(phone.allowsSsdp(InetAddress.getByName("8.8.8.8")))
+    }
+
+    @Test
     fun announceIsAllowedOnlyInLanMode() {
         assertFalse(policy(DialAccessMode.PHONE).announceAllowed())
         assertTrue(policy(DialAccessMode.LAN).announceAllowed())

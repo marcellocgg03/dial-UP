@@ -152,6 +152,7 @@ class RendererTest {
                 },
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
+                allowLoopbackSpeakers = true,
             ),
         )
 

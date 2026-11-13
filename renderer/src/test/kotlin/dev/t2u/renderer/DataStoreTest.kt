@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -22,7 +23,10 @@ import kotlin.test.assertTrue
 
 /** CAST-03: each speaker keeps its screen and device IDs across restarts, in its own store. */
 class DataStoreTest {
-    private fun tempDir(): File = Files.createTempDirectory("store-").toFile().also { it.deleteOnExit() }
+    @TempDir lateinit var tempRoot: File
+
+    // under the per-test @TempDir, so the JUnit extension removes it (deleteOnExit does not remove a directory that has files in it)
+    private fun tempDir(): File = Files.createTempDirectory(tempRoot.toPath(), "store-").toFile()
 
     private fun ids(device: String, screen: String): JsonObject = buildJsonObject {
         put("deviceId", device)

@@ -5,11 +5,11 @@ import kotlin.system.exitProcess
 
 /**
  * Local stand-in for the phone's `pipe-test input=sine`: serves the same token labels from WSL with
- * /usr/bin/ffmpeg, so `tools/media-check.sh --local` can prove the acceptance checks before the phone run.
+ * ffmpeg (from PATH), so `tools/media-check.sh --local` can prove the acceptance checks before the phone run.
  * Usage: LocalServeMain <output dir>. Prints READY after tokens.json is written, then blocks until killed.
  * Not a test; lives in the test source set so the main artifact stays free of it.
  */
-private const val FFMPEG = "/usr/bin/ffmpeg"
+private val FFMPEG = ToolPaths.ffmpeg
 
 private fun ffmpeg(vararg args: String) {
     val p = ProcessBuilder(listOf(FFMPEG, "-hide_banner", "-loglevel", "error", "-y") + args).redirectErrorStream(true).start()

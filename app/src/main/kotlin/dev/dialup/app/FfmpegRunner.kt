@@ -28,7 +28,7 @@ class FfmpegRunner(
     private val launcher = JvmPipeLauncher(
         binary = paths.ffmpegBin.absolutePath,
         environment = mapOf(
-            "LD_LIBRARY_PATH" to "${paths.pythonLibDir.absolutePath}:${paths.ffmpegLibDir.absolutePath}",
+            "LD_LIBRARY_PATH" to paths.ldLibraryPath(),
             "SSL_CERT_FILE" to paths.certFile.absolutePath,
             "TMPDIR" to cacheDir.absolutePath,
         ),

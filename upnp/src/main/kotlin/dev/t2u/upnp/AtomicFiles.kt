@@ -7,6 +7,7 @@ package dev.t2u.upnp
 // Pure JVM (no android.*).
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.CopyOption
@@ -42,8 +43,8 @@ data class AtomicWriteOptions(
 }
 
 /**
- * Writes [text] to [file] so a reader never sees a half-written file: the text goes to `<name>.tmp` beside it first and
- * the temp file then replaces [file] in one move (ATOMIC_MOVE with REPLACE_EXISTING, falling back to REPLACE_EXISTING
+ * Writes [text] to [file] so a reader never sees a half-written file: the text goes to `<name>.tmp` beside it first, is
+ * forced to disk, and the temp file then replaces [file] in one move (ATOMIC_MOVE with REPLACE_EXISTING, falling back to REPLACE_EXISTING
  * alone where the file system refuses ATOMIC_MOVE, unless [AtomicWriteOptions.atomicOnly]). A failure is thrown, never
  * ignored; [options] says what else happens around it. There is one temp name per file, so callers serialise writes to the
  * same file.
@@ -63,7 +64,12 @@ fun writeTextAtomic(
     if (options.createParentDirs) parent?.mkdirs()
     val tmp = File(parent, file.name + ".tmp")
     try {
-        tmp.writeText(text)
+        // forced to disk before the move: after a power loss the renamed file must not be empty or short
+        FileOutputStream(tmp).use { out ->
+            out.write(text.toByteArray(Charsets.UTF_8))
+            out.flush()
+            out.fd.sync()
+        }
         try {
             move(tmp.toPath(), file.toPath(), arrayOf(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING))
         } catch (e: AtomicMoveNotSupportedException) {

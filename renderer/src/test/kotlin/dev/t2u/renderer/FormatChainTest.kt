@@ -88,6 +88,25 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("the media server's own busy answer does not step down a format: the same format is tried again once")
+    fun aBusyAnswerRepeatsTheFormatInsteadOfFallingBack() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        RendererHarness(fake, config = ::streaming).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            val first = h.registered.first()
+            assertEquals("adts", first.format)
+            // a 503 for the limit, not a failure to produce the stream: onFailure stays unused
+            checkNotNull(first.onBusy).invoke()
+            waitUntil { h.registered.size >= 2 }
+            assertEquals(listOf("adts", "adts"), h.formats().take(2), "adts again, not mp3")
+            // the retry is once: when the speaker still does not start it, the chain moves on as before
+            waitUntil { h.renderer.nowPlaying?.format == "mp3" && h.renderer.status == PlayerStatus.PLAYING }
+            assertEquals(listOf("adts", "adts", "mp3"), h.formats())
+        }
+    }
+
+    @Test
     fun streamingFallbackAfterSeekKeepsTheRequestedOffset() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         val adtsPlays = AtomicInteger()
         fake.onAction = { action ->

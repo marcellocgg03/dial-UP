@@ -35,6 +35,29 @@ class FileCacheTest {
     private fun names(): List<String> = dir.list().orEmpty().filter { it != ".uncached" }.sorted()
 
     @Test
+    fun aCorruptTransientManifestIsReportedAndTheCacheStartsWithNone() {
+        dir.mkdirs()
+        // not valid UTF-8: readLines throws MalformedInputException
+        File(dir, ".transient").writeBytes(byteArrayOf(0x61, 0xFF.toByte(), 0xFE.toByte(), 0x80.toByte(), 0x0A))
+        val c = FileCache(dir, { limit }, { events.add(it) })
+        assertEquals(0L, c.info().temporaryBytes)
+        assertTrue(events.any { it["event"] == "cache-transient-unreadable" }, events.toString())
+        // and the cache still works afterwards
+        val part = put("$idB.source.download", 10, 2_000)
+        assertTrue(c.publish(part, File(dir, "$idB.source")))
+    }
+
+    @Test
+    fun aTransientManifestWithJunkLinesKeepsOnlyValidCacheNames() {
+        dir.mkdirs()
+        File(dir, ".transient").writeText("../escape.m4a\n\n$idA-mp4-0.m4a\nnot a cache file\n")
+        val c = FileCache(dir, { limit }, { events.add(it) })
+        put("$idA-mp4-0.m4a", 10, 1_000)
+        assertTrue(c.isTransient(File(dir, "$idA-mp4-0.m4a")))
+        assertFalse(c.isTransient(File(dir, "escape.m4a")))
+    }
+
+    @Test
     fun admissionEvictsOldUnusedFilesAndUsesActualSize() {
         put("$idA-mp4-0.m4a", 60, 1_000)
         val part = put("$idB.source.download", 50, 2_000)

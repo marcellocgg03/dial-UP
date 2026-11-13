@@ -189,7 +189,7 @@ class BridgeMediaWiringTest {
         val bridge = h.newBridge(
             // No retries: this test is about the first failure (plan 04-07 retries an unclear failure twice before it gives up).
             h.testConfig(outputFormat = "mp4").copy(playRetryDelaysMs = emptyList()),
-            launcher = JvmPipeLauncher("/usr/bin/ffmpeg"),
+            launcher = JvmPipeLauncher(ToolPaths.ffmpeg),
             bufferDir = buffer,
         )
         h.innerTube.scriptNext(VID, previousId = null, nextId = null)

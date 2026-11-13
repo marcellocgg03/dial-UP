@@ -36,7 +36,10 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -75,6 +78,12 @@ class MediaServer(
     private val prepareTimeoutMs: Long = 120_000,
     private val mp3Bitrate: String = MP3_BITRATE,
     private val ffmpegLogLevel: String = "error",
+    /** Which resolved URLs ffmpeg may read; the default is the direct proxy's googlevideo rule. */
+    private val ffmpegUrlPolicy: FfmpegUrlPolicy = FfmpegUrlPolicy.GOOGLEVIDEO,
+    /** The most ffmpeg processes the server runs at once for GETs. */
+    private val maxConcurrentFfmpeg: Int = MAX_CONCURRENT_FFMPEG,
+    /** The most ffmpeg processes the server runs at once for one stream token. */
+    private val maxFfmpegPerToken: Int = MAX_FFMPEG_PER_TOKEN,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -90,6 +99,55 @@ class MediaServer(
 
     /** Token to the release of the cache pin a file token holds from registration. Each release is one-shot. */
     private val tokenPins = ConcurrentHashMap<String, () -> Unit>()
+
+    /** Permits for ffmpeg processes the server starts for GETs; a GET that finds none left is answered 503 with Retry-After. */
+    private val ffmpegSlots = Semaphore(maxConcurrentFfmpeg)
+    private val ffmpegRejected = AtomicLong()
+    private val ffmpegRejectedPerToken = AtomicLong()
+
+    /** Processes running now per token; an entry is removed when its count reaches zero. Guarded by itself. */
+    private val tokenSlots = HashMap<String, Int>()
+
+    /** ffmpeg processes the server holds a permit for now (live pipes, range fills, buffered runs). */
+    fun ffmpegInUse(): Int = maxConcurrentFfmpeg - ffmpegSlots.availablePermits()
+
+    /** GETs answered 503 because the server was at a limit (the global one or the per-token one), since the server was created. */
+    fun ffmpegRejectedCount(): Long = ffmpegRejected.get()
+
+    /** The part of [ffmpegRejectedCount] that was refused because its own token already had [MAX_FFMPEG_PER_TOKEN] processes. */
+    fun ffmpegRejectedPerTokenCount(): Long = ffmpegRejectedPerToken.get()
+
+    /** How many tokens have a process running now (for tests: the map must not keep finished tokens). */
+    fun ffmpegTokensTracked(): Int = synchronized(tokenSlots) { tokenSlots.size }
+
+    /**
+     * One ffmpeg slot: a global permit and a place under [token]'s cap. Null, with nothing taken, when either limit is
+     * reached; [busy] then says which one when it is given. Never blocks.
+     */
+    private fun takeSlot(token: String, busy: Outcome?): Permit? = synchronized(tokenSlots) {
+        val running = tokenSlots[token] ?: 0
+        if (running >= maxFfmpegPerToken) {
+            busy?.perTokenBusy = true
+            return null
+        }
+        if (!ffmpegSlots.tryAcquire()) return null
+        tokenSlots[token] = running + 1
+        Permit(token)
+    }
+
+    /** One taken slot; [release] gives it back once, whoever calls it first (the early hand-back or the final cleanup). */
+    private inner class Permit(private val token: String) {
+        private val held = AtomicBoolean(true)
+
+        fun release() {
+            if (!held.getAndSet(false)) return
+            synchronized(tokenSlots) {
+                val left = (tokenSlots[token] ?: 1) - 1
+                if (left <= 0) tokenSlots.remove(token) else tokenSlots[token] = left
+            }
+            ffmpegSlots.release()
+        }
+    }
 
     private val directRelay = DirectRelay(resolver, upstream)
     private val byteRanges = ByteRangeResponder()
@@ -378,7 +436,8 @@ class MediaServer(
             if (!head && out.status in 500..599) {
                 val src = entry.source
                 val video = (src as? StreamSource.VideoPipe)?.entry ?: (src as? StreamSource.DirectProxy)?.entry
-                video?.let { v -> runCatching { v.onFailure?.invoke() } }
+                // our own busy answer is not a failure of the format: the renderer must not step down a format for it
+                video?.let { v -> runCatching { if (out.busy) v.onBusy?.invoke() else v.onFailure?.invoke() } }
             }
         } finally {
             report(call, out)
@@ -497,10 +556,10 @@ class MediaServer(
             val id = src.entry.videoId
             val startAt = src.entry.startAt
             val attempts = mutableListOf(
-                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel) },
+                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy) },
                 PipeAttempt("a fresh extraction") {
                     r.invalidate(id)
-                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel)
+                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy)
                 },
             )
             files?.let { f ->
@@ -543,12 +602,35 @@ class MediaServer(
         // give them a complete, length-delimited body instead.
         val dir = bufferDir
         if (call.request.httpVersion == "HTTP/1.0" && dir != null) {
-            serveBuffered(call, entry, attempts, l, tail, dir, out)
+            // The permit is for ffmpeg: serveBuffered hands it back as soon as the process is done, before the file is sent,
+            // so a slow client reading the finished file does not hold one.
+            val permit = takeSlot(token, out) ?: return respondBusy(call, out)
+            try {
+                serveBuffered(call, entry, attempts, l, tail, dir, out, permit)
+            } finally {
+                permit.release()
+            }
             return
         }
         val cache = if (src is StreamSource.VideoPipe) rangeCache else null
         if (cache != null && serveFromRangeCache(call, entry, cache, token, attempts, l, tail, out)) return
-        serveLive(call, entry, cache, token, attempts, l, tail, out)
+        val permit = takeSlot(token, out) ?: return respondBusy(call, out)
+        try {
+            serveLive(call, entry, cache, token, attempts, l, tail, out)
+        } finally {
+            permit.release()
+        }
+    }
+
+    /** A limit is reached (every permit, or the token's own): 503 with Retry-After, nothing started. */
+    private suspend fun respondBusy(call: ApplicationCall, out: Outcome) {
+        ffmpegRejected.incrementAndGet()
+        if (out.perTokenBusy) ffmpegRejectedPerToken.incrementAndGet()
+        out.status = 503
+        out.busy = true
+        out.note = if (out.perTokenBusy) "too many ffmpeg processes for this stream ($maxFfmpegPerToken)" else "too many ffmpeg processes ($maxConcurrentFfmpeg)"
+        call.response.header(HttpHeaders.RetryAfter, RETRY_AFTER_SECONDS.toString())
+        call.respond(HttpStatusCode.ServiceUnavailable)
     }
 
     /** Headers only, no process and no resolve (a HEAD must never start ffmpeg). */
@@ -662,6 +744,23 @@ class MediaServer(
         outputArgs: List<String>,
         out: Outcome,
     ): CachedStream? {
+        // no permit: no fill; the live path that follows then answers 503
+        val permit = takeSlot(token, null) ?: return null
+        try {
+            return coldFillHoldingSlot(cache, token, attempts, l, outputArgs, out)
+        } finally {
+            permit.release()
+        }
+    }
+
+    private suspend fun coldFillHoldingSlot(
+        cache: PipeRangeCache,
+        token: String,
+        attempts: List<PipeAttempt>,
+        l: PipeLauncher,
+        outputArgs: List<String>,
+        out: Outcome,
+    ): CachedStream? {
         val part = withContext(Dispatchers.IO) { cache.newPartFile() } ?: return null
         var handedOver = false
         try {
@@ -675,7 +774,7 @@ class MediaServer(
                 }
                 if (!currentCoroutineContext().isActive) return null
                 withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
-                val proc = withContext(Dispatchers.IO) { l.start(listOf("-y") + input + outputArgs + part.absolutePath) }
+                val proc = l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
                 try {
                     val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
                     while (true) {
@@ -717,6 +816,7 @@ class MediaServer(
         outputArgs: List<String>,
         dir: File,
         out: Outcome,
+        permit: Permit,
     ) {
         val tmp = withContext(Dispatchers.IO) {
             dir.mkdirs()
@@ -736,7 +836,7 @@ class MediaServer(
                 if (!currentCoroutineContext().isActive) return
                 var proc: Process? = null
                 try {
-                    val p = withContext(Dispatchers.IO) { l.start(listOf("-y") + input + outputArgs + tmp.absolutePath) }
+                    val p = l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
                     proc = p
                     val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
                     if (!done) {
@@ -753,6 +853,7 @@ class MediaServer(
                 } finally {
                     proc?.let { killAndWait(it) }
                 }
+                permit.release()
                 serveFile(call, entry, tmp, false, out, "buffered")
                 return
             }
@@ -767,6 +868,25 @@ class MediaServer(
 
     companion object {
         const val MAX_TOKENS = 256
+
+        /**
+         * Default for [MediaServer]'s maxConcurrentFfmpeg: a bound that normal use cannot reach but a runaway can. One cast holds
+         * up to 3 permits at its peak (FfmpegCapacityTest): the playing track's live GET, the next track's GET opened early for
+         * gapless, and, while another sender takes the speaker over, the old stream's GET, which stays open until the speaker
+         * drops it. The bridge is sized for 8 speakers casting at once, so 8 x 3 = 24. A host that hammers one token, or clients
+         * that never read, still reach it and are answered 503 with Retry-After.
+         */
+        const val MAX_CONCURRENT_FFMPEG = 24
+
+        /**
+         * Default for [MediaServer]'s maxFfmpegPerToken. One speaker's normal pattern on one token, from the Lamp's recorded
+         * sessions and MediaServerCapacityTest: a probe GET that is still open, the real GET, and a Range GET whose cold fill
+         * runs beside them (the fill and the live path of one request never overlap: the fill hands its slot back first), so
+         * 3; a reconnect that arrives before the server has noticed the old connection is gone makes 4. Anything beyond that is
+         * a host hammering one token, answered 503 with Retry-After while other tokens are served as usual.
+         */
+        const val MAX_FFMPEG_PER_TOKEN = 4
+        private const val RETRY_AFTER_SECONDS = 5
         private const val MP3_BITRATE = "192k"
         private const val FILL_POLL_MS = 50L
 

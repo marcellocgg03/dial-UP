@@ -55,10 +55,11 @@ data class DialConfig(
     val pid: String? = null,
     /** Decides per request, from the remote address string, whether a call is served. */
     val accessPolicy: (String) -> Boolean = { true },
-    /** True for a caller that is served only because the LAN is allowed (another device, not the phone). */
-    val isGuest: (String) -> Boolean = { false },
-    /** Called with the caller's address after a cast launch from a guest was accepted. Must not throw; a throw is dropped. */
-    val onGuestLaunch: ((remote: String) -> Unit)? = null,
+    /**
+     * Told the address of every caller before the access decision, so the owner can tell who has been talking to this receiver
+     * lately. Must not throw; a throw is dropped.
+     */
+    val onCaller: (String) -> Unit = {},
 )
 
 /** One handled HTTP call, reported after the response was produced (404s included). */
@@ -188,7 +189,12 @@ class DialServer(
 
         // Plugins runs before routing: a refused call never reads its body and never reaches onLaunch.
         app.intercept(ApplicationCallPipeline.Plugins) {
-            if (!config.accessPolicy(call.request.local.remoteAddress)) {
+            try {
+                config.onCaller(call.request.local.remoteAddress)
+            } catch (_: Exception) {
+                // a note about the caller never changes the answer
+            }
+            if (!config.accessPolicy(call.request.local.remoteAddress) || !originAllowed(call.request.headers[HttpHeaders.Origin])) {
                 sendStatus(call, HttpStatusCode.Forbidden)
                 finish()
             }
@@ -241,14 +247,6 @@ class DialServer(
                                 return@post
                             }
                         }
-                        val caller = call.request.local.remoteAddress
-                        if (config.isGuest(caller)) {
-                            try {
-                                config.onGuestLaunch?.invoke(caller)
-                            } catch (_: Exception) {
-                                // a notice never changes the answer to the caller
-                            }
-                        }
                         if (!locationPid.isNullOrEmpty()) call.response.header("LOCATION", "${baseUrl(call)}/apps/$APP/$locationPid")
                         sendStatus(call, if (state == "stopped") HttpStatusCode.Created else HttpStatusCode.OK)
                     }
@@ -275,6 +273,9 @@ class DialServer(
             }
         }
     }
+
+    /** DIAL asks a receiver to refuse browsers: a request with an Origin is served only for an app origin (`package:...`). */
+    private fun originAllowed(origin: String?): Boolean = origin == null || origin.startsWith("package:")
 
     private fun baseUrl(call: ApplicationCall): String = "http://${call.request.host()}:$boundPort${config.prefix}"
 

@@ -8,6 +8,8 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Pure formatter for one evidence line (no android.* so it runs in a plain JVM unit test).
@@ -153,6 +155,8 @@ class EvidenceLog(
     private val tag: String = "T2U",
     private val monoNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
     private val logcat: (String) -> Unit = { Log.i(tag, it) },
+    /** Lines waiting for the writer thread; one more is dropped (and counted) instead of queued. */
+    private val maxPending: Int = MAX_PENDING_LINES,
 ) {
     @Volatile
     private var level: LogLevel = LogLevel.INFO
@@ -163,6 +167,16 @@ class EvidenceLog(
     private val closed = AtomicBoolean(false)
 
     val isClosed: Boolean get() = closed.get()
+
+    private val pending = AtomicInteger()
+    private val droppedSinceMarker = AtomicInteger()
+    private val droppedTotal = AtomicLong()
+
+    /** Lines left out of the file because the writer was too far behind (a flood of events); they still reached logcat. */
+    fun droppedCount(): Long = droppedTotal.get()
+
+    /** Test seam: runs on the writer thread before each queued line is written. */
+    @Volatile internal var beforeAppend: () -> Unit = {}
 
     /**
      * Drains queued writes, stops the writer thread and releases the file handle. Idempotent; once closed, [event], [clear] and
@@ -208,9 +222,25 @@ class EvidenceLog(
             return
         }
         logcat(line.take(4000))
+        if (pending.incrementAndGet() > maxPending) {
+            // the writer is far behind (a flood of events): keep memory bounded, count what is left out
+            pending.decrementAndGet()
+            droppedSinceMarker.incrementAndGet()
+            droppedTotal.incrementAndGet()
+            return
+        }
         try {
-            executor.execute { append(line) }
+            executor.execute {
+                try {
+                    beforeAppend()
+                    writeDropMarker()
+                    append(line)
+                } finally {
+                    pending.decrementAndGet()
+                }
+            }
         } catch (t: Throwable) {
+            pending.decrementAndGet()
             warn("evidence executor rejected $kind", t)
         }
     }
@@ -247,6 +277,18 @@ class EvidenceLog(
         }
     }
 
+    /** On the writer thread: says in the file how many lines were left out since the last marker. */
+    private fun writeDropMarker() {
+        val n = droppedSinceMarker.getAndSet(0)
+        if (n == 0) return
+        val marker = try {
+            EvidenceLine.format(OffsetDateTime.now().format(tsFormat), monoNanos(), "log-dropped", mapOf("count" to n))
+        } catch (t: Throwable) {
+            return
+        }
+        append(marker)
+    }
+
     private fun append(line: String) {
         try {
             rotating.append((line + "\n").toByteArray(Charsets.UTF_8))
@@ -261,6 +303,9 @@ class EvidenceLog(
 
         /** How many rotated files are kept next to the current one. */
         const val KEEP_ROTATED = 2
+
+        /** The most lines that wait for the writer thread at once (about 16 MiB at the longest line). */
+        const val MAX_PENDING_LINES = 2048
 
         private val lock = Any()
         private var instance: EvidenceLog? = null

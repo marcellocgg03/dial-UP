@@ -4,6 +4,7 @@ package dev.t2u.lounge
 // MIT, Copyright (c) Patrick Kan): DIAL server, the two lounge sessions and one SSDP advertisement as one cast target.
 // The lounge side is FakeLoungeServer, which replays the traffic recorded from the Node receiver.
 
+import dev.t2u.dial.DialServer
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.lanHttpClient
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
@@ -114,7 +116,12 @@ class YouTubeCastReceiverTest {
         dataStore = dataStore,
     )
 
-    private fun deps(adv: DialAdvertiser = advertiser, accessPolicy: (String) -> Boolean = { true }) = ReceiverDeps(
+    private fun deps(
+        adv: DialAdvertiser = advertiser,
+        accessPolicy: (String) -> Boolean = { true },
+        onCaller: (String) -> Unit = {},
+        onSenderConnected: (String, Sender) -> Unit = { _, _ -> },
+    ) = ReceiverDeps(
         bindHost = "127.0.0.1",
         accessPolicy = accessPolicy,
         advertiser = adv,
@@ -123,6 +130,8 @@ class YouTubeCastReceiverTest {
         endpoints = fake.endpoints,
         sink = sink,
         scope = scope,
+        onCaller = onCaller,
+        onSenderConnected = onSenderConnected,
     )
 
     private fun receiver(
@@ -180,15 +189,107 @@ class YouTubeCastReceiverTest {
         assertEquals((clScreen["screenId"] as JsonPrimitive).content, registration.form["screen_id"])
 
         // the sender connects and casts: the recorded setPlaylist plays on the player
-        val recordedVideo = recordedMessages("rpc-cl.txt").first { it.name == "setPlaylist" }.payload.let {
-            ((it as JsonObject)["videoId"] as JsonPrimitive).content
-        }
+        val recordedVideo = recordedVideoOf("rpc-cl.txt")
         fake.replayRecorded("cl")
         awaitUntil { "play:$recordedVideo" in player.calls }
 
         // and the player's state goes back to the sender
         awaitUntil { fake.sentNames("cl").flatten().let { "nowPlaying" in it && "onStateChange" in it } }
         assertTrue(fake.sentNames("cl").flatten().containsAll(listOf("nowPlaying", "onStateChange")))
+    }
+
+    @Test
+    fun aConnectingSenderIsReportedWithTheSpeakersNameAndItsOwnDeviceNameAndALaunchAloneIsNot() = run {
+        val connected = CopyOnWriteArrayList<Pair<String, Sender>>()
+        val callers = CopyOnWriteArrayList<String>()
+        val r = YouTubeCastReceiver(
+            player,
+            options("🔊 Kitchen"),
+            deps(onCaller = { callers.add(it) }, onSenderConnected = { speaker, sender -> connected.add(speaker to sender) }),
+        ).also { receivers.add(it) }
+        r.start()
+        val port = dialPort()
+
+        // a DIAL launch alone (even an accepted one) is no cast yet: the caller's address is noted, nobody is told
+        val launch = launchPost(port, "pairingCode=ABCDEF&theme=cl")
+        assertTrue(launch.headers().firstValue("LOCATION").isPresent)
+        assertEquals(listOf("127.0.0.1"), callers.toList())
+        assertEquals(emptyList(), connected.toList())
+
+        // the sender connects through the lounge: that is the moment
+        fake.replayRecorded("cl")
+        awaitUntil { connected.isNotEmpty() }
+        val (speaker, sender) = connected.first()
+        assertEquals("🔊 Kitchen", speaker)
+        assertEquals("Example Phone 01", sender.name, "the device name the lounge reports, not an address")
+    }
+
+    @Test
+    fun aThrowingSenderCallbackDoesNotBreakTheConnect() = run {
+        val r = YouTubeCastReceiver(
+            player,
+            options(),
+            deps(onSenderConnected = { _, _ -> error("boom") }),
+        ).also { receivers.add(it) }
+        r.start()
+        launchPost(dialPort(), "pairingCode=ABCDEF&theme=cl")
+        fake.replayRecorded("cl")
+        // the recorded cast still plays although the callback threw on the connect
+        awaitUntil { "play:${recordedVideoOf("rpc-cl.txt")}" in player.calls }
+        assertEquals("running", r.status)
+    }
+
+    private fun recordedVideoOf(file: String): String = recordedMessages(file).first { it.name == "setPlaylist" }.payload.let {
+        ((it as JsonObject)["videoId"] as JsonPrimitive).content
+    }
+
+    private fun freePort(): Int = java.net.ServerSocket(0).use { it.localPort }
+
+    private fun portIsFree(port: Int): Boolean = try {
+        java.net.ServerSocket().use {
+            it.reuseAddress = true
+            it.bind(InetSocketAddress("127.0.0.1", port))
+        }
+        true
+    } catch (_: java.io.IOException) {
+        false
+    }
+
+    /** A starter that cancels [caller] in the middle of the start and then lets the server finish binding, so the caller is cancelled at the withContext boundary. */
+    private fun cancelWhileBinding(caller: () -> kotlinx.coroutines.Job): suspend (DialServer) -> Unit = { s ->
+        caller().cancel()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { s.startSuspending() }
+    }
+
+    @Test
+    fun aStartCancelledWhileTheDialServerBindsReleasesThePort() {
+        val port = freePort()
+        val r = YouTubeCastReceiver(player, options().copy(dialPort = port), deps()).also { receivers.add(it) }
+        lateinit var caller: kotlinx.coroutines.Job
+        r.dialStarter = cancelWhileBinding { caller }
+        caller = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { r.start() }
+        runBlocking {
+            caller.start()
+            withTimeout(10_000) { caller.join() }
+        }
+        assertTrue(caller.isCancelled)
+        assertEquals("stopped", r.status)
+        assertTrue(portIsFree(port), "the DIAL port was left bound by the cancelled start")
+    }
+
+    @Test
+    fun aRebindCancelledWhileTheNewDialServerBindsReleasesThePort() = run {
+        val port = freePort()
+        val r = YouTubeCastReceiver(player, options().copy(dialPort = port), deps()).also { receivers.add(it) }
+        r.start()
+        assertFalse(portIsFree(port), "running")
+        lateinit var caller: kotlinx.coroutines.Job
+        r.dialStarter = cancelWhileBinding { caller }
+        caller = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { r.rebindDial("127.0.0.1") }
+        caller.start()
+        caller.join()
+        assertTrue(caller.isCancelled)
+        assertTrue(portIsFree(port), "the new DIAL server was left bound by the cancelled rebind")
     }
 
     private fun getBytes(port: Int, path: String): ByteArray = http.send(

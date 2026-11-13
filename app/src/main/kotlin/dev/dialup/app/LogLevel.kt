@@ -36,7 +36,9 @@ fun levelOf(kind: String, fields: Map<String, Any?>): LogLevel {
             val status = (fields["status"] as? Number)?.toInt()
             val ok = status != null && status in 200..299
             val dialPost = fields["server"] == "dial" && fields["method"] == "POST"
-            if (ok && !dialPost) LogLevel.DEBUG else LogLevel.INFO
+            // a media request that named no registered token (a port scan, a stale link) is noise, not history
+            val unknownToken = fields["server"] == "media" && isUnregisteredTokenMiss(status, fields["label"] as? String, fields["note"] as? String)
+            if ((ok && !dialPost) || unknownToken) LogLevel.DEBUG else LogLevel.INFO
         }
         else -> LogLevel.INFO
     }

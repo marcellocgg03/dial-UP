@@ -101,7 +101,7 @@ internal class RendererCharacterizationTest {
 
             override fun registerVideo(entry: VideoEntry): String = "/stream/x"
         }
-        return RendererDeps(config, resolver, media, lanHttpClient(), receiver, scope, events)
+        return RendererDeps(config, resolver, media, lanHttpClient(), receiver, scope, events, allowLoopbackSpeakers = true)
     }
 
     /** Runs [body] with a renderer whose receiver destroys it during start(); the receiver is passed on. */

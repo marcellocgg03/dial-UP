@@ -14,11 +14,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** Real /usr/bin/ffmpeg (WSL 4.4.2): the pipe path is proven here before it runs on the phone. */
+/** Real ffmpeg (from PATH) (WSL 4.4.2): the pipe path is proven here before it runs on the phone. */
 class MediaServerPipeTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
+    private val ffmpeg = ToolPaths.ffmpeg
     private lateinit var tone: File
     private lateinit var bufferDir: File
     private lateinit var launcher: CountingLauncher

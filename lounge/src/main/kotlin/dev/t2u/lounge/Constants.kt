@@ -17,7 +17,6 @@ class LoungeEndpoints(val base: String = "https://www.youtube.com") {
     val generateScreenId: String = "$base/api/lounge/pairing/generate_screen_id"
     val getLoungeTokenBatch: String = "$base/api/lounge/pairing/get_lounge_token_batch"
     val registerPairingCode: String = "$base/api/lounge/pairing/register_pairing_code"
-    val getPairingCode: String = "$base/api/lounge/pairing/get_pairing_code?ctx=pair"
     val bind: String = "$base/api/lounge/bc/bind"
 }
 
@@ -55,8 +54,6 @@ object InnerTubeConstants {
 object LoungeConstants {
     // lib/Constants.js CONF_DEFAULTS
     const val SCREEN_APP = "ytcr"
-    const val DEFAULT_BRAND = "Generic"
-    const val DEFAULT_MODEL = "SmartTV"
 
     // lib/app/BindParams.js (the constructor's fixed fields)
     const val BIND_DEVICE = "LOUNGE_SCREEN"

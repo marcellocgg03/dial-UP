@@ -3,6 +3,7 @@ package dev.dialup.app
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.YTDLP_CHANNELS
+import dev.t2u.renderer.cleanDisplayName
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,7 +111,7 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NOTIFY_GUESTS, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NOTIFY_GUESTS, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
     KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
@@ -163,7 +164,7 @@ fun parseSettings(text: String): ParsedSettings {
     bool(KEY_NOTIFY_GUESTS)?.let { data = data.copy(notifyGuests = it) }
     o[KEY_NAME_PREFIX]?.let { e ->
         val text = (e as? JsonPrimitive)?.takeIf { it.isString }?.content
-        if (text != null) data = data.copy(namePrefix = text) else problems += KEY_NAME_PREFIX
+        if (text != null) data = data.copy(namePrefix = cleanDisplayName(text, MAX_NAME_PREFIX_LENGTH)) else problems += KEY_NAME_PREFIX
     }
     o[KEY_THEME]?.let { e ->
         val mode = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { ThemeMode.fromWire(it) }
@@ -231,6 +232,9 @@ class Settings(
     private val state = MutableStateFlow(AppSettingsData())
     private val mode = MutableStateFlow(DEFAULT_DIAL_ACCESS)
 
+    /** What a restart would read for [AppSettingsData.dialAccess]: the last value known to be in the file. */
+    private var persistedDialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS
+
     /** The current settings, as observed by the screens and the bridge gates. */
     val data: StateFlow<AppSettingsData> get() = state
 
@@ -241,14 +245,41 @@ class Settings(
         load()
     }
 
-    /** Applies [change] to the current settings under the lock, publishes the result and persists it atomically. */
+    /**
+     * Applies [change] to the current settings under the lock, publishes the result and persists it atomically.
+     *
+     * Who may cast is a safety setting, so a failed write must never leave a looser value than the file would give after a
+     * restart: a change that loosens it (phone to LAN) is published only once it is saved, and kept at the stricter saved
+     * value when the save fails; a change that tightens it is published at once and stays, with [onError] telling that the
+     * file still holds the looser value (the next update writes it again).
+     */
     fun update(change: (AppSettingsData) -> AppSettingsData) {
         synchronized(lock) {
             val next = change(state.value)
-            state.value = next
-            mode.value = next.dialAccess
-            write(next)
+            val loosens = next.dialAccess == DialAccessMode.LAN && persistedDialAccess != DialAccessMode.LAN
+            if (!loosens) publish(next)
+            val saved = write(next)
+            if (saved) {
+                persistedDialAccess = next.dialAccess
+            } else if (next.dialAccess != persistedDialAccess) {
+                onError(
+                    "settings:dialAccess",
+                    IllegalStateException(
+                        if (loosens) {
+                            "dialAccess ${next.dialAccess.wire} was not saved; staying at ${persistedDialAccess.wire}"
+                        } else {
+                            "dialAccess ${next.dialAccess.wire} is not saved yet; the file still says ${persistedDialAccess.wire}"
+                        },
+                    ),
+                )
+            }
+            if (loosens) publish(if (saved) next else next.copy(dialAccess = persistedDialAccess))
         }
+    }
+
+    private fun publish(data: AppSettingsData) {
+        state.value = data
+        mode.value = data.dialAccess
     }
 
     fun setDialAccess(mode: DialAccessMode) {
@@ -262,6 +293,7 @@ class Settings(
             extras = parsed.extras
             state.value = parsed.data
             mode.value = parsed.data.dialAccess
+            persistedDialAccess = parsed.data.dialAccess
             if (parsed.problems.isNotEmpty()) {
                 onError("settings:read", IllegalArgumentException("settings.json: ${parsed.problems.joinToString(", ")}"))
             }
@@ -270,13 +302,16 @@ class Settings(
         }
     }
 
-    private fun write(data: AppSettingsData) {
+    /** Writes [data]; true when the file now holds it. A failure is reported through [onError]. */
+    private fun write(data: AppSettingsData): Boolean {
         try {
             val json = settingsJson(data, extras).toString()
             file.absoluteFile.parentFile?.mkdirs()
             writer(file, json)
+            return true
         } catch (t: Throwable) {
             onError("settings:write", t)
+            return false
         }
     }
 }

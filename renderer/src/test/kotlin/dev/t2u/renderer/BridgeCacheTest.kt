@@ -41,7 +41,7 @@ class BridgeCacheTest {
         for (name in preexisting) File(files, name).writeBytes(ByteArray(1024) { 1 })
         return h.newBridge(
             h.testConfig(outputFormat = "mp4"),
-            launcher = JvmPipeLauncher("/usr/bin/ffmpeg"),
+            launcher = JvmPipeLauncher(ToolPaths.ffmpeg),
             bufferDir = buffer,
             sourceDownloader = downloader,
             cacheMb = cacheMb,

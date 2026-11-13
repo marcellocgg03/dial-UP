@@ -51,10 +51,10 @@ data class ReceiverDeps(
     val sink: EventSink = NoEvents,
     val scope: CoroutineScope,
     val onDialRequest: (DialRequest) -> Unit = {},
-    /** True for a caller served only because the LAN is allowed. */
-    val isGuest: (String) -> Boolean = { false },
-    /** A guest started a cast launch: the speaker's name and the caller's address. */
-    val onGuestLaunch: (speaker: String, remote: String) -> Unit = { _, _ -> },
+    /** The address of every caller of the DIAL server, told before the access decision. */
+    val onCaller: (String) -> Unit = {},
+    /** A lounge sender connected to the speaker named first (its current DIAL friendly name); the sender carries its own device name. */
+    val onSenderConnected: (speaker: String, sender: Sender) -> Unit = { _, _ -> },
 )
 
 private val UUID_SHAPE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -89,15 +89,11 @@ class YouTubeCastReceiver(
     /** The DIAL friendly name: [ReceiverOptions.name] until [rename] changes it; read at start and at a rebind. */
     @Volatile private var friendlyName: String = options.name
 
+    /** Starts a DIAL server; a seam for the tests that cancel the caller while the server binds. */
+    internal var dialStarter: suspend (DialServer) -> Unit = { it.startSuspending() }
+
     /** The config the running DIAL server was built from; the port in it is the one a rebind keeps. */
     private var dialConfig: DialConfig? = null
-
-    /** Called when a sender connects. */
-    var onSenderConnect: (Sender) -> Unit
-        get() = app.onSenderConnect
-        set(value) {
-            app.onSenderConnect = value
-        }
 
     /** Called when a sender leaves; the second argument is true when it vanished without saying goodbye. */
     var onSenderDisconnect: (Sender, Boolean) -> Unit
@@ -112,6 +108,8 @@ class YouTubeCastReceiver(
     var onTerminate: (Throwable) -> Unit = {}
 
     init {
+        // the app calls this inside its own guard, so a throwing owner cannot break the connect
+        app.onSenderConnect = { sender -> deps.onSenderConnected(friendlyName, sender) }
         app.onTerminate = { error ->
             deps.scope.launch {
                 try {
@@ -174,12 +172,13 @@ class YouTubeCastReceiver(
                     modelName = options.model,
                     pid = app.pid,
                     accessPolicy = deps.accessPolicy,
-                    isGuest = deps.isGuest,
-                    onGuestLaunch = { remote -> deps.onGuestLaunch(friendlyName, remote) },
+                    onCaller = deps.onCaller,
                 )
                 val created = DialServer(config, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.startSuspending() }
+                // Owned before it starts: withContext drops its result when the caller is cancelled as it returns, and a server
+                // that was bound by then must still be reachable by the cleanup below.
                 server = created
+                withContext(Dispatchers.IO) { dialStarter(created) }
                 val location = "http://${config.bindHost}:${created.resolvedPort()}${config.prefix}/ssdp/device-desc.xml"
                 deps.advertiser.advertise(SsdpDevice(friendlyName, id, deps.serverHeader, location))
                 advertisedUuid = id
@@ -267,13 +266,16 @@ class YouTubeCastReceiver(
             }
             // a server a failed earlier move left behind is gone (old == null): start again on the port the config names
             val port = old?.resolvedPort() ?: config.port
+            var created: DialServer? = null
             try {
                 withContext(Dispatchers.IO) { old?.stop() }
                 dial = null
                 val moved = config.copy(bindHost = newHost, port = port)
-                val created = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
-                withContext(Dispatchers.IO) { created.startSuspending() }
-                dial = created
+                val next = DialServer(moved, deps.onDialRequest) { _, body -> handleLaunch(body) }
+                created = next
+                // owned before it starts, as in start: a cancellation at the boundary must not strand a bound port
+                dial = next
+                withContext(Dispatchers.IO) { dialStarter(next) }
                 dialConfig = moved
                 bindHost = newHost
                 deps.advertiser.advertise(
@@ -281,6 +283,9 @@ class YouTubeCastReceiver(
                 )
                 note("rebound", "port" to port)
             } catch (e: CancellationException) {
+                // the old server is gone and the new one may be bound: close it, so the port is free for the next attempt
+                withContext(NonCancellable) { created?.let { s -> runQuietly { withContext(Dispatchers.IO) { s.stop() } } } }
+                dial = null
                 throw e
             } catch (e: Throwable) {
                 dial = null

@@ -25,14 +25,14 @@ import kotlin.test.assertTrue
 
 /**
  * Port of the remux.test.js test about the yt-dlp download as the last rung for adts and mp3,
- * plus the order of the ladder and the time bound on prepare, against real /usr/bin/ffmpeg. The "YouTube" upstream
+ * plus the order of the ladder and the time bound on prepare, against real ffmpeg (from PATH). The "YouTube" upstream
  * answers every request with 403; the "download" copies a generated 60 s fragmented M4A.
  */
 class MediaServerDownloadRungTest {
     @TempDir lateinit var dir: File
 
-    private val ffmpeg = "/usr/bin/ffmpeg"
-    private val ffprobe = "/usr/bin/ffprobe"
+    private val ffmpeg = ToolPaths.ffmpeg
+    private val ffprobe = ToolPaths.ffprobe
     private lateinit var source: File
     private lateinit var upstream: HttpServer
     private lateinit var base: String
@@ -128,7 +128,7 @@ class MediaServerDownloadRungTest {
     ): MediaServer =
         MediaServer(
             "127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "pipe"), resolver,
-            files = files, prepareTimeoutMs = prepareTimeoutMs,
+            files = files, prepareTimeoutMs = prepareTimeoutMs, ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP,
         ).also {
             it.start()
             servers.add(it)

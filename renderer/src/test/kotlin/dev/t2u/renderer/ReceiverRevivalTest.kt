@@ -97,6 +97,7 @@ class ReceiverRevivalTest {
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
                 clock = { now.get() },
+                allowLoopbackSpeakers = true,
             ),
         )
 
