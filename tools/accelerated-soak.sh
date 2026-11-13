@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export ANDROID_SERIAL="${ANDROID_SERIAL:-$(cat .t2u/device)}"
-PKG=dev.dialup
+PKG=dev.dialup.debug   # the debug build
 DIR=/data/local/tmp/t2u-soak
 
 case "${1:-}" in

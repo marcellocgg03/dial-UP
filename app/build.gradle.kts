@@ -24,6 +24,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The last stable release's code; see versionCode in defaultConfig.
+val stableVersionCode = 4
+
+// Nightly build number (1..999): the commits on main since the last stable tag, passed by the nightly workflow.
+val nightlyBuild: Int? = (findProperty("nightlyBuild") as String?)?.let {
+    requireNotNull(it.toIntOrNull()?.takeIf { n -> n in 1..999 }) { "nightlyBuild must be 1..999, got '$it'" }
+}
+
 android {
     namespace = "dev.dialup.app"
     compileSdk = 37
@@ -32,10 +40,18 @@ android {
         applicationId = "dev.dialup"
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37
-        // versionCode is a plain integer raised by one for every build that is published (D-01); versionName
+        // versionCode is stableVersionCode * 1000 + the nightly build number (0 for a stable build). stableVersionCode is a
+        // plain integer raised by one for every stable release (D-01), so a nightly (4001..4999) installs over its
+        // stable release and the next stable release (5000) installs over every nightly. versionName of a stable build
         // follows the git tag v<versionName>.
-        versionCode = 4
+        versionCode = stableVersionCode * 1000 + (nightlyBuild ?: 0)
         versionName = "1.1.0"
+        // A nightly (-PnightlyBuild=N from the nightly workflow) is the NEXT patch version as a pre-release: it ranks above
+        // the stable release it grew from and below the one it leads to, which is what the update check compares.
+        if (nightlyBuild != null) {
+            val parts = versionName!!.split('.')
+            versionName = "${parts[0]}.${parts[1]}.${parts[2].toInt() + 1}-nightly.$nightlyBuild"
+        }
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -54,7 +70,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // A separate package, so the debug build installs next to the release one (its data and settings are separate too).
+            // Both would bind the same ports: run the bridge in one at a time (tools/dev-install.sh warns).
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "DialUP (debug)"
+        }
         release {
+            manifestPlaceholders["appLabel"] = "DialUP"
             if (releaseSigningComplete) signingConfig = signingConfigs.getByName("release")
             // D-06: the app depends on youtubedl-android payloads and Ktor engines that load classes by name, and
             // nothing has proven them under R8, so the beta ships unminified. Revisit after 1.0.
