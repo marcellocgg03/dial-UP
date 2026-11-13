@@ -91,7 +91,7 @@ fun AppUpdatesSection(
         supportingContent = {
             Column {
                 Text("Version $currentVersion", modifier = Modifier.testTag("app-version"))
-                Text("Checks GitHub for a newer DialUP release when the app is opened")
+                Text("Checks GitHub for a newer DialUP release when the app is opened and once a day in the background, and notifies you once per release")
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
