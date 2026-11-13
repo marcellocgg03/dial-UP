@@ -64,13 +64,13 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 | Module | Job |
 |--------|-----|
 | `upnp` | SSDP, SOAP control, device descriptions |
-| `dial` | DIAL server and SSDP responder, one per speaker |
+| `dial` | DIAL server and SSDP responder, one per renderer |
 | `lounge` | YouTube lounge receiver and InnerTube client |
 | `media` | Local media server (Range, pipe, file cache) |
-| `renderer` | Per-speaker playback logic, queue, gapless hand-off |
+| `renderer` | Per-renderer playback logic, queue, gapless hand-off |
 | `app` | Android service, config, yt-dlp / ffmpeg wiring |
 
-`tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
+`tools/` holds helper scripts for on-device testing (adb, fake renderer, log reports).
 
 ## Credits
 
