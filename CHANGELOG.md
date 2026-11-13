@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1
 
 ### Added
 
@@ -18,6 +18,10 @@
 
 ### Changed
 
+- User-facing text says "renderer" instead of "speaker" in Settings and the dialogs.
+- The Add renderer popup is shorter, and a typed address that is not a private LAN IPv4 address now says
+  "That is not a valid IP address on this LAN".
+- The log setting is titled "Event logging".
 - The version code is now the stable release number times 1000 (plus the nightly number), so nightlies order between
   stable releases. It only ever goes up, so updates over 1.1.0 work as before.
 

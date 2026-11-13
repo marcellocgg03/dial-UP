@@ -25,7 +25,7 @@ plugins {
 }
 
 // The last stable release's code; see versionCode in defaultConfig.
-val stableVersionCode = 4
+val stableVersionCode = 5
 
 // Nightly build number (1..999): the commits on main since the last stable tag, passed by the nightly workflow.
 val nightlyBuild: Int? = (findProperty("nightlyBuild") as String?)?.let {
@@ -45,7 +45,7 @@ android {
         // stable release and the next stable release (5000) installs over every nightly. versionName of a stable build
         // follows the git tag v<versionName>.
         versionCode = stableVersionCode * 1000 + (nightlyBuild ?: 0)
-        versionName = "1.1.0"
+        versionName = "1.1.1"
         // A nightly (-PnightlyBuild=N from the nightly workflow) is the NEXT patch version as a pre-release: it ranks above
         // the stable release it grew from and below the one it leads to, which is what the update check compares.
         if (nightlyBuild != null) {
