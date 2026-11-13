@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+
+- **Tap the bridge notification to open DialUP.** The notification stays ongoing; a tap does not dismiss it.
+- **Name prefix** in Settings (the speaker emoji by default, empty allowed, at most 16 characters). It applies to the
+  running speakers at once and a cast keeps playing. A speaker you renamed by hand keeps its name. The " (app)" suffix
+  is gone.
+- **Notice when another device starts a cast.** When another device connects to one of your speakers, DialUP posts a
+  notification naming that device and the speaker (for example "COZYLA CD-8S544F2 started a cast on Lamp"). It has its
+  own "Other devices" channel and a switch in Settings, on by default. Your own phone never triggers it.
+- **Pin a speaker card.** A pinned card stays in the list across restarts; hiding or deleting a card unpins it.
+- **Restart prompts for rename and prefix.** With nothing cast, a rename or a new prefix applies live and shows a note.
+  With a cast running it offers Restart or Later. Android cannot clear YouTube and YouTube Music from recents, so the
+  notes ask you to do that yourself to see the new name.
+
+### Changed
+
+- One **Refresh** button beside "Add renderer by address"; the name prefix field in Settings is compact.
+- A stream failure now moves to the next format at once instead of after the 12 s start timeout, so audio no longer
+  starts about 15 s late when the first format fails.
+- A speaker taken over by another app (for example the Sonos app) now ends the cast on the phone as well, instead of
+  YouTube Music still showing it as connected.
+- Deleting a speaker you saved by address brings its card back at once when discovery also finds it.
+- The log records which speaker a DIAL launch reached, and the speaker replies we send, at the default log level.
+
+### Fixed
+
+- A token refresh during a cast no longer drops the connected phone.
+- Resetting the name prefix to its default now survives a restart.
+- Messages queued behind a lounge refresh no longer go out with a stale id, and a cancelled retry no longer leaves its
+  caller waiting.
+- Starting a cast on a speaker can no longer leave its port held after a cancel, and a cancelled stream start can no
+  longer leave an ffmpeg process running.
+
+### Security
+
+- Replies from speakers and other devices are size-limited, so a device on the network cannot exhaust the app's memory.
+- In LAN server mode, discovery answers only go to devices on the Wi-Fi network.
+- A speaker's control address must belong to the same device that announced it and may not point at the phone itself.
+- DIAL refuses requests that carry a browser Origin.
+- A known speaker's entry is no longer replaced from a different address while it is still fresh. A speaker that moves
+  without saying goodbye is picked up again once its old entry expires, which can take up to about 45 minutes.
+- ffmpeg only reads Google video addresses over https and runs with a protocol whitelist, and the number of ffmpeg
+  processes is limited, in total and per stream.
+- Speaker names and the prefix are cleaned of control characters; stream addresses are shortened in the log; a failed
+  settings write can no longer loosen LAN server mode after a restart; settings and speaker files are flushed to disk
+  before they replace the old file.
+
 ## 1.0.0
 
 First stable release. It builds on 0.9.0-beta.2.
