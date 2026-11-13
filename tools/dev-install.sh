@@ -25,7 +25,7 @@ cd "$ROOT"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.dialup"
+PKG="dev.dialup.debug"   # the debug build; the release build is dev.dialup
 OLD_PKG="dev.t2u.spike"
 ACTIVITY="$PKG/dev.dialup.app.MainActivity"
 APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -64,6 +64,14 @@ if [ -n "$(adb -s "$SERIAL" shell pm path "$OLD_PKG" 2>/dev/null | tr -d '\r')" 
     echo "  Way out: tools/dev-install.sh --uninstall-old   (removes $OLD_PKG and its data, then installs DialUP)" >&2
     exit 3
   fi
+fi
+
+# The release build (dev.dialup) can stay installed, but two running bridges fight over UDP 1900, the DIAL ports and
+# port 8000 and double the cast-menu entries. Warn when its bridge service is running; nothing is stopped here.
+RELEASE_PKG="dev.dialup"
+if adb -s "$SERIAL" shell dumpsys activity services "$RELEASE_PKG" 2>/dev/null | grep -q "BridgeService"; then
+  echo "dev-install: WARNING: the release app $RELEASE_PKG has its bridge running on $SERIAL." >&2
+  echo "  Turn its bridge off (header switch) before using this debug build, or both advertise every speaker." >&2
 fi
 
 ./gradlew --console=plain :app:assembleDebug

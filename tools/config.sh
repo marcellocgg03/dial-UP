@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.dialup"
+PKG="dev.dialup.debug"   # the debug build; the release build is dev.dialup
 REMOTE_FILE="files/config.json"
 REMOTE_TMP="files/config.json.tmp"
 MAX_BYTES=65536

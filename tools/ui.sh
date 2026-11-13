@@ -161,7 +161,7 @@ main() {
     front)
       adb_ shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
       adb_ shell wm dismiss-keyguard >/dev/null 2>&1 || true
-      adb_ shell am start -n dev.dialup/dev.dialup.app.MainActivity >/dev/null
+      adb_ shell am start -n dev.dialup.debug/dev.dialup.app.MainActivity >/dev/null
       sleep 1
       ;;
     type)

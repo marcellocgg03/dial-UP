@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/env.sh
 . "$ROOT/tools/env.sh"
 
-PKG="dev.dialup"
+PKG="dev.dialup.debug"   # the debug build; the release build is dev.dialup
 RECEIVER="$PKG/dev.dialup.app.CommandReceiver"
 ACTIVITY="$PKG/dev.dialup.app.MainActivity"
 EVIDENCE_REL="files/evidence"
