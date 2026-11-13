@@ -47,6 +47,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -890,6 +891,7 @@ class Renderer(
                 cur.fetched = true
             },
             onFailure = { cur.streamFailed = true },
+            onBusy = { cur.busy = true },
         )
         val streamPath = deps.media.prepareAndRegister(entry)
         cur.streamPath = streamPath
@@ -2109,7 +2111,13 @@ class Renderer(
      * A normal start proves the format works for future tracks. An offset stream may have been chosen
      * only to seek, so it must not replace the speaker's ordinary format preference.
      */
-    private suspend fun confirmFormat(c: Current) = formats.confirm(c)
+    private suspend fun confirmFormat(c: Current) {
+        busyRetried.set(false)
+        formats.confirm(c)
+    }
+
+    /** True once a start has been retried in the same format because the media server was busy; a start that plays clears it. */
+    private val busyRetried = AtomicBoolean(false)
 
     /**
      * The speaker accepted the URL but never started playing (a refused upstream host, a format it cannot
@@ -2119,10 +2127,13 @@ class Renderer(
      * the chain, stop and say why.
      */
     private suspend fun handleStartFailure(c: Current) {
-        val next = formats.nextAfter(c.format, c.sourceMime)
-        formats.forgetUnproven(c)
+        // Our own busy answer says nothing about the format: once per start, the same format is tried again (the wait for
+        // this start was longer than the Retry-After) instead of stepping down a format and forgetting a good one.
+        val sameFormatAgain = c.busy && !busyRetried.getAndSet(true)
+        val next = if (sameFormatAgain) c.format else formats.nextAfter(c.format, c.sourceMime)
+        if (!sameFormatAgain) formats.forgetUnproven(c)
         if (next != null) {
-            note("warn", "Renderer did not start ${c.format} - trying $next")
+            note("warn", if (sameFormatAgain) "Media server was busy for ${c.format} - trying it again" else "Renderer did not start ${c.format} - trying $next")
             pollLoop.stop()
             // Where the speaker was last polled playing, if that is newer than the last load or Seek and off the start;
             // otherwise where this stream was meant to play from (the load position or the last accepted Seek).

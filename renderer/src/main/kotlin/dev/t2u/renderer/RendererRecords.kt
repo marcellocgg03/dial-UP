@@ -23,6 +23,9 @@ internal class Current(
     /** The media server answered a request for this stream with a 5xx: no format attempt produced a byte. */
     @Volatile var streamFailed: Boolean = false
 
+    /** The media server answered a request for this stream with its own busy limit (503, Retry-After): not a format failure. */
+    @Volatile var busy: Boolean = false
+
     @Volatile var streamPath: String? = null
 
     /** False for a stream loaded while paused (SetAVTransportURI only) until the first Play is sent for it. */
