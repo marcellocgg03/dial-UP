@@ -5,6 +5,7 @@ package dev.dialup.app.ui
 import android.os.Build
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -34,6 +35,7 @@ import dev.dialup.app.AppSettings
 import dev.dialup.app.AppUpdates
 import dev.dialup.app.BuildConfigFacts
 import dev.dialup.app.SettingsModel
+import dev.dialup.app.UpdateCheckJob
 import dev.dialup.app.ThemeMode
 import dev.dialup.app.model.PermissionState
 import dev.dialup.app.model.bannerState
@@ -66,6 +68,10 @@ fun MainScreen(
     val updateCheckEnabled = appData.updateCheckEnabled
     val appUpdates = remember { AppUpdates.of(context) }
     val version = remember { BuildConfigFacts.versionName(context) ?: "0" }
+    LaunchedEffect(updateCheckEnabled) {
+        // the daily background check (and its notification) follows the same switch as the check on opening the app
+        if (updateCheckEnabled) UpdateCheckJob.schedule(context) else UpdateCheckJob.cancel(context)
+    }
     LaunchedEffect(openCount) {
         if (openCount > 0) {
             // the automatic release check runs beside the other calls and never delays them (throttled, off when switched off)
@@ -81,7 +87,8 @@ fun MainScreen(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },
             bottomBar = {
-                Column {
+                // imePadding lifts the restart card (and the bar) above an open keyboard, so a prompt raised by a field is seen
+                Column(Modifier.imePadding()) {
                     RestartCard(model, settings.restart, settingsUi.clearOnCastEnd)
                     NavigationBar {
                         NavigationBarItem(
@@ -111,7 +118,7 @@ fun MainScreen(
                 if (tab == TAB_SETTINGS) {
                     SettingsTab(settings, model, Modifier.weight(1f))
                 } else {
-                    UpdateCard(appUpdates, updateCheckEnabled, version)
+                    UpdateCard(appUpdates, updateCheckEnabled, version, appData.updateChannel)
                     SpeakersTab(
                         model,
                         Modifier.weight(1f),

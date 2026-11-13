@@ -178,13 +178,15 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
                 .testTag("section-hidden"),
         )
         SectionHeader("Maintenance")
-        YtDlpSection(ui, presenter)
+        YtDlpSection(ui, appData.ytdlpAutoUpdate, presenter)
         HorizontalDivider()
         AppUpdatesSection(
             model = AppUpdates.of(context),
             autoEnabled = appData.updateCheckEnabled,
             currentVersion = BuildConfigFacts.versionName(context) ?: "0",
             onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
+            channel = appData.updateChannel,
+            onChannelChange = presenter::setUpdateChannel,
         )
         SectionHeader("Appearance")
         ChoiceRow(
@@ -214,7 +216,7 @@ private fun SectionHeader(title: String) {
 private val CHANNELS = listOf("stable", "nightly")
 
 @Composable
-private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
+private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: SettingsPresenter) {
     val running = ui.update == UpdateUi.Running
     ui.updatePrompt?.let { prompt ->
         AlertDialog(
@@ -240,6 +242,14 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Text("Update daily, never during a cast", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = autoUpdate,
+                        onCheckedChange = presenter::setYtdlpAutoUpdate,
+                        modifier = Modifier.testTag("setting-ytdlp-auto"),
+                    )
+                }
                 OutlinedButton(
                     onClick = presenter::updateNow,
                     enabled = !running && ui.updatePrompt == null,

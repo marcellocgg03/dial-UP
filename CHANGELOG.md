@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Nightly builds.** A signed pre-release of main is published daily when main has changed and CI is green. Choose
+  Stable or Nightly under Settings > App updates; Stable never offers a nightly. A nightly installs over the stable app
+  and the next stable release installs over it.
+- **Notification when a DialUP update is available**, from a daily background check, once per release, on its own
+  "App updates" channel. It follows the existing app-updates switch.
+- **Switch for the daily yt-dlp update** next to the Stable/Nightly choice. It never runs during a cast.
+- The debug build installs next to the release app (package `dev.dialup.debug`).
+
+### Fixed
+
+- The restart card in Settings now sits above the keyboard instead of under it.
+
+### Changed
+
+- The version code is now the stable release number times 1000 (plus the nightly number), so nightlies order between
+  stable releases. It only ever goes up, so updates over 1.1.0 work as before.
+
 ## 1.1.0
 
 ### Added

@@ -432,6 +432,16 @@ class SettingsPresenter(
         settings.update { it.copy(updateCheckEnabled = on) }
     }
 
+    /** The release channel of the app update check. App-only, no restart; the next check reads it. */
+    fun setUpdateChannel(channel: UpdateChannel) {
+        settings.update { it.copy(updateChannel = channel) }
+    }
+
+    /** The daily automatic yt-dlp update. App-only like [setUpdateCheckEnabled]: read live by the updater and the job, no restart. */
+    fun setYtdlpAutoUpdate(on: Boolean) {
+        settings.update { it.copy(ytdlpAutoUpdate = on) }
+    }
+
     /** The one global log switch; applies to the running bridge at once. Returns whether a restart is needed. */
     fun setLogEnabled(on: Boolean): Boolean {
         settings.update { it.copy(logEnabled = on) }

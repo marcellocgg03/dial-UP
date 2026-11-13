@@ -55,6 +55,41 @@ class AppUpdateModelTest {
     }
 
     @Test
+    fun theStableChannelNeverSeesANightlyAndTheNightlyChannelSeesTheNewestOfAll() {
+        val tags = list("v1.1.0", "v1.1.1-nightly.12", "v1.1.1-nightly.9")
+        assertEquals("v1.1.0", newestRelease(tags)?.tag)
+        assertEquals("v1.1.0", newestRelease(tags, UpdateChannel.STABLE)?.tag)
+        assertEquals("v1.1.1-nightly.12", newestRelease(tags, UpdateChannel.NIGHTLY)?.tag)
+        // a stable release newer than the newest nightly wins on both channels
+        val later = list("v1.1.1", "v1.1.1-nightly.12")
+        assertEquals("v1.1.1", newestRelease(later, UpdateChannel.NIGHTLY)?.tag)
+        assertEquals(true, newestRelease(tags, UpdateChannel.NIGHTLY)?.nightly)
+    }
+
+    @Test
+    fun aStableAppIsNotOfferedItsOwnNightlyAndANightlyIsOfferedTheNext() {
+        val tags = list("v1.1.0", "v1.1.1-nightly.12")
+        assertEquals(CheckOutcome.UpToDate("v1.1.0"), outcomeOf(FetchResult.Body(tags), "1.1.0", UpdateChannel.STABLE))
+        assertEquals("v1.1.1-nightly.12", (outcomeOf(FetchResult.Body(tags), "1.1.0", UpdateChannel.NIGHTLY) as CheckOutcome.Newer).release.tag)
+        assertEquals("v1.1.1-nightly.12", (outcomeOf(FetchResult.Body(list("v1.1.1-nightly.12")), "1.1.1-nightly.9", UpdateChannel.NIGHTLY) as CheckOutcome.Newer).release.tag)
+        // a nightly of 1.1.1 is told about the stable 1.1.1 on either channel
+        assertEquals("v1.1.1", (outcomeOf(FetchResult.Body(list("v1.1.1")), "1.1.1-nightly.12", UpdateChannel.STABLE) as CheckOutcome.Newer).release.tag)
+    }
+
+    @Test
+    fun aRecordReadForTheOtherChannelIsNeitherShownNorTrusted() {
+        val nightly = UpdateRecord(100, 100, "v1.1.1-nightly.12", "https://github.com/marcellocgg03/dial-UP/releases/tag/v1.1.1-nightly.12", "nightly")
+        assertEquals(null, cardRelease(true, nightly, "1.1.0", UpdateChannel.STABLE))
+        assertEquals("v1.1.1-nightly.12", cardRelease(true, nightly, "1.1.0", UpdateChannel.NIGHTLY)?.tag)
+        assertTrue(autoCheckDue(nightly, 101, UpdateChannel.STABLE))
+        assertFalse(autoCheckDue(nightly, 101, UpdateChannel.NIGHTLY))
+        // an old record without a channel is a stable one
+        assertTrue(UpdateRecord(1, 1, "v1.1.0").isFor(UpdateChannel.STABLE))
+        assertFalse(UpdateRecord(1, 1, "v1.1.0").isFor(UpdateChannel.NIGHTLY))
+        assertEquals(nightly, parseUpdateRecord(updateRecordJson(nightly)))
+    }
+
+    @Test
     fun theRecordRoundTripsAndToleratesJunk() {
         val r = UpdateRecord(1L, 2L, "v1", "https://x")
         assertEquals(r, parseUpdateRecord(updateRecordJson(r)))

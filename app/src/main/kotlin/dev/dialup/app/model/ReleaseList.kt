@@ -18,7 +18,10 @@ const val RELEASES_PAGE_URL = "https://github.com/marcellocgg03/dial-UP/releases
 private const val ALLOWED_PATH_PREFIX = "/marcellocgg03/dial-up/releases/"
 
 /** One release of the list: its tag, its page, its parsed version and whether GitHub marks it a pre-release. */
-data class Release(val tag: String, val url: String, val version: SemVer, val prerelease: Boolean)
+data class Release(val tag: String, val url: String, val version: SemVer, val prerelease: Boolean) {
+    /** A nightly build: its pre-release part starts with `nightly` (v1.1.1-nightly.12). */
+    val nightly: Boolean get() = version.pre.firstOrNull() == "nightly"
+}
 
 /**
  * True when [url] is a release page of this repository: https, host github.com, no user info or port, a path under
@@ -48,10 +51,10 @@ fun safeReleaseUrl(url: String?): String = if (url != null && isAllowedReleaseUr
 
 /**
  * The newest release of the GitHub releases list in [json]: the maximum by semantic version over every non-draft entry
- * with a semantic tag and an allowed page, pre-releases included. Null for an empty list or text that is not a list.
+ * with a semantic tag and an allowed page, pre-releases included; nightly builds only on the [channel] NIGHTLY. Null for an empty list or text that is not a list.
  * Never throws.
  */
-fun newestRelease(json: String): Release? {
+fun newestRelease(json: String, channel: UpdateChannel = UpdateChannel.STABLE): Release? {
     val arr = runCatching { Json.parseToJsonElement(json) as? JsonArray }.getOrNull() ?: return null
     var best: Release? = null
     for (e in arr) {
@@ -62,6 +65,7 @@ fun newestRelease(json: String): Release? {
         if (!isAllowedReleaseUrl(url)) continue
         val v = SemVer.parse(tag) ?: continue
         val r = Release(tag, url, v, flag(o["prerelease"]) == true)
+        if (r.nightly && channel != UpdateChannel.NIGHTLY) continue
         if (best == null || r.version > best.version) best = r
     }
     return best

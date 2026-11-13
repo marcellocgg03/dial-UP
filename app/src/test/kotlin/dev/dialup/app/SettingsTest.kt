@@ -193,6 +193,8 @@ class SettingsTest {
             showAudioFormat = true,
             theme = ThemeMode.DARK,
             updateCheckEnabled = false,
+            ytdlpAutoUpdate = false,
+            updateChannel = dev.dialup.app.model.UpdateChannel.NIGHTLY,
             logEnabled = false,
             gapless = false,
             cacheMb = 512,
@@ -382,6 +384,18 @@ class SettingsTest {
         val f = File(dir, SETTINGS_FILE)
         settings(f).update { it.copy(clearOnCastEnd = true) }
         assertFalse("updateCheckEnabled" in f.readText(), f.readText())
+    }
+
+    @Test
+    fun theYtdlpAutoUpdateIsOnByDefaultAndOffRoundTrips() {
+        assertTrue(AppSettingsData().ytdlpAutoUpdate)
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        s.update { it.copy(clearOnCastEnd = true) }
+        assertFalse("ytdlpAutoUpdate" in f.readText(), f.readText())
+        s.update { it.copy(ytdlpAutoUpdate = false) }
+        assertTrue(f.readText().contains("""ytdlpAutoUpdate":false"""), f.readText())
+        assertFalse(settings(f).data.value.ytdlpAutoUpdate)
     }
 
     @Test

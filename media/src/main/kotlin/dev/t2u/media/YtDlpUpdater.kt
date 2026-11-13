@@ -130,6 +130,10 @@ class YtDlpUpdater(
     private val record: YtDlpRecordStore? = null,
     /** Wall clock (the record's clock); the app passes the system one. */
     private val wallMs: () -> Long = { System.currentTimeMillis() },
+    /** False while the author has switched the automatic update off: the loop and [updateIfDue] do nothing; [updateNow] is unaffected. */
+    private val autoEnabled: () -> Boolean = { true },
+    /** How often the loop looks at [autoEnabled] again while it is off. */
+    private val offRecheckMs: Long = 15 * 60_000L,
 ) {
     /** One attempt; never throws except for cancellation. The outcome was also delivered to the event sink. */
     suspend fun updateOnce(trigger: String): YtDlpUpdateOutcome {
@@ -216,6 +220,10 @@ class YtDlpUpdater(
             return outcome
         }
         try {
+            if (!isAutoEnabled()) {
+                deliver(skippedEvent(trigger, "off"))
+                return null
+            }
             val rec = loadRecord()
             if (rec != null) {
                 val reason = notDueReason(rec, wall())
@@ -277,6 +285,17 @@ class YtDlpUpdater(
     } catch (_: Throwable) {
         false
     }
+
+    private fun isAutoEnabled(): Boolean = try {
+        autoEnabled()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        true
+    }
+
+    /** SKIPPED "off" was announced for the current stretch of the switch being off. */
+    private var offAnnounced = false
 
     private fun isCasting(): Boolean = try {
         casting()
@@ -392,6 +411,15 @@ class YtDlpUpdater(
         val due = nextDueAt ?: return@withLock null
         if (now() < due) return@withLock null
         val trigger = if (firstRun) "start" else "scheduled"
+        if (!isAutoEnabled()) {
+            if (!offAnnounced) {
+                offAnnounced = true
+                deliver(skippedEvent(trigger, "off"))
+            }
+            nextDueAt = now() + offRecheckMs
+            return@withLock null
+        }
+        offAnnounced = false
         val rec = loadRecord()
         if (rec != null) {
             val nowWall = wall()

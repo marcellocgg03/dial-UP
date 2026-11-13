@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dialup.app.model.AppUpdateModel
 import dev.dialup.app.model.CheckOutcome
+import dev.dialup.app.model.UpdateChannel
 import dev.dialup.app.model.appUpdateMessage
 import dev.dialup.app.model.cardRelease
 import dev.dialup.app.model.safeReleaseUrl
@@ -39,9 +40,9 @@ import kotlinx.coroutines.launch
  * switch is turned off. The link opens only a page that passed [safeReleaseUrl].
  */
 @Composable
-fun UpdateCard(model: AppUpdateModel, autoEnabled: Boolean, currentVersion: String) {
+fun UpdateCard(model: AppUpdateModel, autoEnabled: Boolean, currentVersion: String, channel: UpdateChannel = UpdateChannel.STABLE) {
     val state by model.state.collectAsStateWithLifecycle()
-    val card = cardRelease(autoEnabled, state.record, currentVersion) ?: return
+    val card = cardRelease(autoEnabled, state.record, currentVersion, channel) ?: return
     val uri = LocalUriHandler.current
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("update-card"),
@@ -73,7 +74,14 @@ fun UpdateCard(model: AppUpdateModel, autoEnabled: Boolean, currentVersion: Stri
  * switch off and ignores the throttle. A newer release found by hand gets a link, again only through [safeReleaseUrl].
  */
 @Composable
-fun AppUpdatesSection(model: AppUpdateModel, autoEnabled: Boolean, currentVersion: String, onAutoChange: (Boolean) -> Unit) {
+fun AppUpdatesSection(
+    model: AppUpdateModel,
+    autoEnabled: Boolean,
+    currentVersion: String,
+    onAutoChange: (Boolean) -> Unit,
+    channel: UpdateChannel = UpdateChannel.STABLE,
+    onChannelChange: (UpdateChannel) -> Unit = {},
+) {
     val state by model.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
@@ -84,6 +92,16 @@ fun AppUpdatesSection(model: AppUpdateModel, autoEnabled: Boolean, currentVersio
             Column {
                 Text("Version $currentVersion", modifier = Modifier.testTag("app-version"))
                 Text("Checks GitHub for a newer DialUP release when the app is opened")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Text("Channel", modifier = Modifier.weight(1f))
+                    Choice(
+                        current = channel.wire.replaceFirstChar { it.uppercase() },
+                        options = UpdateChannel.entries.map { it.wire.replaceFirstChar { c -> c.uppercase() } },
+                        onPick = { i -> onChannelChange(UpdateChannel.entries[i]) },
+                        tag = "setting-update-channel",
+                        optionTag = { "update-channel-option-${UpdateChannel.entries[it].wire}" },
+                    )
+                }
                 OutlinedButton(
                     onClick = { scope.launch { model.checkNow() } },
                     enabled = !state.checking,
