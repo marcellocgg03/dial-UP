@@ -92,6 +92,9 @@ class FfmpegLimitTest {
             release.countDown() // processes end at once: the stream is empty, the GET answers 502 and ends
             val path = server.register(StreamEntry(StreamSource.PipeSource(listOf("-i", "x")), "adts", "audio/aac", "u"))
             repeat(3) { assertEquals(502, get(server, path).status) }
+            // the server hands the permit back after it has written the answer, so the client can see the answer first
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (server.ffmpegInUse() != 0 && System.nanoTime() < deadline) Thread.sleep(10)
             assertEquals(0, server.ffmpegInUse())
             assertEquals(0L, server.ffmpegRejectedCount())
         } finally {
