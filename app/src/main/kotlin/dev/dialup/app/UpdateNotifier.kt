@@ -134,9 +134,10 @@ class UpdateNotifier(private val context: Context) {
                 .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
                 .build()
             val manager = NotificationManagerCompat.from(context)
-            if (!manager.areNotificationsEnabled()) return
-            manager.notify(NOTIFICATION_ID, notification)
-            remember(tag)
+            if (manager.areNotificationsEnabled()) {
+                manager.notify(NOTIFICATION_ID, notification)
+                remember(tag)
+            }
         } catch (_: Exception) {
             // a missing permission or a refused channel only means no notice
         }
