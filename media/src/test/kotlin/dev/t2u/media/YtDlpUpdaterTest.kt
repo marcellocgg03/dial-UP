@@ -578,6 +578,20 @@ class YtDlpUpdaterTest {
     }
 
     @Test
+    fun updateIfDueDoesNothingWhileTheAutomaticUpdateIsSwitchedOffButUpdateNowStillWorks() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        var on = false
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, autoEnabled = { on })
+        assertNull(runBlocking { u.updateIfDue("job") })
+        assertTrue(g.updates.isEmpty())
+        assertEquals("off", events.single()["reason"])
+        assertEquals(true, runBlocking { u.updateNow() }.ok)
+        on = true
+        assertEquals(true, runBlocking { u.updateIfDue("job") }?.ok)
+    }
+
+    @Test
     fun updateIfDuePostponesWhileCastingOrBusy() {
         val g = FakeGateway()
         val events = CopyOnWriteArrayList<Map<String, Any?>>()

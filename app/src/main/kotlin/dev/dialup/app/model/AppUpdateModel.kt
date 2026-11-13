@@ -48,6 +48,8 @@ data class UpdateRecord(
     val lastAttemptWallMs: Long? = null,
     val latestTag: String? = null,
     val latestUrl: String? = null,
+    /** The channel the newest release was read for (wire name); null is a record from before channels, i.e. stable. */
+    val channel: String? = null,
 )
 
 /** The record in [text]; an unreadable text gives an empty record. Never throws. */
@@ -55,7 +57,7 @@ fun parseUpdateRecord(text: String): UpdateRecord {
     val o = runCatching { Json.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: return UpdateRecord()
     fun long(k: String) = (o[k] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
     fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-    return UpdateRecord(long("lastCheckWallMs"), long("lastAttemptWallMs"), str("latestTag"), str("latestUrl"))
+    return UpdateRecord(long("lastCheckWallMs"), long("lastAttemptWallMs"), str("latestTag"), str("latestUrl"), str("channel"))
 }
 
 /** The JSON text of [r]; null fields are left out. */
@@ -65,6 +67,7 @@ fun updateRecordJson(r: UpdateRecord): String {
         r.lastAttemptWallMs?.let { put("lastAttemptWallMs", JsonPrimitive(it)) }
         r.latestTag?.let { put("latestTag", JsonPrimitive(it)) }
         r.latestUrl?.let { put("latestUrl", JsonPrimitive(it)) }
+        r.channel?.let { put("channel", JsonPrimitive(it)) }
     }
     return JsonObject(o).toString()
 }
@@ -73,7 +76,9 @@ fun updateRecordJson(r: UpdateRecord): String {
  * True when an automatic check may run now: never checked, 12 hours since the last good check, or (after a failed attempt)
  * one hour since that attempt. A wall clock that went back counts as due.
  */
-fun autoCheckDue(record: UpdateRecord, nowWallMs: Long): Boolean {
+fun autoCheckDue(record: UpdateRecord, nowWallMs: Long, channel: UpdateChannel = UpdateChannel.STABLE): Boolean {
+    // a record read for the other channel says nothing about this one: check at once (its failed attempts are dropped, see run)
+    if (!record.isFor(channel)) return true
     val check = record.lastCheckWallMs
     val attempt = record.lastAttemptWallMs
     if (attempt != null && (check == null || attempt > check)) {
@@ -83,8 +88,11 @@ fun autoCheckDue(record: UpdateRecord, nowWallMs: Long): Boolean {
     return nowWallMs < check || nowWallMs - check >= AUTO_CHECK_INTERVAL_MS
 }
 
+/** True when the newest release in this record was read for [channel] (a record without a channel is stable). */
+fun UpdateRecord.isFor(channel: UpdateChannel): Boolean = (this.channel ?: UpdateChannel.STABLE.wire) == channel.wire
+
 /** The conclusion of [result] against the running version [currentVersion]. */
-fun outcomeOf(result: FetchResult, currentVersion: String): CheckOutcome = when (result) {
+fun outcomeOf(result: FetchResult, currentVersion: String, channel: UpdateChannel = UpdateChannel.STABLE): CheckOutcome = when (result) {
     is FetchResult.RateLimited -> CheckOutcome.RateLimited
     is FetchResult.Offline -> CheckOutcome.Offline
     is FetchResult.Http, is FetchResult.TooLarge -> CheckOutcome.Failed
@@ -94,7 +102,7 @@ fun outcomeOf(result: FetchResult, currentVersion: String): CheckOutcome = when 
         if (!isList || current == null) {
             CheckOutcome.Failed
         } else {
-            val newest = newestRelease(result.text)
+            val newest = newestRelease(result.text, channel)
             when {
                 newest == null -> CheckOutcome.UpToDate(null)
                 newest.version > current -> CheckOutcome.Newer(newest)
@@ -108,8 +116,8 @@ fun outcomeOf(result: FetchResult, currentVersion: String): CheckOutcome = when 
 data class UpdateCard(val tag: String, val url: String)
 
 /** The card to show, or null: auto-check off, nothing recorded, the recorded release not newer, or a version that is not semantic. */
-fun cardRelease(autoEnabled: Boolean, record: UpdateRecord, currentVersion: String): UpdateCard? {
-    if (!autoEnabled) return null
+fun cardRelease(autoEnabled: Boolean, record: UpdateRecord, currentVersion: String, channel: UpdateChannel = UpdateChannel.STABLE): UpdateCard? {
+    if (!autoEnabled || !record.isFor(channel)) return null
     val tag = record.latestTag ?: return null
     val latest = SemVer.parse(tag) ?: return null
     val current = SemVer.parse(currentVersion) ?: return null
@@ -144,6 +152,7 @@ class AppUpdateModel(
     private val load: () -> UpdateRecord,
     private val save: (UpdateRecord) -> Unit,
     private val wallMs: () -> Long,
+    private val channel: () -> UpdateChannel = { UpdateChannel.STABLE },
 ) {
     private val _state = MutableStateFlow(AppUpdateUi(record = load()))
     val state: StateFlow<AppUpdateUi> = _state.asStateFlow()
@@ -161,7 +170,7 @@ class AppUpdateModel(
     /** An automatic check: null (no request) when [enabled] is false or the last attempt is too recent. */
     suspend fun autoCheck(enabled: Boolean): CheckOutcome? {
         if (!enabled) return null
-        if (!autoCheckDue(_state.value.record, wallMs())) return null
+        if (!autoCheckDue(_state.value.record, wallMs(), channel())) return null
         return flight()
     }
 
@@ -187,17 +196,19 @@ class AppUpdateModel(
 
     private suspend fun run(): CheckOutcome {
         val result = fetch()
-        val outcome = outcomeOf(result, currentVersion)
+        val ch = channel()
+        val outcome = outcomeOf(result, currentVersion, ch)
         val now = wallMs()
         val old = _state.value.record
         val record = when (outcome) {
-            is CheckOutcome.Newer -> UpdateRecord(now, now, outcome.release.tag, safeReleaseUrl(outcome.release.url))
+            is CheckOutcome.Newer -> UpdateRecord(now, now, outcome.release.tag, safeReleaseUrl(outcome.release.url), ch.wire)
             is CheckOutcome.UpToDate -> {
                 // The list is good; remember the newest tag (if any) so the card can compare it later.
-                val newest = (result as? FetchResult.Body)?.let { newestRelease(it.text) }
-                UpdateRecord(now, now, newest?.tag, newest?.let { safeReleaseUrl(it.url) })
+                val newest = (result as? FetchResult.Body)?.let { newestRelease(it.text, ch) }
+                UpdateRecord(now, now, newest?.tag, newest?.let { safeReleaseUrl(it.url) }, ch.wire)
             }
-            else -> old.copy(lastAttemptWallMs = now)
+            // a failure keeps the old record, unless it was read for the other channel: that one's release must not be shown here
+            else -> if (old.isFor(ch)) old.copy(lastAttemptWallMs = now) else UpdateRecord(null, now, null, null, ch.wire)
         }
         _state.update { it.copy(record = record) }
         try {

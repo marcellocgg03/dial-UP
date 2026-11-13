@@ -250,6 +250,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             casting = { count.value.casting > 0 },
             record = YtDlpRecords.of(host.context),
             wallMs = { System.currentTimeMillis() },
+            autoEnabled = { appSettings.data.value.ytdlpAutoUpdate },
         )
         updater = u
         updaterJob = host.scope.launch { u.run() }

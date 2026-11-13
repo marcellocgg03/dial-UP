@@ -27,6 +27,7 @@ object AppUpdates {
                 load = record::load,
                 save = record::save,
                 wallMs = System::currentTimeMillis,
+                channel = { AppSettings.of(app).data.value.updateChannel },
             )
             instance = created
             return created

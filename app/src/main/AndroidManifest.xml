@@ -84,6 +84,12 @@
             android:name=".HousekeepingReceiver"
             android:exported="false" />
 
+        <!-- Daily check for a newer DialUP release; same protection as the yt-dlp job below. -->
+        <service
+            android:name=".UpdateCheckJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- Daily yt-dlp update (plan 07.1-07). Not exported and no intent-filter: only the system binds it, which
              BIND_JOB_SERVICE enforces (T-07.1-15). -->
         <service

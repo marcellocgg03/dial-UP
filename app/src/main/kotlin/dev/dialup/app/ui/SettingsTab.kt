@@ -178,13 +178,15 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
                 .testTag("section-hidden"),
         )
         SectionHeader("Maintenance")
-        YtDlpSection(ui, presenter)
+        YtDlpSection(ui, appData.ytdlpAutoUpdate, presenter)
         HorizontalDivider()
         AppUpdatesSection(
             model = AppUpdates.of(context),
             autoEnabled = appData.updateCheckEnabled,
             currentVersion = BuildConfigFacts.versionName(context) ?: "0",
             onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
+            channel = appData.updateChannel,
+            onChannelChange = presenter::setUpdateChannel,
         )
         SectionHeader("Appearance")
         ChoiceRow(
@@ -214,7 +216,7 @@ private fun SectionHeader(title: String) {
 private val CHANNELS = listOf("stable", "nightly")
 
 @Composable
-private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
+private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: SettingsPresenter) {
     val running = ui.update == UpdateUi.Running
     ui.updatePrompt?.let { prompt ->
         AlertDialog(
@@ -240,11 +242,25 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
-                OutlinedButton(
-                    onClick = presenter::updateNow,
-                    enabled = !running && ui.updatePrompt == null,
-                    modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
-                ) { Text("Update now") }
+                Text("Updates once a day, never during a cast")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = presenter::updateNow,
+                        enabled = !running && ui.updatePrompt == null,
+                        modifier = Modifier.testTag("btn-update-ytdlp"),
+                    ) { Text("Update now") }
+                    Choice(
+                        current = ui.ytdlpChannel.replaceFirstChar { it.uppercase() },
+                        options = CHANNELS.map { it.replaceFirstChar { c -> c.uppercase() } },
+                        onPick = { i -> presenter.setYtdlpChannel(CHANNELS[i]) },
+                        tag = "setting-channel",
+                        optionTag = { "channel-option-${CHANNELS[it]}" },
+                    )
+                }
                 if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 (ui.update as? UpdateUi.Done)?.let {
                     val restarted = if (it.restartedBridge && it.outcome.ok) ". The bridge was restarted; cast again to continue" else ""
@@ -253,13 +269,7 @@ private fun YtDlpSection(ui: SettingsUi, presenter: SettingsPresenter) {
             }
         },
         trailingContent = {
-            Choice(
-                current = ui.ytdlpChannel.replaceFirstChar { it.uppercase() },
-                options = CHANNELS.map { it.replaceFirstChar { c -> c.uppercase() } },
-                onPick = { i -> presenter.setYtdlpChannel(CHANNELS[i]) },
-                tag = "setting-channel",
-                optionTag = { "channel-option-${CHANNELS[it]}" },
-            )
+            Switch(checked = autoUpdate, onCheckedChange = presenter::setYtdlpAutoUpdate, modifier = Modifier.testTag("setting-ytdlp-auto"))
         },
     )
 }

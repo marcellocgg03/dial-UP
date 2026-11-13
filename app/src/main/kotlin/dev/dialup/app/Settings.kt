@@ -1,5 +1,6 @@
 package dev.dialup.app
 
+import dev.dialup.app.model.UpdateChannel
 import android.content.Context
 import dev.t2u.dial.DialAccessMode
 import dev.t2u.media.YTDLP_CHANNELS
@@ -73,6 +74,10 @@ data class AppSettingsData(
     val theme: ThemeMode = DEFAULT_THEME,
     /** App-only: whether opening the app checks GitHub for a newer DialUP release. Not a config.json override. */
     val updateCheckEnabled: Boolean = true,
+    /** App-only: whether yt-dlp updates itself once a day (never during a cast). Update now works either way. */
+    val ytdlpAutoUpdate: Boolean = true,
+    /** App-only: which DialUP releases the update check follows (stable, or also the nightly builds). */
+    val updateChannel: UpdateChannel = UpdateChannel.STABLE,
     val logEnabled: Boolean? = null,
     val gapless: Boolean? = null,
     val cacheMb: Int? = null,
@@ -104,6 +109,8 @@ private const val KEY_NOTIFY_GUESTS = "notifyGuests"
 private const val KEY_NAME_PREFIX = "namePrefix"
 private const val KEY_THEME = "theme"
 private const val KEY_UPDATE_CHECK = "updateCheckEnabled"
+private const val KEY_YTDLP_AUTO = "ytdlpAutoUpdate"
+private const val KEY_UPDATE_CHANNEL = "updateChannel"
 private const val KEY_LOG_ENABLED = "logEnabled"
 private const val KEY_GAPLESS = "gapless"
 private const val KEY_CACHE_MB = "cacheMb"
@@ -111,7 +118,7 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NOTIFY_GUESTS, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NOTIFY_GUESTS, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
     KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
@@ -171,6 +178,11 @@ fun parseSettings(text: String): ParsedSettings {
         if (mode != null) data = data.copy(theme = mode) else problems += KEY_THEME
     }
     bool(KEY_UPDATE_CHECK)?.let { data = data.copy(updateCheckEnabled = it) }
+    bool(KEY_YTDLP_AUTO)?.let { data = data.copy(ytdlpAutoUpdate = it) }
+    o[KEY_UPDATE_CHANNEL]?.let { e ->
+        val ch = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { UpdateChannel.fromWire(it) }
+        if (ch != null) data = data.copy(updateChannel = ch) else problems += KEY_UPDATE_CHANNEL
+    }
     data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), gapless = bool(KEY_GAPLESS))
     o[KEY_CACHE_MB]?.let { e ->
         val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in CACHE_MB_RANGE }
@@ -205,6 +217,8 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     if (data.namePrefix != DEFAULT_NAME_PREFIX) known[KEY_NAME_PREFIX] = JsonPrimitive(data.namePrefix)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)
+    if (!data.ytdlpAutoUpdate) known[KEY_YTDLP_AUTO] = JsonPrimitive(false)
+    if (data.updateChannel != UpdateChannel.STABLE) known[KEY_UPDATE_CHANNEL] = JsonPrimitive(data.updateChannel.wire)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     data.gapless?.let { known[KEY_GAPLESS] = JsonPrimitive(it) }
     data.cacheMb?.let { known[KEY_CACHE_MB] = JsonPrimitive(it) }
