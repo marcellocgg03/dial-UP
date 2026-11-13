@@ -27,13 +27,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
-For volume requests that include a button direction, DialUP avoids applying a stale target in the opposite direction
-and reports the speaker's current volume back to the sender. Slider requests without a direction remain absolute.
-
 ## Playback modes
-
-Settings → Playback → Playback mode decides how audio gets from YouTube to your speaker. All three play the same
-tracks; they differ in how quickly playback starts, how well skipping works and what the phone has to do.
 
 | | Streaming (default) | Direct | Cached |
 |---|---|---|---|
@@ -43,19 +37,6 @@ tracks; they differ in how quickly playback starts, how well skipping works and 
 | Phone battery and CPU | Low with AAC; higher if it falls back to MP3 | Lowest | Busy while downloading, then low |
 | Phone storage | None | None | Uses the cache (256 MB by default, set in Settings) |
 | Speaker support | Falls back to MP3 if the speaker rejects AAC | Speaker must support the original audio format | Speaker plays a finished file, not a live stream |
-
-**Streaming** suits most people: it starts quickly and handles skipping by restarting the stream at the position you
-pick. Its downsides are a brief pause when you skip, and extra battery use on the tracks or speakers that need the
-MP3 fallback.
-
-**Direct** does the least work on the phone and keeps the original audio, but it depends on the speaker. Some speakers
-cannot play the original format, and a speaker that seeks by reading through the stream can take a long time to skip
-within a long track. Try it if Streaming drains your battery and your speaker handles it well.
-
-**Cached** prepares a complete file before playing, so the speaker can seek freely and a replayed track doesn't
-need to be fetched again. The cost is a longer start, especially for long tracks, and storage on the phone. A track too big for
-the cache is played from a temporary file and deleted afterwards. Old tracks are removed automatically, oldest
-first, to stay under the cache size.
 
 ## Privacy
 
@@ -83,13 +64,13 @@ Needs JDK 21, the Android SDK (platform 37, build-tools 36.0.0) and Gradle via t
 | Module | Job |
 |--------|-----|
 | `upnp` | SSDP, SOAP control, device descriptions |
-| `dial` | DIAL server and SSDP responder, one per speaker |
+| `dial` | DIAL server and SSDP responder, one per renderer |
 | `lounge` | YouTube lounge receiver and InnerTube client |
 | `media` | Local media server (Range, pipe, file cache) |
-| `renderer` | Per-speaker playback logic, queue, gapless hand-off |
+| `renderer` | Per-renderer playback logic, queue, gapless hand-off |
 | `app` | Android service, config, yt-dlp / ffmpeg wiring |
 
-`tools/` holds helper scripts for on-device testing (adb, fake speaker, log reports).
+`tools/` holds helper scripts for on-device testing (adb, fake renderer, log reports).
 
 ## Credits
 
