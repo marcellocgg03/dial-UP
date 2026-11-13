@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Nightly builds.** A signed pre-release of main is published daily when main has changed and CI is green. Choose
+- **Nightly builds.** One rolling signed pre-release (tag `nightly`) is replaced every night when main has changed and CI is green. Choose
   Stable or Nightly under Settings > App updates; Stable never offers a nightly. A nightly installs over the stable app
   and the next stable release installs over it.
 - **Notification when a DialUP update is available**, from a daily background check, once per release, on its own

@@ -67,6 +67,23 @@ class AppUpdateModelTest {
     }
 
     @Test
+    fun theRollingNightlyIsReadFromItsTitleOnTheNightlyChannelOnly() {
+        fun rolling(name: String, prerelease: Boolean = true) =
+            """{"tag_name": "nightly", "name": "$name", "html_url": "https://github.com/marcellocgg03/dial-UP/releases/tag/nightly", "draft": false, "prerelease": $prerelease}"""
+        val json = "[" + rolling("DialUP 1.1.1-nightly.4 (nightly)") + "," + entry("v1.1.0") + "]"
+        val found = newestRelease(json, UpdateChannel.NIGHTLY)!!
+        assertEquals("v1.1.1-nightly.4", found.tag)
+        assertEquals(true, found.nightly)
+        assertEquals("https://github.com/marcellocgg03/dial-UP/releases/tag/nightly", found.url)
+        assertEquals("v1.1.0", newestRelease(json, UpdateChannel.STABLE)?.tag)
+        // a title without a version, a release that is not flagged pre-release, and a stable that is newer all lose
+        assertEquals("v1.1.0", newestRelease("[" + rolling("DialUP nightly") + "," + entry("v1.1.0") + "]", UpdateChannel.NIGHTLY)?.tag)
+        assertEquals("v1.1.0", newestRelease("[" + rolling("DialUP 1.1.1-nightly.4", prerelease = false) + "," + entry("v1.1.0") + "]", UpdateChannel.NIGHTLY)?.tag)
+        assertEquals("v1.1.1", newestRelease("[" + rolling("DialUP 1.1.1-nightly.4") + "," + entry("v1.1.1") + "]", UpdateChannel.NIGHTLY)?.tag)
+        assertEquals("v1.1.1-nightly.5", (outcomeOf(FetchResult.Body(json.replace("nightly.4", "nightly.5")), "1.1.1-nightly.4", UpdateChannel.NIGHTLY) as CheckOutcome.Newer).release.tag)
+    }
+
+    @Test
     fun aStableAppIsNotOfferedItsOwnNightlyAndANightlyIsOfferedTheNext() {
         val tags = list("v1.1.0", "v1.1.1-nightly.12")
         assertEquals(CheckOutcome.UpToDate("v1.1.0"), outcomeOf(FetchResult.Body(tags), "1.1.0", UpdateChannel.STABLE))
