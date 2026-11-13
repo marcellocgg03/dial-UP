@@ -77,9 +77,9 @@ private val FORMAT_MENU_LABELS = mapOf(
 )
 
 internal fun playbackModeDescription(format: String): String? = when (format) {
-    "streaming" -> "Starts quickly and makes it easier to skip to another part of a track. Some tracks or speakers may use more battery."
-    "direct" -> "Plays the original audio with minimal processing. Some speakers may not support it, and skipping within long tracks can be very slow."
-    "mp4" -> "Prepares a file before playing, making it easier for your speaker to skip within a track. Starting can take longer and uses phone storage."
+    "streaming" -> "Starts quickly and makes it easier to skip to another part of a track. Some tracks or renderers may use more battery."
+    "direct" -> "Plays the original audio with minimal processing. Some renderers may not support it, and skipping within long tracks can be very slow."
+    "mp4" -> "Prepares a file before playing, making it easier for your renderer to skip within a track. Starting can take longer and uses phone storage."
     else -> null
 }
 
@@ -132,7 +132,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         SectionHeader("Renderers")
         SwitchRow(
             title = "LAN server mode",
-            support = "Any device on the LAN can access the bridge running through this app and cast to the speakers",
+            support = "Any device on the LAN can access the bridge running through this app and cast to the renderers",
             checked = ui.lanAccess,
             onChange = { presenter.setLanAccess(it) },
             tag = "setting-phone-only",
