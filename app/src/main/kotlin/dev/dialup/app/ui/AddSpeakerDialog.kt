@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
  * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere.
  */
 internal fun manualResultText(result: ManualAddResult?, typed: String): String = when (result) {
-    null -> "Enter the renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40"
+    null -> "That is not a valid IPv4 address on this LAN"
     is ManualAddResult.Added -> "Added ${result.name}"
     is ManualAddResult.AlreadyListed -> "${result.name} is already listed"
     is ManualAddResult.Hidden -> "That renderer is hidden; restore it from Hidden"
@@ -72,10 +72,7 @@ fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     supportingText = {
-                        Text(
-                            "The renderer's IPv4 address on this Wi-Fi, for example 192.168.1.40. It is saved under this address; " +
-                                "if the renderer gets a new address, add it again.",
-                        )
+                        Text("Enter the renderer's IP address on this LAN. If it is ever re-assigned, the renderer may need to be re-added.")
                     },
                     modifier = Modifier.fillMaxWidth().testTag("field-ip"),
                 )

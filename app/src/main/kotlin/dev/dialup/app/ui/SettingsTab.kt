@@ -320,7 +320,7 @@ private fun CacheSection(ui: SettingsUi, presenter: SettingsPresenter) {
 private fun LogSection(ui: SettingsUi, presenter: SettingsPresenter) {
     val context = LocalContext.current
     ListItem(
-        headlineContent = { Text("Write the event log") },
+        headlineContent = { Text("Event logging") },
         supportingContent = {
             Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
