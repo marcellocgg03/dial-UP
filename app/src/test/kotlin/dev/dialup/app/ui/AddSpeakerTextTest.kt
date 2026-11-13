@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 class AddSpeakerTextTest {
     @Test
     fun `each outcome says what happened`() {
-        assertEquals("That is not a valid IPv4 address on this LAN", manualResultText(null, "speaker.local"))
+        assertEquals("That is not a valid IP address on this LAN", manualResultText(null, "speaker.local"))
         assertEquals("That is not an address on this Wi-Fi", manualResultText(ManualAddResult.Refused, "8.8.8.8"))
         assertEquals("Added Kitchen", manualResultText(ManualAddResult.Added("u", "Kitchen"), "192.168.1.40"))
         assertEquals("Kitchen is already listed", manualResultText(ManualAddResult.AlreadyListed("u", "Kitchen"), "192.168.1.40"))

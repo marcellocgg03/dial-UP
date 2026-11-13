@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
  * [result] is text that is not a private LAN IPv4 address, which was never sent anywhere.
  */
 internal fun manualResultText(result: ManualAddResult?, typed: String): String = when (result) {
-    null -> "That is not a valid IPv4 address on this LAN"
+    null -> "That is not a valid IP address on this LAN"
     is ManualAddResult.Added -> "Added ${result.name}"
     is ManualAddResult.AlreadyListed -> "${result.name} is already listed"
     is ManualAddResult.Hidden -> "That renderer is hidden; restore it from Hidden"
