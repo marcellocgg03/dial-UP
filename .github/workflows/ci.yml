@@ -60,8 +60,40 @@ jobs:
       - name: No unexpected skipped tests
         run: python3 tools/check-skipped-tests.py
 
-      - name: Debug APK (compiles; nothing is uploaded, the signed nightly build is nightly.yml)
+      - name: Debug APK
         run: ./gradlew :app:assembleDebug
+
+      - name: Label the debug APK
+        id: label
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          version="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [ "$EVENT" = "pull_request" ]; then
+            label="pr${PR_NUMBER}-${PR_HEAD_SHA:0:7}"
+          else
+            label="main-${PUSH_SHA:0:7}"
+          fi
+          echo "name=DialUP-${version}-${label}-debug" >> "$GITHUB_OUTPUT"
+
+      # An artifact of the run, not a release: nothing is added to the Releases page. It installs next to the release app
+      # (package dev.dialup.debug, debug-signed); GitHub asks you to sign in to download an artifact.
+      - name: Upload the debug APK
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.label.outputs.name }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Link the debug APK in the run summary
+        run: |
+          echo "### Debug APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Download ${{ steps.label.outputs.name }}](${{ steps.upload.outputs.artifact-url }}) (debug-signed, package dev.dialup.debug, kept 14 days)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Release APK (unsigned without signing material)
         run: ./gradlew :app:assembleRelease
