@@ -91,15 +91,22 @@ class FfmpegLimitTest {
         try {
             release.countDown() // processes end at once: the stream is empty, the GET answers 502 and ends
             val path = server.register(StreamEntry(StreamSource.PipeSource(listOf("-i", "x")), "adts", "audio/aac", "u"))
-            repeat(3) { assertEquals(502, get(server, path).status) }
-            // the server hands the permit back after it has written the answer, so the client can see the answer first
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (server.ffmpegInUse() != 0 && System.nanoTime() < deadline) Thread.sleep(10)
+            // the server hands the permit back after it has written the answer, so the client can see the answer first;
+            // with a limit of 1 the next GET must not start before the permit is back, or it would get the busy answer
+            repeat(3) {
+                assertEquals(502, get(server, path).status)
+                awaitNoFfmpeg(server)
+            }
             assertEquals(0, server.ffmpegInUse())
             assertEquals(0L, server.ffmpegRejectedCount())
         } finally {
             server.stop()
         }
+    }
+
+    private fun awaitNoFfmpeg(server: MediaServer) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (server.ffmpegInUse() != 0 && System.nanoTime() < deadline) Thread.sleep(10)
     }
 
     private companion object {
