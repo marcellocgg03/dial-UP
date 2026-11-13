@@ -45,7 +45,7 @@ jobs:
           last="$(git tag --list 'v[0-9]*' | grep -v -- '-' | sort -V | tail -n 1 || true)"
           [ -n "$last" ] || { echo "::notice::no stable tag yet"; echo "build=no" >> "$GITHUB_OUTPUT"; exit 0; }
           # a nightly already covers this commit
-          if git tag --points-at "$SHA" | grep -q -- '-nightly\.'; then
+          if [ -n "$(git tag --points-at "$SHA" | grep -- '-nightly\.' || true)" ]; then
             echo "::notice::main is already built as a nightly"; echo "build=no" >> "$GITHUB_OUTPUT"; exit 0
           fi
           n="$(git rev-list --count "$last..$SHA")"
@@ -104,12 +104,18 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
+          apks=(app/build/outputs/apk/release/*.apk)
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected one release APK, found ${#apks[@]}"; exit 1; }
+          apk="${apks[0]}"
           aapt2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | tail -n 1)"
           apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -n 1)"
-          "$aapt2" dump badging "$apk" | head -n 1 | grep -q "name='dev.dialup' " || { echo "::error::wrong package"; exit 1; }
-          "$aapt2" dump badging "$apk" | head -n 1 | grep -q "versionName='$VERSION'" || { echo "::error::wrong versionName"; exit 1; }
-          "$apksigner" verify --print-certs "$apk" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          # Captured, not piped into grep -q: under pipefail an early-closing reader makes the writer fail with 141.
+          badging="$("$aapt2" dump badging "$apk" | sed -n 1p)"
+          echo "$badging"
+          case "$badging" in *"name='dev.dialup' "*) ;; *) echo "::error::wrong package"; exit 1 ;; esac
+          case "$badging" in *"versionName='$VERSION'"*) ;; *) echo "::error::wrong versionName (want $VERSION)"; exit 1 ;; esac
+          certs="$("$apksigner" verify --print-certs "$apk" 2>&1)" || { echo "$certs"; echo "::error::apksigner verify failed"; exit 1; }
+          echo "$certs" | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
           cp "$apk" "DialUP-$VERSION.apk"
           sha256sum "DialUP-$VERSION.apk" > "DialUP-$VERSION.apk.sha256"
 
