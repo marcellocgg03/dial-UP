@@ -242,19 +242,25 @@ private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: Setting
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                    Text("Update daily, never during a cast", modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = autoUpdate,
-                        onCheckedChange = presenter::setYtdlpAutoUpdate,
-                        modifier = Modifier.testTag("setting-ytdlp-auto"),
+                Text("Updates once a day, never during a cast")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = presenter::updateNow,
+                        enabled = !running && ui.updatePrompt == null,
+                        modifier = Modifier.testTag("btn-update-ytdlp"),
+                    ) { Text("Update now") }
+                    Choice(
+                        current = ui.ytdlpChannel.replaceFirstChar { it.uppercase() },
+                        options = CHANNELS.map { it.replaceFirstChar { c -> c.uppercase() } },
+                        onPick = { i -> presenter.setYtdlpChannel(CHANNELS[i]) },
+                        tag = "setting-channel",
+                        optionTag = { "channel-option-${CHANNELS[it]}" },
                     )
                 }
-                OutlinedButton(
-                    onClick = presenter::updateNow,
-                    enabled = !running && ui.updatePrompt == null,
-                    modifier = Modifier.padding(top = 8.dp).testTag("btn-update-ytdlp"),
-                ) { Text("Update now") }
                 if (running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 (ui.update as? UpdateUi.Done)?.let {
                     val restarted = if (it.restartedBridge && it.outcome.ok) ". The bridge was restarted; cast again to continue" else ""
@@ -263,13 +269,7 @@ private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: Setting
             }
         },
         trailingContent = {
-            Choice(
-                current = ui.ytdlpChannel.replaceFirstChar { it.uppercase() },
-                options = CHANNELS.map { it.replaceFirstChar { c -> c.uppercase() } },
-                onPick = { i -> presenter.setYtdlpChannel(CHANNELS[i]) },
-                tag = "setting-channel",
-                optionTag = { "channel-option-${CHANNELS[it]}" },
-            )
+            Switch(checked = autoUpdate, onCheckedChange = presenter::setYtdlpAutoUpdate, modifier = Modifier.testTag("setting-ytdlp-auto"))
         },
     )
 }

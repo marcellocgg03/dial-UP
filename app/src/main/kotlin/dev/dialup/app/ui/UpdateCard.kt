@@ -92,8 +92,16 @@ fun AppUpdatesSection(
             Column {
                 Text("Version $currentVersion", modifier = Modifier.testTag("app-version"))
                 Text("Checks GitHub for a newer DialUP release when the app is opened")
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                    Text("Channel", modifier = Modifier.weight(1f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { scope.launch { model.checkNow() } },
+                        enabled = !state.checking,
+                        modifier = Modifier.testTag("btn-check-update"),
+                    ) { Text("Check now") }
                     Choice(
                         current = channel.wire.replaceFirstChar { it.uppercase() },
                         options = UpdateChannel.entries.map { it.wire.replaceFirstChar { c -> c.uppercase() } },
@@ -102,11 +110,6 @@ fun AppUpdatesSection(
                         optionTag = { "update-channel-option-${UpdateChannel.entries[it].wire}" },
                     )
                 }
-                OutlinedButton(
-                    onClick = { scope.launch { model.checkNow() } },
-                    enabled = !state.checking,
-                    modifier = Modifier.padding(top = 8.dp).testTag("btn-check-update"),
-                ) { Text("Check now") }
                 if (state.checking) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 if (outcome != null) {
                     Text(
