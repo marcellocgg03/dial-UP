@@ -12,6 +12,11 @@ import java.net.URI
 /** The releases list (newest 30). Plain https, no redirect is followed. */
 const val RELEASES_API_URL = "https://api.github.com/repos/marcellocgg03/dial-UP/releases?per_page=30"
 
+/** The tag of the rolling nightly pre-release; its version is in the release title ("DialUP 1.1.1-nightly.4"). */
+const val ROLLING_NIGHTLY_TAG = "nightly"
+
+private val NIGHTLY_TITLE = Regex("""\d+\.\d+\.\d+-nightly\.\d+""")
+
 /** The page opened when no safe release page is known. */
 const val RELEASES_PAGE_URL = "https://github.com/marcellocgg03/dial-UP/releases"
 
@@ -60,10 +65,17 @@ fun newestRelease(json: String, channel: UpdateChannel = UpdateChannel.STABLE): 
     for (e in arr) {
         val o = e as? JsonObject ?: continue
         if (flag(o["draft"]) == true) continue
-        val tag = str(o["tag_name"]) ?: continue
+        var tag = str(o["tag_name"]) ?: continue
         val url = str(o["html_url"]) ?: continue
         if (!isAllowedReleaseUrl(url)) continue
-        val v = SemVer.parse(tag) ?: continue
+        var v = SemVer.parse(tag)
+        if (v == null && tag == ROLLING_NIGHTLY_TAG && channel == UpdateChannel.NIGHTLY && flag(o["prerelease"]) == true) {
+            // the one rolling nightly: its tag never changes, so the version is read from the release title
+            val named = NIGHTLY_TITLE.find(str(o["name"]).orEmpty())?.value
+            tag = "v$named"
+            v = named?.let { SemVer.parse(tag) }
+        }
+        if (v == null) continue
         val r = Release(tag, url, v, flag(o["prerelease"]) == true)
         if (r.nightly && channel != UpdateChannel.NIGHTLY) continue
         if (best == null || r.version > best.version) best = r

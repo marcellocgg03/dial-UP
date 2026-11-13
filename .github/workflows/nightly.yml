@@ -1,6 +1,7 @@
 name: Nightly
 
-# A signed nightly build of main, published as a GitHub pre-release (tag v<next patch>-nightly.<N>). It is the only
+# A signed nightly build of main, published as ONE rolling GitHub pre-release (tag `nightly`, replaced each night; the
+# version, <next patch>-nightly.<N>, is in its title and in the APK name). It is the only
 # workflow that holds the release signing key. The key lives in the `nightly-signing` environment, which must be limited
 # to the main branch (Settings > Environments > nightly-signing > Deployment branches), so a workflow edited on any other
 # branch or fork cannot read it. Runs daily and builds only when main has a commit that no nightly covers and CI is green on it.
@@ -15,9 +16,6 @@ permissions:
 concurrency:
   group: nightly
   cancel-in-progress: false
-
-env:
-  KEEP_NIGHTLIES: "7"
 
 jobs:
   nightly:
@@ -44,8 +42,9 @@ jobs:
           set -euo pipefail
           last="$(git tag --list 'v[0-9]*' | grep -v -- '-' | sort -V | tail -n 1 || true)"
           [ -n "$last" ] || { echo "::notice::no stable tag yet"; echo "build=no" >> "$GITHUB_OUTPUT"; exit 0; }
-          # a nightly already covers this commit
-          if [ -n "$(git tag --points-at "$SHA" | grep -- '-nightly\.' || true)" ]; then
+          # the rolling nightly already covers this commit
+          built="$(gh release view nightly --repo "${{ github.repository }}" --json targetCommitish --jq .targetCommitish 2>/dev/null || true)"
+          if [ "$built" = "$SHA" ]; then
             echo "::notice::main is already built as a nightly"; echo "build=no" >> "$GITHUB_OUTPUT"; exit 0
           fi
           n="$(git rev-list --count "$last..$SHA")"
@@ -119,7 +118,7 @@ jobs:
           cp "$apk" "DialUP-$VERSION.apk"
           sha256sum "DialUP-$VERSION.apk" > "DialUP-$VERSION.apk.sha256"
 
-      - name: Publish the pre-release and prune old nightlies
+      - name: Replace the rolling nightly pre-release
         if: steps.plan.outputs.build == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -127,13 +126,13 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          tag="v$VERSION"
-          gh release create "$tag" "DialUP-$VERSION.apk" "DialUP-$VERSION.apk.sha256" \
-            --repo "${{ github.repository }}" --target "$SHA" --prerelease --title "DialUP $VERSION (nightly)" \
-            --notes "Nightly build of main at $SHA. Signed with the release key, so it installs over the stable app and the next stable release installs over it. It can be unstable. Choose Stable or Nightly under Settings > App updates. SHA-256 of the APK is in the attached .sha256 file."
-          # keep the newest KEEP_NIGHTLIES; the app reads only the newest 30 releases, so old nightlies must not crowd out stable ones
-          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | test("-nightly\\."))] | sort_by(.createdAt) | reverse | .['"$KEEP_NIGHTLIES"':][].tagName' |
+          repo="${{ github.repository }}"
+          # the older per-build nightlies (v<x>-nightly.<N>) are replaced by the one rolling release
+          gh release list --repo "$repo" --limit 100 --json tagName --jq '.[] | select(.tagName | test("-nightly\\.")) | .tagName' |
             while read -r old; do
-              [ -n "$old" ] && gh release delete "$old" --repo "${{ github.repository }}" --cleanup-tag --yes
+              [ -n "$old" ] && gh release delete "$old" --repo "$repo" --cleanup-tag --yes
             done
+          gh release delete nightly --repo "$repo" --cleanup-tag --yes || true
+          gh release create nightly "DialUP-$VERSION.apk" "DialUP-$VERSION.apk.sha256" \
+            --repo "$repo" --target "$SHA" --prerelease --title "DialUP $VERSION (nightly)" \
+            --notes "Nightly build of main at $SHA, replaced every night. Signed with the release key, so it installs over the stable app and the next stable release installs over it. It can be unstable. Choose Stable or Nightly under Settings > App updates. SHA-256 of the APK is in the attached .sha256 file."
