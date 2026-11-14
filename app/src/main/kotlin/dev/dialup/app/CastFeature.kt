@@ -435,7 +435,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         )
         this.resolver = resolver
         // read at connect time, so the Settings switch applies to the running bridge
-        val guestNotices = GuestNoticeDecider(OwnDevice(Build.MANUFACTURER, Build.MODEL), { appSettings.data.value.notifyGuests }, guestNoticeGate)
+        val guestNotices = GuestNoticeDecider(OwnDevice(Build.MANUFACTURER, Build.MODEL), guestNoticeGate)
         val b = Bridge(
             network,
             BridgeDeps(
