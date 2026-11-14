@@ -28,14 +28,13 @@ internal fun guestNoticeText(senderName: String, speaker: String): String = "$se
 internal data class GuestNotice(val text: String, val seenOnLan: Boolean)
 
 /**
- * The notice for a lounge sender that connected to [speaker], or null when there is none: the Settings switch
- * ([notifyGuests]) is off, the sender has no name, or its name is this phone's own ([own]). [recentGuest] is another device's LAN
+ * The notice for a lounge sender that connected to [speaker], or null when there is none: the sender has no name, or its name is this phone's own ([own]). [recentGuest] is another device's LAN
  * address seen within the last minutes (null when none): it only records how the guest was recognised. When the discovery was
  * cached and no address was seen, a sender that is not this phone is still announced by its name. The one place the decision
  * is made, so a test can reach it without a Context.
  */
-internal fun guestNoticeFor(notifyGuests: Boolean, senderName: String, speaker: String, own: OwnDevice, recentGuest: String?): GuestNotice? {
-    if (!notifyGuests || senderName.isBlank() || own.isOwnName(senderName)) return null
+internal fun guestNoticeFor(senderName: String, speaker: String, own: OwnDevice, recentGuest: String?): GuestNotice? {
+    if (senderName.isBlank() || own.isOwnName(senderName)) return null
     return GuestNotice(guestNoticeText(senderName.trim(), speaker), seenOnLan = recentGuest != null)
 }
 
@@ -72,11 +71,10 @@ internal class GuestNoticeGate(
 /** The whole decision for one connecting sender: [guestNoticeFor] and then the once-per-name gate (spent only on a real notice). */
 internal class GuestNoticeDecider(
     private val own: OwnDevice,
-    private val notifyGuests: () -> Boolean,
     private val gate: GuestNoticeGate = GuestNoticeGate(),
 ) {
     fun decide(speaker: String, senderName: String, recentGuest: String?): GuestNotice? {
-        val notice = guestNoticeFor(notifyGuests(), senderName, speaker, own, recentGuest) ?: return null
+        val notice = guestNoticeFor(senderName, speaker, own, recentGuest) ?: return null
         return if (gate.due(senderName)) notice else null
     }
 }
