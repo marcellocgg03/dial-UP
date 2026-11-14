@@ -100,7 +100,6 @@ enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
     SHOW_AUDIO_FORMAT(false),
-    NOTIFY_GUESTS(false),
     NAME_PREFIX(true),
     RENAME(true),
     LOG(false),
@@ -159,7 +158,6 @@ data class SettingsUi(
     val phoneOnly: Boolean = true,
     val clearOnCastEnd: Boolean = false,
     val showAudioFormat: Boolean = false,
-    val notifyGuests: Boolean = true,
     /** The text before each speaker's own name in the cast menu; empty is allowed. */
     val namePrefix: String = DEFAULT_NAME_PREFIX,
     /** The app's look, applied at once. */
@@ -221,7 +219,6 @@ class SettingsPresenter(
                         phoneOnly = d.dialAccess == DialAccessMode.PHONE,
                         clearOnCastEnd = d.clearOnCastEnd,
                         showAudioFormat = d.showAudioFormat,
-                        notifyGuests = d.notifyGuests,
                         namePrefix = d.namePrefix,
                         theme = d.theme,
                     )
@@ -402,12 +399,6 @@ class SettingsPresenter(
     /** A renderer was renamed or reset while something is cast: the new name is used at the next bridge start, so the restart card is shown. */
     fun onRenamed() {
         changed(SettingKey.RENAME)
-    }
-
-    /** Notify when another device starts a cast. Read when a sender connects, so no restart. */
-    fun setNotifyGuests(on: Boolean): Boolean {
-        settings.update { it.copy(notifyGuests = on) }
-        return changed(SettingKey.NOTIFY_GUESTS)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {
