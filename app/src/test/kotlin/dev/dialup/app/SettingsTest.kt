@@ -173,7 +173,6 @@ class SettingsTest {
         assertEquals(DialAccessMode.PHONE, d.dialAccess)
         assertFalse(d.clearOnCastEnd)
         assertFalse(d.showAudioFormat)
-        assertTrue(d.notifyGuests, "the guest notice is on by default")
         assertEquals(ThemeMode.SYSTEM, d.theme)
         assertEquals(null, d.logEnabled)
         assertEquals(null, d.gapless)
@@ -435,14 +434,13 @@ class SettingsTest {
     }
 
     @Test
-    fun theGuestNoticeSwitchRoundTripsAndOnlyOffIsWritten() {
+    fun aRetiredKeyIsDroppedFromTheFileAtTheNextWrite() {
         val f = File(dir, SETTINGS_FILE)
-        val s = settings(f)
-        s.update { it.copy(notifyGuests = false) }
-        assertFalse(settings(f).data.value.notifyGuests)
-        assertTrue(f.readText().contains(""""notifyGuests":false"""))
-        s.update { it.copy(notifyGuests = true) }
-        assertTrue(settings(f).data.value.notifyGuests)
-        assertFalse(f.readText().contains("notifyGuests"))
+        f.writeText("""{"notifyGuests":false,"someFutureKey":1}""")
+        assertFalse("notifyGuests" in parseSettings(f.readText()).extras)
+        settings(f).update { it.copy(showAudioFormat = true) }
+        val text = f.readText()
+        assertFalse(text.contains("notifyGuests"), text)
+        assertTrue(text.contains("someFutureKey"), "other unknown keys are still kept")
     }
 }
