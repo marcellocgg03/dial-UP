@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 /** A settings store in memory: [effective] follows [data] over the config.json values in [base]. */
 class FakeSettingsPort(
     var base: EffectiveSettings = EffectiveSettings(
-        logEnabled = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
+        logEnabled = true, prefetch = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
     ),
 ) : SettingsPort {
     private val flow = MutableStateFlow(AppSettingsData())
@@ -42,6 +42,7 @@ class FakeSettingsPort(
         val d = flow.value
         return EffectiveSettings(
             logEnabled = d.logEnabled ?: base.logEnabled,
+            prefetch = d.prefetch ?: base.prefetch,
             gapless = d.gapless ?: base.gapless,
             cacheMb = d.cacheMb ?: base.cacheMb,
             outputFormat = d.outputFormat ?: base.outputFormat,
@@ -315,6 +316,19 @@ class SettingsPresenterTest {
     }
 
     @Test
+    fun `prefetch stores the value and needs a restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertTrue(p.setPrefetch(false))
+        runCurrent()
+        assertEquals(false, settings.data.value.prefetch)
+        assertFalse(p.state.value.prefetch)
+        assertTrue(p.setPrefetch(true))
+        runCurrent()
+        assertTrue(p.state.value.prefetch)
+    }
+
+    @Test
     fun `gapless and forced format store the value and need a restart`() = runTest {
         val settings = FakeSettingsPort()
         val p = presenter(settings)
@@ -467,7 +481,7 @@ class SettingsPresenterTest {
     }
 
     private fun base() = EffectiveSettings(
-        logEnabled = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
+        logEnabled = true, prefetch = true, gapless = true, cacheMb = 256, outputFormat = "auto", ytdlpChannel = "stable",
     )
 
     private fun outcome(ok: Boolean = true, before: String? = "2026.08.19", after: String? = "2026.10.20", status: String = "DONE", error: String? = null) =

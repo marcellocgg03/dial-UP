@@ -24,7 +24,7 @@ class ConfigLoaderTest {
 
     private fun write(text: String): File = File(dir, CONFIG_FILE).apply { writeText(text) }
 
-    private val defaults get() = Config(dataDir = File(dir, "cast"), outputFormat = "streaming")
+    private val defaults get() = Config(dataDir = File(dir, "cast"), outputFormat = "streaming", gapless = false)
 
     @Test
     fun validKeysChangeTheEffectiveConfig() {
@@ -104,7 +104,7 @@ class ConfigLoaderTest {
         assertTrue(s["ytdlpVerbose"]!!.jsonPrimitive.boolean)
         assertEquals("info", s["ffmpegLogLevel"]!!.jsonPrimitive.content)
         assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
-        assertTrue(s["gapless"]!!.jsonPrimitive.boolean)
+        assertFalse(s["gapless"]!!.jsonPrimitive.boolean)
         assertEquals(256, s["cacheMb"]!!.jsonPrimitive.int)
         assertEquals(2, s["includeCount"]!!.jsonPrimitive.int)
         assertEquals(1, s["excludeCount"]!!.jsonPrimitive.int)
@@ -123,7 +123,7 @@ class ConfigLoaderTest {
         val s = configSummary(loadAppConfig(dir))
         assertEquals("streaming", s["format"]!!.jsonPrimitive.content)
         assertTrue(s["prefetch"]!!.jsonPrimitive.boolean)
-        assertTrue(s["gapless"]!!.jsonPrimitive.boolean)
+        assertFalse(s["gapless"]!!.jsonPrimitive.boolean)
         assertEquals(256, s["cacheMb"]!!.jsonPrimitive.int)
         assertEquals(0, s["includeCount"]!!.jsonPrimitive.int)
         assertEquals(0, s["excludeCount"]!!.jsonPrimitive.int)
