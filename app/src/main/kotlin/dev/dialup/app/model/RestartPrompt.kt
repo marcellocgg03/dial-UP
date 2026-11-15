@@ -21,13 +21,13 @@ const val AUTO_RESTART_SOURCE = "auto-restart"
 const val NOTICE_MS = 10_000L
 
 /**
- * The settings a running bridge reads only at its start: the [SettingKey] entries with `needsRestart` (gapless and the forced
- * output format). Keep the two in step.
+ * The settings a running bridge reads only at its start: the [SettingKey] entries with `needsRestart` (prefetch, gapless and the
+ * forced output format). Keep the two in step.
  */
-data class RestartFields(val gapless: Boolean, val outputFormat: String)
+data class RestartFields(val gapless: Boolean, val outputFormat: String, val prefetch: Boolean = true)
 
 /** The restart-relevant part of [e]. */
-fun restartFields(e: EffectiveSettings): RestartFields = RestartFields(gapless = e.gapless, outputFormat = e.outputFormat)
+fun restartFields(e: EffectiveSettings): RestartFields = RestartFields(gapless = e.gapless, outputFormat = e.outputFormat, prefetch = e.prefetch)
 
 /** What opening the app does about a restart that is still owed. */
 enum class AutoRestart { NONE, RESTART, SHOW_CARD }
