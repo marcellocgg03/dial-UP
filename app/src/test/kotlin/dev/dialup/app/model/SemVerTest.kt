@@ -37,6 +37,15 @@ class SemVerTest {
     }
 
     @Test
+    fun aNightlyRanksAboveItsOwnReleaseAndBelowTheNextOne() {
+        // only the nightly steps out of line: the beta still ranks below its release
+        val order = listOf("1.1.1-beta.1", "1.1.1", "1.1.1-nightly.20261113", "1.1.1-nightly.20261114", "1.1.2-beta.1", "1.1.2")
+        for (i in 0 until order.size - 1) {
+            assertTrue(v(order[i]) < v(order[i + 1]), "${order[i]} < ${order[i + 1]}")
+        }
+    }
+
+    @Test
     fun toStringDropsBuildMetadata() {
         assertEquals("0.9.0-beta.1", v("v0.9.0-beta.1+x").toString())
     }

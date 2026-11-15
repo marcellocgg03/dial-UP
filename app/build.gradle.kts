@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 // Release signing material lives outside the repository (D-06): keystore.properties in the repo root (ignored by git)
@@ -41,16 +43,17 @@ android {
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37
         // versionCode is stableVersionCode * 1000 + the nightly build number (0 for a stable build). stableVersionCode is a
-        // plain integer raised by one for every stable release (D-01), so a nightly (4001..4999) installs over its
-        // stable release and the next stable release (5000) installs over every nightly. versionName of a stable build
+        // plain integer raised by one for every stable release (D-01), so a nightly (5001..5999) installs over its
+        // stable release and the next stable release (6000) installs over every nightly. versionName of a stable build
         // follows the git tag v<versionName>.
         versionCode = stableVersionCode * 1000 + (nightlyBuild ?: 0)
         versionName = "1.1.1"
-        // A nightly (-PnightlyBuild=N from the nightly workflow) is the NEXT patch version as a pre-release: it ranks above
-        // the stable release it grew from and below the one it leads to, which is what the update check compares.
+        // A nightly (-PnightlyBuild=N from the nightly workflow) keeps the stable version and adds -nightly.<build date>:
+        // SemVer ranks a nightly above the stable release it grew from and below the next one, which is what the update
+        // check compares. Two nightlies on one day share a name; versionCode still tells them apart.
         if (nightlyBuild != null) {
             val parts = versionName!!.split('.')
-            versionName = "${parts[0]}.${parts[1]}.${parts[2].toInt() + 1}-nightly.$nightlyBuild"
+            versionName = "${parts[0]}.${parts[1]}.${parts[2].toInt()}-nightly.${LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)}"
         }
 
         ndk {
