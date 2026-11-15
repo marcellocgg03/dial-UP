@@ -107,6 +107,47 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("while the media server recovers from a failed attempt the start is not given up on, and the clock restarts after")
+    fun aRecoveringStreamIsNotTakenForAFormatTheSpeakerCannotPlay() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        val shortTimeout = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 600, outputFormat = "streaming", prefetch = false)
+        }
+        RendererHarness(fake, config = shortTimeout).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            checkNotNull(h.registered.first().onRecovering).invoke(true)
+            // several start timeouts pass with the speaker silent: no step down to mp3 while the server is recovering
+            Thread.sleep(2_000)
+            assertEquals(listOf("adts"), h.formats())
+            // the server has bytes now and the speaker plays: the same format stays
+            fake.state.transport = "PLAYING"
+            checkNotNull(h.registered.first().onRecovering).invoke(false)
+            waitUntil { h.renderer.status == PlayerStatus.PLAYING }
+            Thread.sleep(1_000)
+            assertEquals(listOf("adts"), h.formats())
+        }
+    }
+
+    @Test
+    @DisplayName("when the recovery ends and the speaker still does not play, the chain moves on after a full start timeout")
+    fun theStartClockRestartsWhenRecoveryEnds() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        val shortTimeout = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 600, outputFormat = "streaming", prefetch = false)
+        }
+        RendererHarness(fake, config = shortTimeout).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            checkNotNull(h.registered.first().onRecovering).invoke(true)
+            Thread.sleep(1_500)
+            checkNotNull(h.registered.first().onRecovering).invoke(false)
+            waitUntil { h.renderer.nowPlaying?.format == "mp3" && h.renderer.status == PlayerStatus.PLAYING }
+            assertEquals(listOf("adts", "mp3"), h.formats())
+        }
+    }
+
+    @Test
     fun streamingFallbackAfterSeekKeepsTheRequestedOffset() = withFake(FakeRenderer(neverPlay = true)) { fake ->
         val adtsPlays = AtomicInteger()
         fake.onAction = { action ->
