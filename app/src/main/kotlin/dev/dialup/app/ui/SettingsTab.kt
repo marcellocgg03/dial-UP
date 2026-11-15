@@ -124,7 +124,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         HorizontalDivider()
         SwitchRow(
             title = "Gapless track changes on renderers that support it",
-            support = null,
+            support = "Prepares the next track while the current one plays and hands it to the renderer ahead of time, so the switch has no gap.",
             checked = ui.gapless,
             onChange = { presenter.setGapless(it) },
             tag = "setting-gapless",
