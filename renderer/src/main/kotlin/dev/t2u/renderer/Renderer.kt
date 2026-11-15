@@ -892,6 +892,11 @@ class Renderer(
             },
             onFailure = { cur.streamFailed = true },
             onBusy = { cur.busy = true },
+            onRecovering = { on ->
+                cur.recovering = on
+                // The wait for the first PLAYING counts again from the moment the server has bytes (or has given up).
+                if (!on) cur.loadedAt = deps.clock()
+            },
         )
         val streamPath = deps.media.prepareAndRegister(entry)
         cur.streamPath = streamPath
@@ -1953,10 +1958,13 @@ class Renderer(
      * has not finished (a pending Seek, at most [SEEK_SETTLE_DEADLINE_MS]) also holds the verdict back: a speaker that is
      * busy seeking is not a speaker that cannot play the format (Lamp, 13 s near the end of a file, 2026-10-21 22:01).
      * [Current.startedAt] never moves and caps the whole wait at [START_HARD_CAP_FACTOR] times the start timeout, so a
-     * dead speaker that keeps taking Seeks is still given up on.
+     * dead speaker that keeps taking Seeks is still given up on. While the media server is recovering from a failed attempt
+     * ([Current.recovering]) the verdict is held the same way, so a slow fresh extraction does not read as a speaker that
+     * cannot play the format.
      */
     private fun startTimedOut(c: Current, now: Long): Boolean {
         if (now - c.startedAt > config.startTimeoutMs * START_HARD_CAP_FACTOR) return true
+        if (c.recovering) return false
         if (now - c.loadedAt <= config.startTimeoutMs) return false
         val seeking = pending?.let { now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
         return !seeking
