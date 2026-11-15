@@ -434,7 +434,6 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             verbose = loaded.config.ytdlpVerbose,
         )
         this.resolver = resolver
-        // read at connect time, so the Settings switch applies to the running bridge
         val guestNotices = GuestNoticeDecider(OwnDevice(Build.MANUFACTURER, Build.MODEL), guestNoticeGate)
         val b = Bridge(
             network,
@@ -463,7 +462,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 bufferDir = mediaBufferDir(h.context),
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
-                // a lounge sender connected: another device's cast is told to the author, unless the Settings switch is off
+                // a lounge sender connected: another device's cast is told to the author
                 onSenderConnected = { speaker, senderName, recentGuest ->
                     val notice = guestNotices.decide(speaker, senderName, recentGuest)
                     if (notice != null) {
