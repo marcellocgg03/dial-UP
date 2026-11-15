@@ -123,11 +123,22 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         }
         HorizontalDivider()
         SwitchRow(
+            title = "Prepare the next track ahead",
+            support = "Prepares the next track to hand off to the renderer while the current one plays, so it starts quicker",
+            checked = ui.prefetch,
+            onChange = { presenter.setPrefetch(it) },
+            tag = "setting-prefetch",
+        )
+        HorizontalDivider()
+        SwitchRow(
             title = "Gapless track changes on renderers that support it",
-            support = "Prepares the next track while the current one plays and hands it to the renderer ahead of time, so the switch has no gap.",
-            checked = ui.gapless,
+            support = "Hands the prefetched track to the renderer ahead of time so it transitions without a noticeable gap on certain " +
+                "renderers. Many don't need this on top of prefetch for a smooth transition, and on those, it can make the seek bar run " +
+                "about 2 s behind.",
+            checked = ui.gapless && ui.prefetch,
             onChange = { presenter.setGapless(it) },
             tag = "setting-gapless",
+            enabled = ui.prefetch,
         )
         SectionHeader("Renderers")
         SwitchRow(
@@ -337,11 +348,11 @@ private fun LogSection(ui: SettingsUi, presenter: SettingsPresenter) {
 private fun megabytes(bytes: Long): String = "${(bytes + 524_288L) / 1_048_576L} MB"
 
 @Composable
-internal fun SwitchRow(title: String, support: String?, checked: Boolean, onChange: (Boolean) -> Unit, tag: String) {
+internal fun SwitchRow(title: String, support: String?, checked: Boolean, onChange: (Boolean) -> Unit, tag: String, enabled: Boolean = true) {
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = support?.let { { Text(it) } },
-        trailingContent = { Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.testTag(tag)) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = onChange, enabled = enabled, modifier = Modifier.testTag(tag)) },
     )
 }
 
