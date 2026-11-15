@@ -12,10 +12,10 @@ import java.net.URI
 /** The releases list (newest 30). Plain https, no redirect is followed. */
 const val RELEASES_API_URL = "https://api.github.com/repos/marcellocgg03/dial-UP/releases?per_page=30"
 
-/** The tag of the rolling nightly pre-release; its version is in the release title ("DialUP 1.1.1-nightly.4"). */
+/** The tag of the rolling nightly pre-release; its version is in the release title. */
 const val ROLLING_NIGHTLY_TAG = "nightly"
 
-private val NIGHTLY_TITLE = Regex("""\d+\.\d+\.\d+-nightly\.\d+""")
+private val NIGHTLY_TITLE = Regex("""\d+\.\d+\.\d+-${ROLLING_NIGHTLY_TAG}\.\d{8}""")
 
 /** The page opened when no safe release page is known. */
 const val RELEASES_PAGE_URL = "https://github.com/marcellocgg03/dial-UP/releases"
@@ -24,7 +24,7 @@ private const val ALLOWED_PATH_PREFIX = "/marcellocgg03/dial-up/releases/"
 
 /** One release of the list: its tag, its page, its parsed version and whether GitHub marks it a pre-release. */
 data class Release(val tag: String, val url: String, val version: SemVer, val prerelease: Boolean) {
-    /** A nightly build: its pre-release part starts with `nightly` (v1.1.1-nightly.12). */
+    /** A nightly build: its pre-release part starts with `nightly` */
     val nightly: Boolean get() = version.pre.firstOrNull() == "nightly"
 }
 
