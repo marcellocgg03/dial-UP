@@ -616,7 +616,8 @@ class MediaServer(
         if (cache != null && serveFromRangeCache(call, entry, cache, token, attempts, l, tail, out)) return
         val permit = takeSlot(token, out) ?: return respondBusy(call, out)
         try {
-            serveLive(call, entry, cache, token, attempts, l, tail, out)
+            val onRecovering = ((src as? StreamSource.VideoPipe)?.entry)?.onRecovering
+            serveLive(call, entry, cache, token, attempts, l, tail, out, onRecovering)
         } finally {
             permit.release()
         }
@@ -699,10 +700,39 @@ class MediaServer(
         l: PipeLauncher,
         tail: List<String>,
         out: Outcome,
+        onRecovering: ((Boolean) -> Unit)? = null,
     ) {
         val pipeTee = PipeTee(l)
         val failures = mutableListOf<String>()
-        for (attempt in attempts) {
+        // Tells the renderer that the wait for the first byte is the ladder's recovery, not a speaker that cannot play.
+        var recovering = false
+        fun setRecovering(on: Boolean) {
+            if (recovering == on) return
+            recovering = on
+            runCatching { onRecovering?.invoke(on) }
+        }
+        try {
+            runLadder(call, entry, cache, token, attempts, tail, out, pipeTee, failures, ::setRecovering)
+        } finally {
+            setRecovering(false)
+        }
+    }
+
+    private suspend fun runLadder(
+        call: ApplicationCall,
+        entry: StreamEntry,
+        cache: PipeRangeCache?,
+        token: String,
+        attempts: List<PipeAttempt>,
+        tail: List<String>,
+        out: Outcome,
+        pipeTee: PipeTee,
+        failures: MutableList<String>,
+        setRecovering: (Boolean) -> Unit,
+    ) {
+        for ((index, attempt) in attempts.withIndex()) {
+            // An earlier attempt failed and this one has to produce the stream: the speaker is only waiting.
+            if (index > 0) setRecovering(true)
             val input = try {
                 attempt.input()
             } catch (e: CancellationException) {
@@ -716,7 +746,7 @@ class MediaServer(
             // response byte, so this only catches cancellation (engine stop). A hang-up during the lookup is caught by
             // the first write below, which fails and kills ffmpeg within a flush (MediaServerLadderTest).
             if (!currentCoroutineContext().isActive) return
-            val failure = pipeTee.serve(call, entry, out, cache, token, input + tail + "pipe:1") ?: return
+            val failure = pipeTee.serve(call, entry, out, cache, token, input + tail + "pipe:1", onFirstByte = { setRecovering(false) }) ?: return
             failures += failureLine(attempt.name, failure, attempts.size > 1)
         }
         out.status = 502

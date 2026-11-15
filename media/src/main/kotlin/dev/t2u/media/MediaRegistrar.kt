@@ -20,6 +20,13 @@ data class VideoEntry(
      * format, so [onFailure] does not run; the renderer may try the same format again later.
      */
     val onBusy: (() -> Unit)? = null,
+    /**
+     * Runs with true when an attempt to produce this stream failed and the next one has begun (a refused URL, then a fresh
+     * extraction that can take many seconds), and with false when a byte is on its way or the ladder is over. The speaker
+     * is waiting on a stream that is still being made, so the renderer must not take its silence for a format it cannot
+     * play.
+     */
+    val onRecovering: ((Boolean) -> Unit)? = null,
 )
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */

@@ -60,6 +60,7 @@ internal class PipeTee(private val launcher: PipeLauncher) {
         cache: PipeRangeCache?,
         token: String,
         args: List<String>,
+        onFirstByte: () -> Unit = {},
     ): String? {
         val proc = launcher.startOwned(args)
         try {
@@ -68,6 +69,7 @@ internal class PipeTee(private val launcher: PipeLauncher) {
             // Wait for the first audio byte; headers go out only after it, so a dead start is a 502, not an empty 200.
             val (firstLen, watchdogNote) = awaitFirstByte(proc, stdout, buf)
             if (firstLen <= 0) return startFailure(proc, watchdogNote)
+            runCatching { onFirstByte() }
             val first = buf.copyOf(firstLen)
             // The tee copies exactly what the client is sent, so a complete run is the byte total a later Range can use.
             var tee: TeeFill? = cache?.openTee(token)
