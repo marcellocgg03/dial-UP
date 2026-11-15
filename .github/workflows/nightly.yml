@@ -1,7 +1,7 @@
 name: Nightly
 
 # A signed nightly build of main, published as ONE rolling GitHub pre-release (tag `nightly`, replaced each night; the
-# version, <next patch>-nightly.<N>, is in its title and in the APK name). It is the only
+# version, <last stable>-nightly.<YYYYMMDD>, is in its title and in the APK name). It is the only
 # workflow that holds the release signing key. The key lives in the `nightly-signing` environment, which must be limited
 # to the main branch (Settings > Environments > nightly-signing > Deployment branches), so a workflow edited on any other
 # branch or fork cannot read it. Runs daily and builds only when main has a commit that no nightly covers and CI is green on it.
@@ -57,7 +57,7 @@ jobs:
           IFS=. read -r major minor patch <<< "$base"
           echo "build=yes" >> "$GITHUB_OUTPUT"
           echo "number=$n" >> "$GITHUB_OUTPUT"
-          echo "version=$major.$minor.$((patch + 1))-nightly.$n" >> "$GITHUB_OUTPUT"
+          echo "version=$major.$minor.$patch-nightly.$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         if: steps.plan.outputs.build == 'yes'

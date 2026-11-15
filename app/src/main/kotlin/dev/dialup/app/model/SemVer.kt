@@ -11,10 +11,11 @@ data class SemVer(val major: Int, val minor: Int, val patch: Int, val pre: List<
         major.compareTo(other.major).let { if (it != 0) return it }
         minor.compareTo(other.minor).let { if (it != 0) return it }
         patch.compareTo(other.patch).let { if (it != 0) return it }
-        // A version with a pre-release ranks below the same version without one.
+        // A version with a pre-release ranks below the same version without one, except a nightly: it is built from main
+        // after its release, so it ranks above that release (and below the next one).
         if (pre.isEmpty() && other.pre.isEmpty()) return 0
-        if (pre.isEmpty()) return 1
-        if (other.pre.isEmpty()) return -1
+        if (pre.isEmpty()) return if (other.isNightly) -1 else 1
+        if (other.pre.isEmpty()) return if (isNightly) 1 else -1
         val n = minOf(pre.size, other.pre.size)
         for (i in 0 until n) {
             val c = compareIdentifier(pre[i], other.pre[i])
@@ -22,6 +23,8 @@ data class SemVer(val major: Int, val minor: Int, val patch: Int, val pre: List<
         }
         return pre.size.compareTo(other.pre.size)
     }
+
+    private val isNightly: Boolean get() = pre.firstOrNull() == "nightly"
 
     override fun toString(): String =
         "$major.$minor.$patch" + if (pre.isEmpty()) "" else "-" + pre.joinToString(".")

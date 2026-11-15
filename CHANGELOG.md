@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The "Notify when another device casts" switch is gone from Settings. The notice itself stays; to silence it, turn off the "Other devices" notification channel in Android's app notification settings. A phone that had the switch off will get the notice again until you do.
+
 ## 1.1.1
 
 ### Added

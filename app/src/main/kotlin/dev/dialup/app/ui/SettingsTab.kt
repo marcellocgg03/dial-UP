@@ -139,14 +139,6 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         )
         HorizontalDivider()
         SwitchRow(
-            title = "Notify when another device casts",
-            support = "Show a notification when another device joins a renderer through YouTube, named by its device name",
-            checked = ui.notifyGuests,
-            onChange = { presenter.setNotifyGuests(it) },
-            tag = "setting-notify-guests",
-        )
-        HorizontalDivider()
-        SwitchRow(
             title = "Clear the renderer when a cast ends",
             support = "When a cast is manually disconnected, empty the renderer's queue",
             checked = ui.clearOnCastEnd,
