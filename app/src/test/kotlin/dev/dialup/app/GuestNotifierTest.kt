@@ -27,9 +27,9 @@ class GuestNotifierTest {
 
     @Test
     fun `this phone's own sender is never a guest, by exact name in any case or by containing the model`() {
-        assertNull(guestNoticeFor(true, "SAMSUNG SM-S936U", "Kitchen", own, recentGuest = "192.168.86.31"))
-        assertNull(guestNoticeFor(true, "samsung sm-s936u", "Kitchen", own, recentGuest = null))
-        assertNull(guestNoticeFor(true, "Marcello's SM-S936U", "Kitchen", own, recentGuest = null))
+        assertNull(guestNoticeFor("SAMSUNG SM-S936U", "Kitchen", own, recentGuest = "192.168.86.31"))
+        assertNull(guestNoticeFor("samsung sm-s936u", "Kitchen", own, recentGuest = null))
+        assertNull(guestNoticeFor("Marcello's SM-S936U", "Kitchen", own, recentGuest = null))
         assertTrue(own.isOwnName("  SAMSUNG SM-S936U "))
         assertFalse(own.isOwnName("COZYLA CD-8S544F2"))
         assertFalse(own.isOwnName(""))
@@ -38,26 +38,25 @@ class GuestNotifierTest {
 
     @Test
     fun `a guest seen on the LAN lately is announced by its device name`() {
-        val notice = guestNoticeFor(true, "COZYLA CD-8S544F2", "Lamp", own, recentGuest = "192.168.86.31")
+        val notice = guestNoticeFor("COZYLA CD-8S544F2", "Lamp", own, recentGuest = "192.168.86.31")
         assertEquals(GuestNotice("COZYLA CD-8S544F2 started a cast on Lamp", seenOnLan = true), notice)
     }
 
     @Test
     fun `a sender that is not this phone is announced by name even when no address was seen`() {
-        val notice = guestNoticeFor(true, "COZYLA CD-8S544F2", "Lamp", own, recentGuest = null)
+        val notice = guestNoticeFor("COZYLA CD-8S544F2", "Lamp", own, recentGuest = null)
         assertEquals(GuestNotice("COZYLA CD-8S544F2 started a cast on Lamp", seenOnLan = false), notice)
     }
 
     @Test
-    fun `the switch decides whether there is a notice at all`() {
-        assertNull(guestNoticeFor(false, "COZYLA CD-8S544F2", "Lamp", own, recentGuest = "192.168.86.31"))
-        assertNull(guestNoticeFor(true, "  ", "Lamp", own, recentGuest = "192.168.86.31"), "a nameless sender has nothing to announce")
+    fun `a nameless sender has no notice`() {
+        assertNull(guestNoticeFor("  ", "Lamp", own, recentGuest = "192.168.86.31"), "a nameless sender has nothing to announce")
     }
 
     @Test
     fun `the same device name is announced once per thirty seconds and another name is independent`() {
         var now = 0L
-        val decider = GuestNoticeDecider(own, { true }, GuestNoticeGate({ now }, 30_000L))
+        val decider = GuestNoticeDecider(own, GuestNoticeGate({ now }, 30_000L))
         assertEquals("COZYLA CD-8S544F2 started a cast on Lamp", decider.decide("Lamp", "COZYLA CD-8S544F2", null)?.text)
         now = 11_000L
         assertNull(decider.decide("Lamp", "COZYLA CD-8S544F2", "192.168.86.31"), "a reconnect 11 s later is not announced again")
@@ -68,13 +67,10 @@ class GuestNotifierTest {
     }
 
     @Test
-    fun `a switch that is off or the phone's own sender does not use up the window`() {
+    fun `the phone's own sender does not use up the window`() {
         var now = 0L
-        var on = false
-        val decider = GuestNoticeDecider(own, { on }, GuestNoticeGate({ now }, 30_000L))
-        assertNull(decider.decide("Lamp", "COZYLA CD-8S544F2", null))
+        val decider = GuestNoticeDecider(own, GuestNoticeGate({ now }, 30_000L))
         assertNull(decider.decide("Lamp", "SAMSUNG SM-S936U", null))
-        on = true
         now = 1_000L
         assertEquals("COZYLA CD-8S544F2 started a cast on Lamp", decider.decide("Lamp", "COZYLA CD-8S544F2", null)?.text)
         assertNull(decider.decide("Lamp", "SAMSUNG SM-S936U", null))
@@ -98,7 +94,7 @@ class GuestNotifierTest {
         var now = 0L
         val policy = DialAccessPolicy({ DialAccessMode.LAN }, { setOf("192.168.86.20", "127.0.0.1", "::1") })
         val sources = RecentLanSources(accept = policy::isGuest, clockMs = { now })
-        val decider = GuestNoticeDecider(OwnDevice("samsung", "SM-S936U"), { true }, GuestNoticeGate({ now }))
+        val decider = GuestNoticeDecider(OwnDevice("samsung", "SM-S936U"), GuestNoticeGate({ now }))
 
         fun connect(senderName: String) = decider.decide("Lamp", senderName, sources.mostRecent())
     }
