@@ -8,7 +8,7 @@
 
 ### Changed
 
-- **Gapless track changes are off for new installs.** An install that has already run keeps its current setting. With gapless on, the seek bar can run about 2 s behind the audio on speakers that switch tracks smoothly without it; with it off the next track is still prepared ahead and starts about a second after the speaker reports the end.
+- **Gapless track changes are off for new installs.** An install that has already run keeps its current setting. With it off the next track is still prepared ahead and starts about a second after the speaker reports the end.
 - The "Notify when another device casts" switch is gone from Settings. The notice itself stays; to silence it, turn off the "Other devices" notification channel in Android's app notification settings. A phone that had the switch off will get the notice again until you do.
 
 ## 1.1.1

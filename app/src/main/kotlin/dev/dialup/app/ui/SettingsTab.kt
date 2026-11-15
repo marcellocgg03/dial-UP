@@ -133,8 +133,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         SwitchRow(
             title = "Gapless track changes on renderers that support it",
             support = "Hands the prefetched track to the renderer ahead of time so it transitions without a noticeable gap on certain " +
-                "renderers. Many don't need this on top of prefetch for a smooth transition, and on those, it can make the seek bar run " +
-                "about 2 s behind.",
+                "renderers. Many don't need this on top of prefetch for a smooth transition.",
             checked = ui.gapless && ui.prefetch,
             onChange = { presenter.setGapless(it) },
             tag = "setting-gapless",
