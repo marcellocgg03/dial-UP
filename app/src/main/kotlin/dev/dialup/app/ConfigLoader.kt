@@ -35,6 +35,7 @@ fun applySettings(base: Config, s: AppSettingsData): Config =
             false -> "off"
             true -> if (base.logLevel == "off") "info" else base.logLevel
         },
+        prefetch = s.prefetch ?: base.prefetch,
         gapless = s.gapless ?: base.gapless,
         cacheMb = s.cacheMb ?: base.cacheMb,
         outputFormat = (s.outputFormat ?: base.outputFormat).let { if (it == "auto") "streaming" else it },
@@ -49,16 +50,19 @@ fun applySettings(base: Config, s: AppSettingsData): Config =
  * the bridge from starting.
  */
 fun loadAppConfig(filesDir: File): ConfigFileResult {
-    val fromFile = loadConfigOnly(filesDir)
     val settings = readSettingsFile(File(filesDir, SETTINGS_FILE))
+    // Gapless is off by default since defaults version 2. Settings not stamped yet belong to an install that ran gapless on, until
+    // the stamp (AppSettings.of) saves that; config.json still overrides either way.
+    val gaplessDefault = settings.defaultsVersion < DEFAULTS_VERSION && earlierInstall(filesDir)
+    val fromFile = loadConfigOnly(filesDir, gaplessDefault)
     return fromFile.copy(
         config = applySettings(fromFile.config, settings),
         guiKeys = settingsOverrideKeys(settings),
     )
 }
 
-private fun loadConfigOnly(filesDir: File): ConfigFileResult {
-    val base = Config(dataDir = File(filesDir, "cast"), outputFormat = "streaming")
+private fun loadConfigOnly(filesDir: File, gaplessDefault: Boolean): ConfigFileResult {
+    val base = Config(dataDir = File(filesDir, "cast"), outputFormat = "streaming", gapless = gaplessDefault)
     val file = File(filesDir, CONFIG_FILE)
     return try {
         if (file.exists() && !file.isFile) {
