@@ -1,0 +1,18 @@
+DialUP finds UPnP/DLNA renderers (for example Sonos speakers) on your Wi-Fi network and shows each one as a cast target in the YouTube and YouTube Music apps. Pick a renderer in the cast menu, and the phone resolves the audio with yt-dlp, remuxes or transcodes it with ffmpeg and serves it to the renderer. No server is involved.
+
+This app currently casts audio only.
+
+Features:
+• Gapless track changes
+• Native casting controls from YouTube and YouTube Music: seeking, volume, next and previous, autoplay, shuffle, repeat and track metadata
+• Streaming, Direct and Cached playback modes
+• Hide renderers you do not want in the cast menu
+• Add a renderer by its IP address, or pair by code when the network blocks discovery
+• Optional idle disconnect for a paused cast
+• Recovers from short Wi-Fi drops without ending the cast
+
+Requirements: Android 8.0 or newer, a UPnP/DLNA renderer on the same network, and the YouTube or YouTube Music app.
+
+DialUP downloads media through yt-dlp. When you turn on the automatic yt-dlp update, or press Update now in Settings, it downloads a newer yt-dlp from GitHub. The automatic update is off by default in this build.
+
+DialUP is free software under the GPL-3.0-only license.
