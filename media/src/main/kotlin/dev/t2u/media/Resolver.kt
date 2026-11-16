@@ -246,6 +246,22 @@ private fun queryParam(url: String, name: String): String? {
 /** The googlevideo `expire` query parameter in epoch seconds, or null. */
 fun urlExpire(url: String): Long? = queryParam(url, "expire")?.toLongOrNull()?.takeIf { it != 0L }
 
+/**
+ * Descriptive fields of a resolved URL for the event log, so a refused URL (403) can be told apart from a working one:
+ * the client that signed it (`c`), the `itag`, the yt-dlp format id, whether a PO token (`pot`) is in the query, and the
+ * IP family the URL is bound to. The signed URL, the IP address and the token are never included.
+ */
+fun urlDiagnostics(url: String, formatId: String?): Map<String, Any?> {
+    val ip = queryParam(url, "ip")
+    return mapOf(
+        "client" to queryParam(url, "c"),
+        "itag" to queryParam(url, "itag"),
+        "formatId" to formatId,
+        "hasPot" to (queryParam(url, "pot") != null),
+        "ipFamily" to ip?.let { if (it.contains(':') || it.contains("%3A", ignoreCase = true)) "v6" else "v4" },
+    )
+}
+
 /** Host of a URL, or null when it does not parse. Evidence records this instead of the signed URL. */
 fun urlHost(url: String): String? = try {
     URI(url).host
@@ -523,7 +539,7 @@ class CachingResolver(
                     "ms" to (System.nanoTime() - startedNanos) / 1_000_000,
                     "urlHost" to info?.let { urlHost(it.url) },
                     "expire" to info?.let { urlExpire(it.url) },
-                ) + if (result == "miss" && info != null && info.steps.isNotEmpty()) mapOf("steps" to info.steps) else emptyMap(),
+                ) + (info?.let { urlDiagnostics(it.url, it.formatId) } ?: emptyMap()) + if (result == "miss" && info != null && info.steps.isNotEmpty()) mapOf("steps" to info.steps) else emptyMap(),
             )
         } catch (_: Throwable) {
             // logging must never break a lookup

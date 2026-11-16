@@ -10,6 +10,7 @@
 
 - **Gapless track changes are off for new installs.** An install that has already run keeps its current setting. With it off the next track is still prepared ahead and starts about a second after the speaker reports the end.
 - The "Notify when another device casts" switch is gone from Settings. The notice itself stays; to silence it, turn off the "Other devices" notification channel in Android's app notification settings. A phone that had the switch off will get the notice again until you do.
+- The event log's lookup records now name the YouTube client that signed the URL, its itag and format id, whether it carries a PO token, and the IP family it is bound to, so a refused (403) stream can be told apart from a working one. The URL, the address and the token are never logged.
 
 ### Fixed
 
