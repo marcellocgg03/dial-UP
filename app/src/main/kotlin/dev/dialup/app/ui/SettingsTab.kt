@@ -44,6 +44,7 @@ import dev.dialup.app.AppSettings
 import dev.dialup.app.AppUpdates
 import dev.dialup.app.BuildConfigFacts
 import dev.dialup.app.HiddenRenderersActivity
+import dev.dialup.app.IDLE_DISCONNECT_MINUTES
 import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ShareLogActivity
 import dev.dialup.app.ThemeMode
@@ -154,6 +155,16 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
             checked = ui.clearOnCastEnd,
             onChange = { presenter.setClearOnCastEnd(it) },
             tag = "setting-clear-on-end",
+        )
+        HorizontalDivider()
+        ChoiceRow(
+            title = "Disconnect an idle cast",
+            support = "End a cast that stays paused for this long. The renderer's queue is emptied only with the setting above on",
+            current = idleDisconnectLabel(ui.idleDisconnectMin),
+            options = IDLE_DISCONNECT_MINUTES.map(::idleDisconnectLabel),
+            onPick = { i -> presenter.setIdleDisconnect(IDLE_DISCONNECT_MINUTES[i]) },
+            tag = "setting-idle-disconnect",
+            optionTag = { "idle-disconnect-option-${IDLE_DISCONNECT_MINUTES[it]}" },
         )
         HorizontalDivider()
         SwitchRow(
@@ -370,6 +381,15 @@ internal fun ChoiceRow(
         supportingContent = support?.let { { Text(it) } },
         trailingContent = { Choice(current, options, onPick, tag, optionTag) },
     )
+}
+
+/** The label of an idle time in minutes: Off, 30 min, 1 hour, 2 hours. */
+internal fun idleDisconnectLabel(minutes: Int): String = when {
+    minutes <= 0 -> "Off"
+    minutes < 60 -> "$minutes min"
+    minutes == 60 -> "1 hour"
+    minutes % 60 == 0 -> "${minutes / 60} hours"
+    else -> "$minutes min"
 }
 
 /** A button showing the [current] choice that opens a menu of [options]. */

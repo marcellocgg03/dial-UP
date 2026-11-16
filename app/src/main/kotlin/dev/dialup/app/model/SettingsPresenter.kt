@@ -6,6 +6,7 @@ import dev.dialup.app.AppSettingsData
 import dev.dialup.app.DEFAULT_NAME_PREFIX
 import dev.dialup.app.DEFAULT_THEME
 import dev.dialup.app.Failures
+import dev.dialup.app.IDLE_DISCONNECT_MINUTES
 import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
@@ -100,6 +101,7 @@ private val NOT_CASTING: StateFlow<Int> = MutableStateFlow(0)
 enum class SettingKey(val needsRestart: Boolean) {
     PHONE_ONLY(false),
     CLEAR_ON_CAST_END(false),
+    IDLE_DISCONNECT(false),
     SHOW_AUDIO_FORMAT(false),
     NAME_PREFIX(true),
     RENAME(true),
@@ -159,6 +161,8 @@ fun updateMessage(o: YtDlpUpdateOutcome): String = when {
 data class SettingsUi(
     val phoneOnly: Boolean = true,
     val clearOnCastEnd: Boolean = false,
+    /** Minutes a paused cast may idle before it is ended; 0 is never. */
+    val idleDisconnectMin: Int = 0,
     val showAudioFormat: Boolean = false,
     /** The text before each speaker's own name in the cast menu; empty is allowed. */
     val namePrefix: String = DEFAULT_NAME_PREFIX,
@@ -221,6 +225,7 @@ class SettingsPresenter(
                     it.copy(
                         phoneOnly = d.dialAccess == DialAccessMode.PHONE,
                         clearOnCastEnd = d.clearOnCastEnd,
+                        idleDisconnectMin = d.idleDisconnectMin,
                         showAudioFormat = d.showAudioFormat,
                         namePrefix = d.namePrefix,
                         theme = d.theme,
@@ -403,6 +408,13 @@ class SettingsPresenter(
     /** A renderer was renamed or reset while something is cast: the new name is used at the next bridge start, so the restart card is shown. */
     fun onRenamed() {
         changed(SettingKey.RENAME)
+    }
+
+    /** End a cast that stays paused for [minutes] (0 = never). Read live at each pause; anything not offered is ignored. */
+    fun setIdleDisconnect(minutes: Int): Boolean {
+        if (minutes !in IDLE_DISCONNECT_MINUTES) return false
+        settings.update { it.copy(idleDisconnectMin = minutes) }
+        return changed(SettingKey.IDLE_DISCONNECT)
     }
 
     fun setShowAudioFormat(on: Boolean): Boolean {
