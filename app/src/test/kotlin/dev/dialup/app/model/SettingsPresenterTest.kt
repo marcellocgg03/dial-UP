@@ -253,7 +253,7 @@ class SettingsPresenterTest {
         val settings = FakeSettingsPort()
         val p = presenter(settings)
         assertEquals(0, p.state.value.idleDisconnectMin)
-        for (m in listOf(30, 60, 120, 0)) {
+        for (m in listOf(15, 30, 60, 120, 0)) {
             assertFalse(p.setIdleDisconnect(m))
             runCurrent()
             assertEquals(m, settings.data.value.idleDisconnectMin)

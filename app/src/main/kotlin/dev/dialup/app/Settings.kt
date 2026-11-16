@@ -106,7 +106,7 @@ data class ParsedSettings(
 private val CACHE_MB_RANGE = 0..32768
 
 /** The idle times the app offers, in minutes (0 is off). A saved value outside this list is a problem and is ignored. */
-val IDLE_DISCONNECT_MINUTES: List<Int> = listOf(0, 30, 60, 120)
+val IDLE_DISCONNECT_MINUTES: List<Int> = listOf(0, 15, 30, 60, 120)
 
 /** The app's selectable formats, plus the old automatic value for migration. */
 val SETTINGS_OUTPUT_FORMATS = setOf("auto", "streaming", "direct", "mp4")

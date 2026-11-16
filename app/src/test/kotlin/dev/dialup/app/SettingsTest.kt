@@ -248,7 +248,7 @@ class SettingsTest {
     @Test
     fun theIdleDisconnectIsOffByDefaultAndWrittenOnlyWhenSet() {
         assertEquals(0, AppSettingsData().idleDisconnectMin)
-        assertEquals(listOf(0, 30, 60, 120), IDLE_DISCONNECT_MINUTES)
+        assertEquals(listOf(0, 15, 30, 60, 120), IDLE_DISCONNECT_MINUTES)
         val f = File(dir, SETTINGS_FILE)
         val s = settings(f)
         s.update { it.copy(clearOnCastEnd = true) }

@@ -159,7 +159,7 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         HorizontalDivider()
         ChoiceRow(
             title = "Disconnect an idle cast",
-            support = "End a cast that stays paused for this long. The renderer's queue is emptied only with the setting above on",
+            support = "Automatically disconnect a cast that stays paused for this long",
             current = idleDisconnectLabel(ui.idleDisconnectMin),
             options = IDLE_DISCONNECT_MINUTES.map(::idleDisconnectLabel),
             onPick = { i -> presenter.setIdleDisconnect(IDLE_DISCONNECT_MINUTES[i]) },
@@ -383,7 +383,7 @@ internal fun ChoiceRow(
     )
 }
 
-/** The label of an idle time in minutes: Off, 30 min, 1 hour, 2 hours. */
+/** The label of an idle time in minutes: Off, 15 min, 30 min, 1 hour, 2 hours. */
 internal fun idleDisconnectLabel(minutes: Int): String = when {
     minutes <= 0 -> "Off"
     minutes < 60 -> "$minutes min"

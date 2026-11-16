@@ -8,7 +8,7 @@ import kotlin.test.assertEquals
 
 class IdleDisconnectLabelTest {
     @Test
-    fun theOfferedTimesReadAsOffThirtyMinutesOneHourTwoHours() {
-        assertEquals(listOf("Off", "30 min", "1 hour", "2 hours"), IDLE_DISCONNECT_MINUTES.map(::idleDisconnectLabel))
+    fun theOfferedTimesReadAsOffFifteenThirtyMinutesOneHourTwoHours() {
+        assertEquals(listOf("Off", "15 min", "30 min", "1 hour", "2 hours"), IDLE_DISCONNECT_MINUTES.map(::idleDisconnectLabel))
     }
 }
