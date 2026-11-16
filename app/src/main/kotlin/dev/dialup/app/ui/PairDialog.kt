@@ -2,6 +2,10 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.PersistableBundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,11 +31,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.dialup.app.AppModel
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.os.PersistableBundle
 import dev.t2u.lounge.PairingCode
 import kotlinx.coroutines.delay
 
@@ -44,7 +47,7 @@ internal fun formatPairingCode(code: String): String =
 
 /**
  * Shows the TV codes of speaker [speaker] for the YouTube apps' Link with TV code screen, one for each app, and asks for new ones
- * every five minutes while it is open or when Refresh is pressed. The codes go to nobody but this screen: they are neither logged
+ * every five minutes while it is open and the app is on screen, or when Refresh is pressed. The codes go to nobody but this screen: they are neither logged
  * nor saved. The content sets [testTagsAsResourceId] itself because a dialog is its own window.
  */
 @Composable
@@ -53,12 +56,16 @@ internal fun PairDialog(model: AppModel, udn: String, speaker: String, onDismiss
     var codes by remember { mutableStateOf<List<PairingCode>?>(null) }
     // bumped by Refresh; each change runs a new request
     var round by remember { mutableIntStateOf(0) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(round) {
-        codes = null
-        codes = model.pairingCodes(udn)
-        // a new code before the shown one runs out, until the dialog closes (this effect is cancelled with it)
-        delay(PAIRING_REFRESH_MS)
-        round++
+        // only while the app is on screen: in the background nothing is asked, and coming back asks again
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            codes = null
+            codes = model.pairingCodes(udn)
+            // a new code before the shown one runs out, until the dialog closes (this effect is cancelled with it)
+            delay(PAIRING_REFRESH_MS)
+            round++
+        }
     }
     AlertDialog(
         modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("dialog-pair"),

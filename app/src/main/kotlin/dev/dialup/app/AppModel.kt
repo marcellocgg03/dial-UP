@@ -12,6 +12,7 @@ import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
 import dev.dialup.app.model.SearchThrottle
+import dev.t2u.lounge.PairingCode
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
@@ -22,7 +23,6 @@ import dev.t2u.renderer.parseManualIp
 import dev.t2u.renderer.perform
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import dev.t2u.lounge.PairingCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
