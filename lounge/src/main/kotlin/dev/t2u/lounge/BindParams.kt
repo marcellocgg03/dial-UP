@@ -61,6 +61,10 @@ class BindParams(
     private var sid: String? = null
     private var gsessionid: String? = null
 
+    /** The lounge token the last token request returned; null before the first one and after [reset]. */
+    @Synchronized
+    fun loungeToken(): String? = loungeIdToken
+
     /** The credential values currently held, so the logger can scrub them from any text. */
     @Synchronized
     fun secrets(): List<String> = listOfNotNull(id, loungeIdToken, sid, gsessionid)

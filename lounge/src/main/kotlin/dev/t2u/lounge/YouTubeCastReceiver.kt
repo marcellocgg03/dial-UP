@@ -319,6 +319,8 @@ class YouTubeCastReceiver(
         }
     }
 
+    override suspend fun pairingCodes(): List<PairingCode> = app.pairingCodes()
+
     /** The DIAL launch: null (no LOCATION, status 200) when the launch data is bad or the lounge refused it. */
     private suspend fun handleLaunch(body: String): String? = try {
         // which receiver the sender's launch reached (a wrong-target cast shows here); no pairing code is logged

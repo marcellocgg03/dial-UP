@@ -33,7 +33,16 @@ interface CastReceiver {
      * the start-time name until the receiver's next start. The default does nothing.
      */
     suspend fun rename(name: String) {}
+
+    /**
+     * Manual pairing: asks the lounge for the TV codes a sender types under Link with TV code, one for each lounge screen
+     * (YouTube and YouTube Music). Empty when the receiver is not running or the lounge cannot be reached. The default has none.
+     */
+    suspend fun pairingCodes(): List<PairingCode> = emptyList()
 }
+
+/** A TV code for one lounge screen; [app] is the name of the YouTube app it pairs. */
+data class PairingCode(val app: String, val code: String)
 
 /**
  * What a renderer passes to create its receiver (src/renderer.js createReceiver options).
