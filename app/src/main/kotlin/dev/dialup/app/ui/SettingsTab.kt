@@ -193,14 +193,17 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         SectionHeader("Maintenance")
         YtDlpSection(ui, appData.ytdlpAutoUpdate, presenter)
         HorizontalDivider()
-        AppUpdatesSection(
-            model = AppUpdates.of(context),
-            autoEnabled = appData.updateCheckEnabled,
-            currentVersion = BuildConfigFacts.versionName(context) ?: "0",
-            onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
-            channel = appData.updateChannel,
-            onChannelChange = presenter::setUpdateChannel,
-        )
+        // F-Droid delivers the app's updates: no release check, channel or nightly choice in that build
+        if (!BuildConfigFacts.fdroid) {
+            AppUpdatesSection(
+                model = AppUpdates.of(context),
+                autoEnabled = appData.updateCheckEnabled,
+                currentVersion = BuildConfigFacts.versionName(context) ?: "0",
+                onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
+                channel = appData.updateChannel,
+                onChannelChange = presenter::setUpdateChannel,
+            )
+        }
         SectionHeader("Appearance")
         ChoiceRow(
             title = "Theme",
@@ -255,7 +258,7 @@ private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: Setting
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
-                Text("Updates once a day, never during a cast")
+                Text(if (BuildConfigFacts.fdroid) "Updated only when you press Update now" else "Updates once a day, never during a cast")
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -282,7 +285,10 @@ private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: Setting
             }
         },
         trailingContent = {
-            Switch(checked = autoUpdate, onCheckedChange = presenter::setYtdlpAutoUpdate, modifier = Modifier.testTag("setting-ytdlp-auto"))
+            // F-Droid: yt-dlp is only updated when the user presses Update now, never by itself
+            if (!BuildConfigFacts.fdroid) {
+                Switch(checked = autoUpdate, onCheckedChange = presenter::setYtdlpAutoUpdate, modifier = Modifier.testTag("setting-ytdlp-auto"))
+            }
         },
     )
 }

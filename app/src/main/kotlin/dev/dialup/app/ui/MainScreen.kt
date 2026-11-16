@@ -118,7 +118,7 @@ fun MainScreen(
                 if (tab == TAB_SETTINGS) {
                     SettingsTab(settings, model, Modifier.weight(1f))
                 } else {
-                    UpdateCard(appUpdates, updateCheckEnabled, version, appData.updateChannel)
+                    if (!BuildConfigFacts.fdroid) UpdateCard(appUpdates, updateCheckEnabled, version, appData.updateChannel)
                     SpeakersTab(
                         model,
                         Modifier.weight(1f),

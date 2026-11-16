@@ -246,6 +246,27 @@ class SettingsTest {
     }
 
     @Test
+    fun anFdroidBuildHoldsTheAutomaticUpdateSwitchesOffWhateverTheFileSays() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"updateCheckEnabled":true,"ytdlpAutoUpdate":true,"clearOnCastEnd":true}""") }
+        val s = Settings(f, fdroid = true) { where, _ -> errors.add(where) }
+        assertFalse(s.data.value.updateCheckEnabled)
+        assertFalse(s.data.value.ytdlpAutoUpdate)
+        assertTrue(s.data.value.clearOnCastEnd, "other settings are untouched")
+        s.update { it.copy(updateCheckEnabled = true, ytdlpAutoUpdate = true) }
+        assertFalse(s.data.value.updateCheckEnabled)
+        assertFalse(s.data.value.ytdlpAutoUpdate)
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun aNormalBuildKeepsTheAutomaticUpdateSwitchesAsSaved() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = Settings(f, fdroid = false) { where, _ -> errors.add(where) }
+        assertTrue(s.data.value.updateCheckEnabled)
+        assertTrue(s.data.value.ytdlpAutoUpdate)
+    }
+
+    @Test
     fun theIdleDisconnectIsOffByDefaultAndWrittenOnlyWhenSet() {
         assertEquals(0, AppSettingsData().idleDisconnectMin)
         assertEquals(listOf(0, 15, 30, 60, 120), IDLE_DISCONNECT_MINUTES)

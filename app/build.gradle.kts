@@ -29,6 +29,10 @@ plugins {
 // The last stable release's code; see versionCode in defaultConfig.
 val stableVersionCode = 6
 
+// F-Droid build (-Pfdroid=true, set by F-Droid's recipe): the app never fetches code or looks for its own updates by itself.
+// The one place the F-Droid differences are decided is BuildConfig.FDROID; nothing is patched in the recipe.
+val fdroidBuild: Boolean = findProperty("fdroid") == "true"
+
 // Nightly build number (1..999): the commits on main since the last stable tag, passed by the nightly workflow.
 val nightlyBuild: Int? = (findProperty("nightlyBuild") as String?)?.let {
     requireNotNull(it.toIntOrNull()?.takeIf { n -> n in 1..999 }) { "nightlyBuild must be 1..999, got '$it'" }
@@ -38,7 +42,12 @@ android {
     namespace = "dev.dialup.app"
     compileSdk = 37
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
+        buildConfigField("boolean", "FDROID", fdroidBuild.toString())
         applicationId = "dev.dialup"
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37

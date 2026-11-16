@@ -264,6 +264,7 @@ class Settings(
     private val writer: (File, String) -> Unit = { target, text ->
         writeTextAtomic(target, text, AtomicWriteOptions.APP.copy(atomicOnly = true))
     },
+    private val fdroid: Boolean = BuildConfigFacts.fdroid,
     private val onError: (String, Throwable) -> Unit = { _, _ -> },
 ) {
     private val lock = Any()
@@ -316,8 +317,12 @@ class Settings(
         }
     }
 
+    /** An F-Droid build holds the two automatic update switches off, whatever the file says. */
+    private fun forBuild(data: AppSettingsData): AppSettingsData =
+        if (fdroid) data.copy(updateCheckEnabled = false, ytdlpAutoUpdate = false) else data
+
     private fun publish(data: AppSettingsData) {
-        state.value = data
+        state.value = forBuild(data)
         mode.value = data.dialAccess
     }
 
@@ -330,7 +335,7 @@ class Settings(
         try {
             val parsed = parseSettings(file.readText())
             extras = parsed.extras
-            state.value = parsed.data
+            state.value = forBuild(parsed.data)
             mode.value = parsed.data.dialAccess
             persistedDialAccess = parsed.data.dialAccess
             if (parsed.problems.isNotEmpty()) {
