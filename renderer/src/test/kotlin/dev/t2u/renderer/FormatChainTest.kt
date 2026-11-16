@@ -88,6 +88,27 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("a stream YouTube refused on every attempt ends the cast at once: another format would read the same refused source")
+    fun aStreamRefusedByYouTubeEndsTheCastWithoutTryingAnotherFormat() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
+        val longTimeout = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, outputFormat = "streaming", prefetch = false)
+        }
+        RendererHarness(fake, config = longTimeout).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            val first = h.registered.first()
+            checkNotNull(first.onUpstreamRefused).invoke()
+            checkNotNull(first.onFailure).invoke()
+            waitUntil { h.renderer.status == PlayerStatus.STOPPED }
+            delay(500)
+            assertEquals(listOf("adts"), h.formats(), "no mp3 attempt")
+            assertEquals("YouTube refused the stream", h.renderer.lastError)
+            assertNull(storedFormat(h.dataDir), "a refused URL says nothing about the speaker's formats")
+        }
+    }
+
+    @Test
     @DisplayName("the media server's own busy answer does not step down a format: the same format is tried again once")
     fun aBusyAnswerRepeatsTheFormatInsteadOfFallingBack() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
         RendererHarness(fake, config = ::streaming).use { h ->
