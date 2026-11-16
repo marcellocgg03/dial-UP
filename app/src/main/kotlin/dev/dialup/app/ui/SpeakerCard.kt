@@ -65,6 +65,7 @@ fun SpeakerCard(
     onAction: (SpeakerAction) -> Unit = {},
     onHide: () -> Unit = {},
     onRename: () -> Unit = {},
+    onPair: (() -> Unit)? = null,
     onDelete: () -> Unit = {},
     pinned: Boolean = false,
     onTogglePin: () -> Unit = {},
@@ -141,6 +142,17 @@ fun SpeakerCard(
                         },
                         modifier = Modifier.testTag("menu-rename-$udn"),
                     )
+                    // pairing needs a running receiver, so only a live card gets the item
+                    if (onPair != null) {
+                        DropdownMenuItem(
+                            text = { Text("Pair with TV code") },
+                            onClick = {
+                                menuOpen = false
+                                onPair()
+                            },
+                            modifier = Modifier.testTag("menu-pair-$udn"),
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(if (pinned) "Unpin" else "Pin to top") },
                         onClick = {

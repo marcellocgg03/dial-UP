@@ -49,6 +49,7 @@ internal class SpeakersUiState(
     confirmingRefreshState: MutableState<Boolean>,
     restartAfterRenameState: MutableState<Boolean>,
     renamedNoticeState: MutableState<Boolean>,
+    pairingState: MutableState<String?>,
 ) {
     /** True while the empty list shows its spinner; the Refresh button beside Add is shown exactly when this is false. */
     val spinnerShown: Boolean get() = listing.note == ListNote.LOOKING && phase == EmptyPhase.SPINNER
@@ -63,6 +64,9 @@ internal class SpeakersUiState(
 
     /** The dialog that says to clear the YouTube apps from recents after a rename the bridge restarted for by itself. */
     var renamedNotice: Boolean by renamedNoticeState
+
+    /** The UDN of the speaker whose TV code dialog is open; the dialog goes when that card is not live any more. */
+    var pairing: String? by pairingState
 }
 
 /** Collects the flows the Renderers tab reads, keeps its dialog flags and computes the listing and the empty-list phase. */
@@ -85,6 +89,7 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
     val confirmingRefresh = rememberSaveable { mutableStateOf(false) }
     val restartAfterRename = rememberSaveable { mutableStateOf(false) }
     val renamedNotice = rememberSaveable { mutableStateOf(false) }
+    val pairing = rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val presenter = remember(model, scope) { SpeakersPresenter(scope) { udn, action -> model.controlNow(udn, action) } }
     val busy by presenter.busy.collectAsStateWithLifecycle()
@@ -136,5 +141,6 @@ internal fun rememberSpeakersUiState(model: AppModel): SpeakersUiState {
         confirmingRefreshState = confirmingRefresh,
         restartAfterRenameState = restartAfterRename,
         renamedNoticeState = renamedNotice,
+        pairingState = pairing,
     )
 }
