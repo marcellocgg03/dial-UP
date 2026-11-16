@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Pair with TV code, from a speaker's ⋮ menu.** Shows a TV code for YouTube and one for YouTube Music. Type each under Link with TV code in its own app (a code typed into the other app links the speaker but the cast drops on connect) and the speaker joins its cast list, with no discovery on the local network needed. A new code is requested every five minutes while the dialog is open, or with New code. The codes are never logged or stored.
+- **Pair manually with code, from a speaker's ⋮ menu.** For a network that blocks YouTube and YouTube Music from discovering renderers even with the bridge on. It shows a TV code for YouTube and one for YouTube Music, each with a Copy button. Type each under Link with TV code in its own app (a code typed into the other app links the speaker but the cast drops on connect). A new code is requested every five minutes while the dialog is open, or with New code. The codes are never logged or stored. The Add renderer by address prompt now points to it.
 - **A Prefetch switch in Settings** ("Prepare the next track ahead", on by default). Turning it off looks the next track up only after the current one ends, so there is a noticeable pause. Gapless needs it and is greyed out and shown as off while it is off. Both need a bridge restart.
 
 ### Changed

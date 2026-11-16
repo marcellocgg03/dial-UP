@@ -25,6 +25,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Audio format display**: Optionally show the format currently loaded on each renderer's card. It updates if playback falls back to another format.
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
+- **Manual code pairing**: if your network blocks YouTube and YouTube Music from discovering renderers, a card's menu has *Pair manually with code*, which shows a code to type under Link with TV code in the app.
 - **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
 ## Playback modes
