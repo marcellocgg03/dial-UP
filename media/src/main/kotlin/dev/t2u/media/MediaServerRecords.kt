@@ -16,6 +16,9 @@ internal class Outcome {
     /** With [busy]: the refusal was the token's own cap, not the global limit. */
     var perTokenBusy: Boolean = false
 
+    /** True when every attempt of the ladder failed because YouTube refused the stream (a 403 or 410), so no other format can work. */
+    var upstreamRefused: Boolean = false
+
     /** The upstream calls of this request, for the log (direct only). */
     val upstream = CopyOnWriteArrayList<UpstreamTiming>()
 }
@@ -24,6 +27,11 @@ internal class Outcome {
 internal class PipeAttempt(val name: String, val input: suspend () -> List<String>)
 
 private const val MAX_NOTE = 400
+
+private val UPSTREAM_REFUSAL = Regex("""(Server returned|HTTP Error) (403|410)\b""")
+
+/** Does an attempt's failure line say that YouTube refused or expired the stream (ffmpeg "Server returned 403", yt-dlp "HTTP Error 403")? */
+internal fun isUpstreamRefusal(line: String): Boolean = UPSTREAM_REFUSAL.containsMatchIn(line)
 
 /** An attempt's failure as one line for [MediaRequest.note]; URLs are cut to their host. */
 internal fun failureLine(name: String, detail: String, prefixed: Boolean): String {

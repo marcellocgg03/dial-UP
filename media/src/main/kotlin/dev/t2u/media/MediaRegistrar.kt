@@ -27,6 +27,11 @@ data class VideoEntry(
      * play.
      */
     val onRecovering: ((Boolean) -> Unit)? = null,
+    /**
+     * Runs, just before [onFailure], when every attempt failed because YouTube refused the stream (a 403 or 410). The format is
+     * not at fault, so the renderer should end the cast instead of trying the same source in another format.
+     */
+    val onUpstreamRefused: (() -> Unit)? = null,
 )
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
