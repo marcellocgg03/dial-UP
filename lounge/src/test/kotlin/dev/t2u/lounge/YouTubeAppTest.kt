@@ -815,6 +815,31 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun endingTheCastTellsTheSenderDisconnectsAndResetsWithoutStateFour() = run<Unit> {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+
+        a.endCast("paused for 30 min", "idleDisconnect")
+
+        awaitUntil(what = "screen disconnected") { count("cl", "loungeScreenDisconnected") == 1 && disconnects.isNotEmpty() }
+        assertTrue(messages("cl").none { it.first == "onStateChange" && it.second["state"] == "4" }, "an idle end is not a failure")
+        assertTrue(a.connectedSenders.isEmpty())
+        assertEquals(listOf("dev-1" to false), disconnects.toList())
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertEquals(1, clearCount())
+    }
+
+    @Test
+    fun endingTheCastWithoutASenderPostsNothing() = run<Unit> {
+        val a = startedApp()
+        a.endCast("paused for 30 min", "idleDisconnect")
+        barrier("cl")
+        assertEquals(0, count("cl", "loungeScreenDisconnected"))
+        assertEquals(0, clearCount())
+    }
+
+    @Test
     fun aPlaybackFailureWithoutASenderPostsNothing() = run<Unit> {
         startedApp()
         player.reportPlaybackFailure("the speaker never started playing")

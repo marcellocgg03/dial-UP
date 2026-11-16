@@ -26,6 +26,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Manual code pairing**: if your network blocks YouTube and YouTube Music from discovering renderers, a card's menu has *Pair manually with code*, which shows a code to type under Link with TV code in the app.
+- **Idle disconnect**: optionally end a cast that stays paused for 15 minutes, 30 minutes, 1 hour or 2 hours (Settings; off by default). The renderer's queue is cleared only if *Clear the renderer when a cast ends* is on.
 - **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
 ## Playback modes

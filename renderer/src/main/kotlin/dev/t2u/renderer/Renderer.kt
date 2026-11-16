@@ -292,6 +292,7 @@ class Renderer(
         deps.playlistRequestHandlerFactory?.let { queue.requestHandler = it() }
         addStateListener { event ->
             val state = event.current
+            watchIdle(state.status == PlayerStatus.PAUSED)
             val nav = getNavInfo()
             val idle = state.status == PlayerStatus.IDLE || state.status == PlayerStatus.STOPPED
             _live.value = Live(
@@ -304,6 +305,48 @@ class Renderer(
     }
 
     override fun clockMs(): Long = deps.clock()
+
+    @Volatile private var idleWatch: Job? = null
+
+    /** Guards the check-then-start of [idleWatch]: paused states can arrive from the poll and from a sender at the same time. */
+    private val idleLock = Any()
+
+    /**
+     * Ends a cast that stays paused for the time the setting names. A pause starts the watch (once: a repeated paused state does
+     * not restart it) and anything else, a resume, a seek, a new track or a stop, cancels it. When the time is up and the cast is
+     * still paused the receiver ends it like a failed start does: the phone is told the screen is gone and, with the clear setting
+     * on, the speaker is emptied.
+     */
+    private fun watchIdle(paused: Boolean) = synchronized(idleLock) {
+        if (!paused) {
+            idleWatch?.cancel()
+            idleWatch = null
+            return
+        }
+        if (idleWatch?.isActive == true || destroyed) return
+        val ms = try {
+            deps.idleDisconnectMs()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            0L
+        }
+        if (ms <= 0L) return
+        idleWatch = scope.launch {
+            deps.pause(ms)
+            if (destroyed || status != PlayerStatus.PAUSED) return@launch
+            note("info", "paused for ${ms / 60_000} min: ending the cast")
+            // the reset below reports IDLE, which cancels the watch: let go of it first so it does not cancel this very run
+            synchronized(idleLock) { idleWatch = null }
+            try {
+                receiver?.endCast("paused for ${ms / 60_000} min")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                note("warn", "Ending an idle cast failed (${e.javaClass.simpleName})")
+            }
+        }
+    }
 
     /** The sender is told buffering while a Seek (or the Play after a paused Seek) is pending, until the poll settles it. */
     override fun seekHoldActive(): Boolean = pending != null
@@ -508,6 +551,7 @@ class Renderer(
         pending = null
         pollLoop.stop()
         slowClearWatch?.cancel()
+        idleWatch?.cancel()
         try {
             val rec = receiver
             if (rec != null && rec.status == "running") rec.stop()

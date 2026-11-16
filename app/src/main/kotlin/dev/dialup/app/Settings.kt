@@ -65,6 +65,9 @@ data class AppSettingsData(
     val bridgeEnabled: Boolean = true,
     val dialAccess: DialAccessMode = DEFAULT_DIAL_ACCESS,
     val clearOnCastEnd: Boolean = false,
+
+    /** Minutes a cast may stay paused before it is ended; 0 is never. One of [IDLE_DISCONNECT_MINUTES]. Read live. */
+    val idleDisconnectMin: Int = 0,
     val showAudioFormat: Boolean = false,
 
     /** The text before a speaker's own name in the cast menu. Empty is allowed. Read live; a change renames the running speakers. */
@@ -102,12 +105,16 @@ data class ParsedSettings(
 /** The cache size range Config.validate accepts, in MiB. */
 private val CACHE_MB_RANGE = 0..32768
 
+/** The idle times the app offers, in minutes (0 is off). A saved value outside this list is a problem and is ignored. */
+val IDLE_DISCONNECT_MINUTES: List<Int> = listOf(0, 15, 30, 60, 120)
+
 /** The app's selectable formats, plus the old automatic value for migration. */
 val SETTINGS_OUTPUT_FORMATS = setOf("auto", "streaming", "direct", "mp4")
 
 private const val KEY_BRIDGE_ENABLED = "bridgeEnabled"
 private const val KEY_DIAL_ACCESS = "dialAccess"
 private const val KEY_CLEAR_ON_CAST_END = "clearOnCastEnd"
+private const val KEY_IDLE_DISCONNECT = "idleDisconnectMin"
 private const val KEY_SHOW_AUDIO_FORMAT = "showAudioFormat"
 private const val KEY_NAME_PREFIX = "namePrefix"
 private const val KEY_THEME = "theme"
@@ -123,7 +130,7 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_IDLE_DISCONNECT, KEY_SHOW_AUDIO_FORMAT, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
     KEY_PREFETCH, KEY_GAPLESS, KEY_DEFAULTS_VERSION, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
@@ -176,6 +183,10 @@ fun parseSettings(text: String): ParsedSettings {
         if (mode != null) data = data.copy(dialAccess = mode) else problems += KEY_DIAL_ACCESS
     }
     bool(KEY_CLEAR_ON_CAST_END)?.let { data = data.copy(clearOnCastEnd = it) }
+    o[KEY_IDLE_DISCONNECT]?.let { e ->
+        val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in IDLE_DISCONNECT_MINUTES }
+        if (n != null) data = data.copy(idleDisconnectMin = n) else problems += KEY_IDLE_DISCONNECT
+    }
     bool(KEY_SHOW_AUDIO_FORMAT)?.let { data = data.copy(showAudioFormat = it) }
     o[KEY_NAME_PREFIX]?.let { e ->
         val text = (e as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -224,6 +235,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     if (!data.bridgeEnabled) known[KEY_BRIDGE_ENABLED] = JsonPrimitive(false)
     known[KEY_DIAL_ACCESS] = JsonPrimitive(data.dialAccess.wire)
     if (data.clearOnCastEnd) known[KEY_CLEAR_ON_CAST_END] = JsonPrimitive(true)
+    if (data.idleDisconnectMin != 0) known[KEY_IDLE_DISCONNECT] = JsonPrimitive(data.idleDisconnectMin)
     if (data.showAudioFormat) known[KEY_SHOW_AUDIO_FORMAT] = JsonPrimitive(true)
     if (data.namePrefix != DEFAULT_NAME_PREFIX) known[KEY_NAME_PREFIX] = JsonPrimitive(data.namePrefix)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)

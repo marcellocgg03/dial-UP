@@ -345,21 +345,26 @@ class YouTubeApp(
     }
 
     /**
-     * The speaker cannot play what the sender cast (the player already told the senders state 4): tells the sender the
-     * screen is gone, drops the senders and resets the player, which also clears the speaker. The reset policy is
-     * not consulted: no sender of this receiver can be served by this speaker now. Protocol-risk: every sender-facing
-     * message name stays in this file.
+     * The speaker cannot play what the sender cast (the player already told the senders state 4): ends the cast, see [endCast].
      */
-    private suspend fun handlePlaybackFailure(reason: String) {
+    private suspend fun handlePlaybackFailure(reason: String) = endCast(reason, "playbackFailed")
+
+    /**
+     * Ends the cast from the receiver's side: tells the sender the screen is gone, drops the senders and resets the player,
+     * which also clears the speaker when the clear-when-cast-ends setting is on. The reset policy is not consulted: no sender of
+     * this receiver is served any more. [kind] names the evidence event. Protocol-risk: every sender-facing message name stays
+     * in this file.
+     */
+    suspend fun endCast(reason: String, kind: String = "castEnded") {
         switchLock.withLock {
             val session = activeSession
             if (state != AppState.RUNNING || session == null) return
             if (connected.isEmpty()) {
-                note("playbackFailed", "reason" to reason, "senders" to 0)
+                note(kind, "reason" to reason, "senders" to 0)
                 return
             }
             val dropped = connected.toList()
-            note("playbackFailed", "reason" to reason, "senders" to dropped.size)
+            note(kind, "reason" to reason, "senders" to dropped.size)
             connected.clear()
             implicitlyDisconnected.clear()
             lastNav = null

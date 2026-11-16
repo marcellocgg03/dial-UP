@@ -32,6 +32,13 @@ internal class HarnessReceiver : CastReceiver {
 
     @Volatile var autoplayOnConnect: Boolean? = null
 
+    /** The reasons the renderer ended the cast with, in order. */
+    val endedCasts = CopyOnWriteArrayList<String>()
+
+    override suspend fun endCast(reason: String) {
+        endedCasts.add(reason)
+    }
+
     override suspend fun start() {
         status = "running"
     }
@@ -73,6 +80,7 @@ internal class RendererHarness(
     private val duration: Double = 210.0,
     private val clock: () -> Long = System::currentTimeMillis,
     private val pause: suspend (Long) -> Unit = { delay(it) },
+    private val idleDisconnectMs: () -> Long = { 0L },
 ) : AutoCloseable {
     /** Formats the fake media server reports as already cached, for any video. */
     @Volatile var cachedFormats: List<String> = emptyList()
@@ -163,6 +171,7 @@ internal class RendererHarness(
             playlistRequestHandlerFactory = playlistRequestHandlerFactory,
             clock = clock,
             pause = pause,
+            idleDisconnectMs = idleDisconnectMs,
             allowLoopbackSpeakers = true,
         ),
     )

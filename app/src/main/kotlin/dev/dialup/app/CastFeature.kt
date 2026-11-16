@@ -445,6 +445,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 accessMode = { appSettings.dialAccess.value },
                 // Read at clear time, so switching the setting applies to the running bridge
                 clearOnCastEnd = { appSettings.data.value.clearOnCastEnd },
+                // Read at each pause, so a change applies from the next pause without a restart
+                idleDisconnectMs = { appSettings.data.value.idleDisconnectMin * 60_000L },
                 // Read at setup and when the prefix changes, so the running speakers take a new prefix without a restart
                 namePrefix = { appSettings.data.value.namePrefix },
                 // The cache cap read at every prune: the app's value when set, else config.json or the default

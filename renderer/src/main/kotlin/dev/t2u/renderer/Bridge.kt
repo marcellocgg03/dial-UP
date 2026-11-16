@@ -582,6 +582,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     deps.scope,
                     deps.events,
                     clearOnCastEnd = deps.clearOnCastEnd ?: { config.clearOnCastEnd },
+                    idleDisconnectMs = deps.idleDisconnectMs ?: { 0L },
                     nameTemplate = deps.namePrefix?.let { prefix -> { nameTemplateFor(prefix()) } } ?: { config.nameTemplate },
                     userName = { deps.names?.get(it) },
                     allowLoopbackSpeakers = deps.allowLoopbackSpeakers,
