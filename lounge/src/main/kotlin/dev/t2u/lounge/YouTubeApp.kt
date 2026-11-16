@@ -217,6 +217,26 @@ class YouTubeApp(
     }
 
     /**
+     * Manual pairing: a TV code from each session, so a code typed in either YouTube app finds this speaker. A session that
+     * cannot give one (no token yet, lounge down) is left out; the codes themselves are never logged.
+     */
+    suspend fun pairingCodes(): List<PairingCode> {
+        if (state != AppState.RUNNING) return emptyList()
+        val out = ArrayList<PairingCode>()
+        for ((client, session) in sessions) {
+            try {
+                out.add(PairingCode(client.displayName, session.requestPairingCode()))
+                note("pairingCode", "client" to client.displayName, "result" to "ok")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                note("pairingCode", "client" to client.displayName, "result" to (e::class.simpleName ?: "Throwable"))
+            }
+        }
+        return out
+    }
+
+    /**
      * Resets the player, ends both sessions (the senders are told) and reports the senders as disconnected.
      * With [error] the app stopped because of it and [onTerminate] is called.
      */

@@ -59,6 +59,10 @@ internal fun SpeakersDialogs(model: AppModel, ui: SpeakersUiState, onRenamed: ()
             onLater = { ui.restartAfterRename = false; onRenamed() },
         )
     }
+    ui.pairing?.let { udn ->
+        val card = ui.listing.live.firstOrNull { it.udn == udn }
+        if (card == null) ui.pairing = null else PairDialog(model, udn, card.name, onDismiss = { ui.pairing = null })
+    }
     ui.renaming?.let { udn ->
         // the card on the list now: a running one, or the greyed card of a saved renderer while the bridge's list is not shown
         val card = (ui.listing.live + ui.listing.saved).firstOrNull { it.udn == udn }

@@ -14,6 +14,7 @@ import dev.t2u.dial.DialAccessMode
 import dev.t2u.dial.DialAccessPolicy
 import dev.t2u.lounge.DialAdvertiser
 import dev.t2u.lounge.InnerTubePlaylistRequestHandler
+import dev.t2u.lounge.PairingCode
 import dev.t2u.lounge.Player
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverDeps
@@ -363,6 +364,16 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         if (started.get() && !stopped.get()) renderer(udn)?.rename(store.get(udn))
         emit("renamed", "udn" to udn, "name" to store.get(udn), "reset" to (name == null))
         return true
+    }
+
+    /**
+     * Manual pairing: the TV codes of the running renderer [udn]; empty when the bridge is not running or no such renderer runs.
+     */
+    suspend fun pairingCodes(udn: String): List<PairingCode> {
+        if (!started.get() || stopped.get()) return emptyList()
+        val codes = renderer(udn)?.pairingCodes().orEmpty()
+        emit("pairing-codes", "udn" to udn, "count" to codes.size)
+        return codes
     }
 
     /**

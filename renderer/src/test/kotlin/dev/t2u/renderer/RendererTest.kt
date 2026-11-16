@@ -14,6 +14,7 @@ package dev.t2u.renderer
 //    measures from the load only).
 
 import dev.t2u.lounge.CastReceiver
+import dev.t2u.lounge.PairingCode
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverFactory
 import dev.t2u.lounge.ReceiverOptions
@@ -75,6 +76,11 @@ class RendererTest {
         override fun enableAutoplayOnConnect(value: Boolean) {
             autoplayOnConnect = value
         }
+
+        @Volatile var codes: List<PairingCode> = emptyList()
+        @Volatile var codesFail = false
+
+        override suspend fun pairingCodes(): List<PairingCode> = if (codesFail) error("lounge down") else codes
     }
 
     /** One renderer wired to stubs; [close] destroys it and the fake. */
@@ -184,6 +190,22 @@ class RendererTest {
             assertEquals(3000, h.receiverOptions?.dialPort)
             assertEquals("running", h.receiver.status)
             assertEquals(true, h.receiver.autoplayOnConnect)
+        }
+    }
+
+    @Test
+    @DisplayName("pairingCodes: none before init, the receiver's codes after, none when the receiver throws")
+    fun pairingCodesPassThrough() = withFake { fake ->
+        Harness(fake).use { h ->
+            assertEquals(emptyList(), h.renderer.pairingCodes())
+            assertTrue(h.renderer.init())
+            h.receiver.codes = listOf(PairingCode("YouTube", "123456789012"))
+            assertEquals(listOf(PairingCode("YouTube", "123456789012")), h.renderer.pairingCodes())
+            h.receiver.codesFail = true
+            assertEquals(emptyList(), h.renderer.pairingCodes())
+            h.renderer.destroy()
+            h.receiver.codesFail = false
+            assertEquals(emptyList(), h.renderer.pairingCodes())
         }
     }
 

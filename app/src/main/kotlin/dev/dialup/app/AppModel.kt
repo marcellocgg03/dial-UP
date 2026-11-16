@@ -12,6 +12,7 @@ import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.FOREGROUND_SEARCH_GAP_MS
 import dev.dialup.app.model.SearchThrottle
+import dev.t2u.lounge.PairingCode
 import dev.t2u.renderer.HiddenSpeaker
 import dev.t2u.renderer.ManualAddResult
 import dev.t2u.renderer.ManualSpeaker
@@ -289,6 +290,23 @@ class AppModel private constructor(context: Context) {
         } catch (e: Exception) {
             Failures.report("speaker:add-manual", e)
             ManualAddResult.NotUsable("Could not add the renderer: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Manual pairing: the TV codes of the running renderer [udn], one for each YouTube app, for the sender's Link with TV code
+     * screen. Empty with no bridge, no such running renderer, or a lounge that does not answer; cancellation propagates. The codes
+     * are shown to the author and never logged or kept.
+     */
+    suspend fun pairingCodes(udn: String): List<PairingCode> {
+        val bridge = cast.value?.currentBridge() ?: return emptyList()
+        return try {
+            withContext(Dispatchers.Default) { bridge.pairingCodes(udn) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Failures.report("speaker:pairing-codes", e)
+            emptyList()
         }
     }
 

@@ -439,6 +439,30 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun pairingCodesAskBothSessionsAndNeverLogTheCode() = run {
+        val a = startedApp()
+        val codes = a.pairingCodes()
+        assertEquals(listOf("YouTube", "YouTube Music"), codes.map { it.app })
+        assertEquals(setOf("123456789012"), codes.map { it.code }.toSet())
+        val posts = fake.requests.filter { it.path.endsWith("get_pairing_code") }
+        assertEquals(2, posts.size, "one request per session")
+        assertEquals(2, posts.map { it.form["screen_id"] }.toSet().size, "each session has its own screen")
+        assertTrue(posts.all { !it.form["lounge_token"].isNullOrEmpty() && it.form["access_type"] == "permanent" })
+        assertTrue(events.none { e -> e.second.values.any { it.toString().contains("123456789012") } }, "the code was logged")
+    }
+
+    @Test
+    fun pairingCodesAreEmptyWhenTheLoungeGivesNoneOrTheAppIsStopped() = run {
+        val a = startedApp()
+        fake.pairingCodeText = ""
+        assertEquals(emptyList(), a.pairingCodes())
+        fake.pairingCodeText = "<html>Sign in to the network</html>"
+        assertEquals(emptyList(), a.pairingCodes(), "a 200 page that is not a code is not shown")
+        a.stop()
+        assertEquals(emptyList(), a.pairingCodes())
+    }
+
+    @Test
     fun launchRefusesMissingPairingCodeAndUnknownTheme() = run {
         val a = startedApp()
         assertFailsWith<IllegalArgumentException> { a.launch("theme=cl") }

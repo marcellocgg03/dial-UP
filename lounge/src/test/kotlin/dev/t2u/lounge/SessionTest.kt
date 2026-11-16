@@ -413,6 +413,34 @@ class SessionTest {
         assertFailsWith<LoungeHttpException> { s.registerPairingCode("ZZZ999") }
     }
 
+    @Test
+    fun requestPairingCodePostsTheTokenAndScreenAndReturnsTheCode() = run<Unit> {
+        val s = session()
+        assertFailsWith<IncompleteLoungeDataException> { s.requestPairingCode() }
+        s.begin()
+        assertEquals("123456789012", s.requestPairingCode())
+        val post = fake.requests.last { it.path.endsWith("get_pairing_code") }
+        assertEquals("pair", post.query["ctx"])
+        assertEquals(listOf("access_type", "app", "lounge_token", "screen_id", "screen_name", "device_id"), post.form.keys.toList())
+        assertEquals(s.screenId, post.form["screen_id"])
+        assertEquals(s.deviceId, post.form["device_id"])
+        assertTrue(!post.form["lounge_token"].isNullOrEmpty())
+    }
+
+    @Test
+    fun requestPairingCodeRefusesWhatIsNotACodeAndNeverLogsIt() = run<Unit> {
+        val s = session()
+        s.begin()
+        fake.pairingCodeText = "<html>Sign in</html>"
+        assertFailsWith<java.io.IOException> { s.requestPairingCode() }
+        fake.pairingCodeText = ""
+        assertFailsWith<LoungeHttpException> { s.requestPairingCode() }
+        fake.pairingCodeText = "123456789012"
+        s.requestPairingCode()
+        s.end()
+        assertTrue(events.none { flatten(it.second).joinToString(" ").contains("123456789012") }, "the code was logged")
+    }
+
     // ---- logging (CAST-08, T-02-30)
 
     private fun flatten(v: Any?): List<String> = when (v) {

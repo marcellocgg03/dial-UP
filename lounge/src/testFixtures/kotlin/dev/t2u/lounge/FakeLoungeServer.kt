@@ -81,6 +81,9 @@ class FakeLoungeServer : AutoCloseable {
     @Volatile
     var refusePairing: Boolean = false
 
+    /** What get_pairing_code answers; an empty text answers 500 (no code). */
+    var pairingCodeText: String = "123456789012"
+
     /** The next this many message POSTs (bind with count >= 1) answer 500 and are not recorded in [sent]. */
     val failNextSends = AtomicInteger(0)
 
@@ -159,6 +162,10 @@ class FakeLoungeServer : AutoCloseable {
                 } else {
                     call.respondText(tokenBatch(requested), ContentType.Application.Json)
                 }
+            }
+            post("/api/lounge/pairing/get_pairing_code") {
+                record(call)
+                if (pairingCodeText.isEmpty()) call.respondText("", PLAIN, HttpStatusCode.InternalServerError) else call.respondText(pairingCodeText, PLAIN)
             }
             post("/api/lounge/pairing/register_pairing_code") {
                 record(call)

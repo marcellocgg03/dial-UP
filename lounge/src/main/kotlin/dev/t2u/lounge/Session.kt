@@ -282,6 +282,36 @@ class Session(
         execute(request).use { checkOk(it, request) }
     }
 
+    /**
+     * Asks the lounge for the TV code that pairs a sender with this screen (the Link with TV code screen of the YouTube apps;
+     * PairingCodeRequestService.js). The code is a secret until typed: it is registered with the log's scrubber and never
+     * logged. Throws [IncompleteLoungeDataException] before the screen id or lounge token exists.
+     */
+    suspend fun requestPairingCode(): String {
+        val screen = screenId ?: throw IncompleteLoungeDataException("Missing data required to request a pairing code", listOf("screenId"))
+        val token = bind.loungeToken() ?: throw IncompleteLoungeDataException("Missing data required to request a pairing code", listOf("loungeIdToken"))
+        val form = formEncode(
+            listOf(
+                "access_type" to "permanent",
+                "app" to LoungeConstants.SCREEN_APP,
+                "lounge_token" to token,
+                "screen_id" to screen,
+                "screen_name" to screenName,
+                "device_id" to bind.id,
+            ),
+        )
+        val request = Request.Builder().url(endpoints.getPairingCode).header("User-Agent", LoungeConstants.USER_AGENT)
+            .post(form.toRequestBody(formType)).build()
+        val code = execute(request).use { r ->
+            checkOk(r, request)
+            withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
+        }.trim()
+        // a captive portal or an error page can answer 200: a code is short and has no markup or spaces
+        if (!PAIRING_CODE_SHAPE.matches(code)) throw IOException("get_pairing_code returned something that is not a code")
+        log.addSecret(code)
+        return code
+    }
+
     // ---- sending
 
     private val refreshMutex = Mutex()
@@ -412,6 +442,8 @@ class Session(
         log.addSecret(screenId)
     }
 }
+
+private val PAIRING_CODE_SHAPE = Regex("^[0-9A-Za-z-]{4,32}$")
 
 internal fun checkOk(response: Response, request: Request) {
     if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)

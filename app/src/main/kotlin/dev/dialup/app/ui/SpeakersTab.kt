@@ -51,6 +51,7 @@ fun SpeakersTab(model: AppModel, modifier: Modifier = Modifier, onRenamed: () ->
                 onAction = { ui.presenter.press(speaker.udn, it) },
                 onHide = { if (hideEndsCast(speaker)) ui.confirmingHide = speaker.udn else model.hide(speaker) },
                 onRename = { ui.renaming = speaker.udn },
+                onPair = if (speaker.online) ({ ui.pairing = speaker.udn }) else null,
                 onDelete = { model.deleteManual(speaker.udn) },
                 pinned = speaker.udn in ui.pinned,
                 onTogglePin = { model.setPinned(speaker, speaker.udn !in ui.pinned) },
