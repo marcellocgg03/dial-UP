@@ -172,6 +172,27 @@ class ResolverTest {
     }
 
     @Test
+    fun urlDiagnosticsNamesTheClientItagPotAndIpFamilyOnly() {
+        val d = urlDiagnostics("https://rr1---sn-test.googlevideo.com/videoplayback?c=TVHTML5&itag=140&ip=203.0.113.9&pot=SECRETTOKEN&sig=SECRETSIG", "140-0")
+        assertEquals("TVHTML5", d["client"])
+        assertEquals("140", d["itag"])
+        assertEquals("140-0", d["formatId"])
+        assertEquals(true, d["hasPot"])
+        assertEquals("v4", d["ipFamily"])
+        assertFalse(d.toString().contains("SECRET"), d.toString())
+        assertFalse(d.toString().contains("203.0.113.9"), d.toString())
+    }
+
+    @Test
+    fun urlDiagnosticsReadsAnIpv6UrlAndAMissingPot() {
+        val d = urlDiagnostics("https://h.example/v?ip=2600%3A1700%3A1%3A%3A5&itag=251", null)
+        assertEquals("v6", d["ipFamily"])
+        assertEquals(false, d["hasPot"])
+        assertNull(d["client"])
+        assertNull(urlDiagnostics("https://h.example/v?itag=251", null)["ipFamily"])
+    }
+
+    @Test
     fun resolveOnceNeverCallsTheGatewayForAnInvalidId() {
         val gw = FakeGateway(GatewayResult(0, "{}", "", 1))
         val (record, info) = Resolver(gw).resolveOnce("../../etc/x", "default", 3, null, false)

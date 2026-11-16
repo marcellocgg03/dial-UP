@@ -303,5 +303,6 @@ class CachingResolverTest {
         assertEquals(host, events[0]["urlHost"])
         assertEquals(now / 1000 + 600, events[0]["expire"])
         assertNotEquals(null, events[0]["ms"])
+        assertEquals(false, events[0]["hasPot"])
     }
 }
