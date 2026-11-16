@@ -29,9 +29,60 @@ class ConfigOverlayTest {
 
     @Test
     fun aGaplessOverrideSavedByTheAppIsInTheEffectiveConfig() {
+        assertFalse(loadAppConfig(dir).config.gapless)
+        Settings(File(dir, SETTINGS_FILE)).update { it.copy(gapless = true) }
         assertTrue(loadAppConfig(dir).config.gapless)
         Settings(File(dir, SETTINGS_FILE)).update { it.copy(gapless = false) }
         assertFalse(loadAppConfig(dir).config.gapless)
+    }
+
+    @Test
+    fun aFreshInstallHasGaplessOffAndPrefetchOn() {
+        val c = loadAppConfig(dir).config
+        assertFalse(c.gapless)
+        assertTrue(c.prefetch)
+    }
+
+    @Test
+    fun anInstallThatRanBeforeKeepsGaplessOnUntilStampedAndAfter() {
+        writeSettings("""{"theme":"dark"}""")
+        assertTrue(loadAppConfig(dir).config.gapless)
+        val s = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(s, earlierInstall(dir), dir)
+        assertEquals(true, s.data.value.gapless)
+        assertEquals(DEFAULTS_VERSION, s.data.value.defaultsVersion)
+        assertTrue(loadAppConfig(dir).config.gapless)
+        // A user who then turns it off keeps off: the stamp is not repeated.
+        s.update { it.copy(gapless = false) }
+        stampDefaults(s, earlierInstall(dir), dir)
+        assertFalse(loadAppConfig(dir).config.gapless)
+    }
+
+    @Test
+    fun aFreshInstallStampedOnceStaysOffEvenAfterItsFilesExist() {
+        val earlier = earlierInstall(dir)
+        assertFalse(earlier)
+        val s = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(s, earlier, dir)
+        assertEquals(null, s.data.value.gapless)
+        File(dir, "cast").mkdirs()
+        assertFalse(loadAppConfig(dir).config.gapless)
+    }
+
+    @Test
+    fun anEarlierInstallWithGaplessInConfigJsonIsLeftToConfigJson() {
+        writeConfig("""{"gapless": false}""")
+        File(dir, "cast").mkdirs()
+        val s = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(s, earlierInstall(dir), dir)
+        assertEquals(null, s.data.value.gapless)
+        assertFalse(loadAppConfig(dir).config.gapless)
+    }
+
+    @Test
+    fun aPrefetchOverrideSavedByTheAppIsInTheEffectiveConfig() {
+        Settings(File(dir, SETTINGS_FILE)).update { it.copy(prefetch = false) }
+        assertFalse(loadAppConfig(dir).config.prefetch)
     }
 
     @Test

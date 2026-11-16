@@ -76,7 +76,13 @@ data class AppSettingsData(
     val ytdlpAutoUpdate: Boolean = true,
     /** App-only: which DialUP releases the update check follows (stable, or also the nightly builds). */
     val updateChannel: UpdateChannel = UpdateChannel.STABLE,
+    /**
+     * Which generation of built-in defaults this install was created under. 0 is a file written before the field existed; the app
+     * stamps [DEFAULTS_VERSION] once, so a default that changes later can be kept for installs made before the change.
+     */
+    val defaultsVersion: Int = 0,
     val logEnabled: Boolean? = null,
+    val prefetch: Boolean? = null,
     val gapless: Boolean? = null,
     val cacheMb: Int? = null,
     val outputFormat: String? = null,
@@ -110,13 +116,15 @@ private const val KEY_YTDLP_AUTO = "ytdlpAutoUpdate"
 private const val KEY_UPDATE_CHANNEL = "updateChannel"
 private const val KEY_LOG_ENABLED = "logEnabled"
 private const val KEY_GAPLESS = "gapless"
+private const val KEY_PREFETCH = "prefetch"
+private const val KEY_DEFAULTS_VERSION = "defaultsVersion"
 private const val KEY_CACHE_MB = "cacheMb"
 private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
     KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_SHOW_AUDIO_FORMAT, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
-    KEY_GAPLESS, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
+    KEY_PREFETCH, KEY_GAPLESS, KEY_DEFAULTS_VERSION, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
 /** Keys of settings that no longer exist; they are dropped from the file at the next write instead of being kept as extras. */
@@ -128,6 +136,7 @@ private val RETIRED_KEYS = setOf("notifyGuests")
  */
 fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
     if (data.logEnabled != null) add(KEY_LOG_ENABLED)
+    if (data.prefetch != null) add(KEY_PREFETCH)
     if (data.gapless != null) add(KEY_GAPLESS)
     if (data.cacheMb != null) add(KEY_CACHE_MB)
     if (data.outputFormat != null) add(KEY_OUTPUT_FORMAT)
@@ -182,7 +191,11 @@ fun parseSettings(text: String): ParsedSettings {
         val ch = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { UpdateChannel.fromWire(it) }
         if (ch != null) data = data.copy(updateChannel = ch) else problems += KEY_UPDATE_CHANNEL
     }
-    data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), gapless = bool(KEY_GAPLESS))
+    o[KEY_DEFAULTS_VERSION]?.let { e ->
+        val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it >= 0 }
+        if (n != null) data = data.copy(defaultsVersion = n) else problems += KEY_DEFAULTS_VERSION
+    }
+    data = data.copy(logEnabled = bool(KEY_LOG_ENABLED), prefetch = bool(KEY_PREFETCH), gapless = bool(KEY_GAPLESS))
     o[KEY_CACHE_MB]?.let { e ->
         val n = (e as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in CACHE_MB_RANGE }
         if (n != null) data = data.copy(cacheMb = n) else problems += KEY_CACHE_MB
@@ -218,6 +231,8 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     if (!data.ytdlpAutoUpdate) known[KEY_YTDLP_AUTO] = JsonPrimitive(false)
     if (data.updateChannel != UpdateChannel.STABLE) known[KEY_UPDATE_CHANNEL] = JsonPrimitive(data.updateChannel.wire)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
+    if (data.defaultsVersion > 0) known[KEY_DEFAULTS_VERSION] = JsonPrimitive(data.defaultsVersion)
+    data.prefetch?.let { known[KEY_PREFETCH] = JsonPrimitive(it) }
     data.gapless?.let { known[KEY_GAPLESS] = JsonPrimitive(it) }
     data.cacheMb?.let { known[KEY_CACHE_MB] = JsonPrimitive(it) }
     data.outputFormat?.let { known[KEY_OUTPUT_FORMAT] = JsonPrimitive(it) }
@@ -336,10 +351,45 @@ object AppSettings {
         instance?.let { return it }
         synchronized(this) {
             instance?.let { return it }
-            val file = File(context.applicationContext.filesDir, SETTINGS_FILE)
+            val filesDir = context.applicationContext.filesDir
+            val file = File(filesDir, SETTINGS_FILE)
+            // Read before the Settings object or anything else can create a file: this is what tells an update from a fresh install.
+            val earlierInstall = earlierInstall(filesDir)
             val created = Settings(file, onError = { where, t -> Failures.report(where, t) })
+            stampDefaults(created, earlierInstall, filesDir)
             instance = created
             return created
         }
     }
 }
+
+/** The generation of built-in defaults this build stamps on a settings file. 2: gapless is off for new installs. */
+const val DEFAULTS_VERSION = 2
+
+/**
+ * Whether [filesDir] already holds data this app wrote (settings.json or the bridge's data directory), so the app was run
+ * before. config.json does not count: only the author writes it, and a run that reads it also creates the data directory. Must
+ * be asked before the first file of this run is written.
+ */
+fun earlierInstall(filesDir: File): Boolean =
+    File(filesDir, SETTINGS_FILE).exists() || File(filesDir, "cast").exists()
+
+/**
+ * Stamps [DEFAULTS_VERSION] on settings that do not have it yet. An earlier install keeps what it has been running with:
+ * gapless was on by default, so it is saved as on, unless config.json names the key (it then decides, as before).
+ */
+internal fun stampDefaults(settings: Settings, earlierInstall: Boolean, filesDir: File) {
+    if (settings.data.value.defaultsVersion >= DEFAULTS_VERSION) return
+    val keepGapless = earlierInstall && !configNamesKey(filesDir, "gapless")
+    settings.update { it.copy(defaultsVersion = DEFAULTS_VERSION, gapless = it.gapless ?: if (keepGapless) true else null) }
+}
+
+/** Does config.json mention [key]? A plain text test: it only decides who owns a default, so a bad file simply says no. */
+internal fun configNamesKey(filesDir: File, key: String): Boolean =
+    try {
+        File(filesDir, CONFIG_FILE).let { it.isFile && it.readText().contains("\"$key\"") }
+    } catch (_: IOException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    }

@@ -478,7 +478,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         )
         b.startSuspending()
         bridge = b
-        startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat)
+        startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat, loaded.config.prefetch)
         countJob = h.scope.launch {
             combine(b.visibleCastCount, b.castCount) { visible, active -> visible to active }.collect { (visible, active) ->
                 count.value = CastCount(visible.casting, visible.total)

@@ -39,6 +39,7 @@ interface SettingsPort {
 /** The settings whose value can come from config.json or the built-in default as well as from the app. */
 data class EffectiveSettings(
     val logEnabled: Boolean,
+    val prefetch: Boolean,
     val gapless: Boolean,
     val cacheMb: Int,
     val outputFormat: String,
@@ -103,6 +104,7 @@ enum class SettingKey(val needsRestart: Boolean) {
     NAME_PREFIX(true),
     RENAME(true),
     LOG(false),
+    PREFETCH(true),
     GAPLESS(true),
     CACHE(false),
     FORMAT(true),
@@ -163,7 +165,8 @@ data class SettingsUi(
     /** The app's look, applied at once. */
     val theme: ThemeMode = DEFAULT_THEME,
     val logEnabled: Boolean = true,
-    val gapless: Boolean = true,
+    val prefetch: Boolean = true,
+    val gapless: Boolean = false,
     /** The effective cache size in MiB; one of [CACHE_STEPS], or a custom value when [cacheCustom]. */
     val cacheMb: Int = 256,
     val cacheCustom: Boolean = false,
@@ -227,6 +230,7 @@ class SettingsPresenter(
                 ui.update {
                     it.copy(
                         logEnabled = e.logEnabled,
+                        prefetch = e.prefetch,
                         gapless = e.gapless,
                         cacheMb = e.cacheMb,
                         cacheCustom = e.cacheMb !in CACHE_STEPS,
@@ -437,6 +441,12 @@ class SettingsPresenter(
     fun setLogEnabled(on: Boolean): Boolean {
         settings.update { it.copy(logEnabled = on) }
         return changed(SettingKey.LOG)
+    }
+
+    /** Preparing the next track while one plays; the bridge reads it at start, so the restart card shows. Returns whether a restart is needed. */
+    fun setPrefetch(on: Boolean): Boolean {
+        settings.update { it.copy(prefetch = on) }
+        return changed(SettingKey.PREFETCH)
     }
 
     /** Gapless track changes; the bridge reads it at start, so the restart card shows. Returns whether a restart is needed. */
