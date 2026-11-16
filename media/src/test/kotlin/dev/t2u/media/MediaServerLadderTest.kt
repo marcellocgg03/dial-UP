@@ -199,6 +199,37 @@ class MediaServerLadderTest {
     }
 
     @Test
+    @DisplayName("a refused URL tells the entry it is recovering until the first byte is on its way")
+    fun aRefusedUrlReportsRecoveringUntilTheFirstByte() {
+        val events = CopyOnWriteArrayList<Boolean>()
+        val resolver = TestResolver({ n -> "$base/${if (n == 0) "forbidden" else "s"}.m4a" })
+        val ms = serve(resolver)
+        val path = ms.registerVideo(VideoEntry("rrrrrrrrrrr", "mp3", onRecovering = { events += it }))
+        assertEquals(200, RawHttp.request(ms.resolvedPort(), "GET", path).status, "reported: $seen")
+        assertEquals(listOf(true, false), events.toList())
+    }
+
+    @Test
+    @DisplayName("a stream that works first time never reports recovering")
+    fun aHealthyStreamNeverReportsRecovering() {
+        val events = CopyOnWriteArrayList<Boolean>()
+        val ms = serve(TestResolver(okUrls()))
+        val path = ms.registerVideo(VideoEntry("sssssssssss", "mp3", onRecovering = { events += it }))
+        assertEquals(200, RawHttp.request(ms.resolvedPort(), "GET", path).status)
+        assertTrue(events.isEmpty(), "events: $events")
+    }
+
+    @Test
+    @DisplayName("a ladder that fails every attempt reports recovering and then stops")
+    fun aFailedLadderStopsReportingRecovering() {
+        val events = CopyOnWriteArrayList<Boolean>()
+        val ms = serve(TestResolver(forbiddenUrls()))
+        val path = ms.registerVideo(VideoEntry("ttttttttttt", "mp3", onRecovering = { events += it }))
+        assertEquals(502, get(ms, path).status)
+        assertEquals(listOf(true, false), events.toList())
+    }
+
+    @Test
     @DisplayName("mp3 transcode")
     fun mp3Transcode() {
         val ms = serve(TestResolver(okUrls()))

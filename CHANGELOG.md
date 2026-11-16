@@ -11,6 +11,10 @@
 - **Gapless track changes are off for new installs.** An install that has already run keeps its current setting. With it off the next track is still prepared ahead and starts about a second after the speaker reports the end.
 - The "Notify when another device casts" switch is gone from Settings. The notice itself stays; to silence it, turn off the "Other devices" notification channel in Android's app notification settings. A phone that had the switch off will get the notice again until you do.
 
+### Fixed
+
+- **A slow recovery no longer reads as a speaker that cannot play the format.** When YouTube refused a stream's first URL and the app had to extract a fresh one (which takes about 15 s on a cold start), the speaker's wait timed out and the app stepped down from adts to mp3. The start wait now holds while the media server is recovering and restarts when the first audio arrives.
+
 ## 1.1.1
 
 ### Added
