@@ -32,6 +32,9 @@ internal class Current(
      */
     @Volatile var recovering: Boolean = false
 
+    /** Every attempt to produce this stream was refused by YouTube (403/410): another format reads the same source and fails too. */
+    @Volatile var upstreamRefused: Boolean = false
+
     @Volatile var streamPath: String? = null
 
     /** False for a stream loaded while paused (SetAVTransportURI only) until the first Play is sent for it. */

@@ -892,6 +892,7 @@ class Renderer(
             },
             onFailure = { cur.streamFailed = true },
             onBusy = { cur.busy = true },
+            onUpstreamRefused = { cur.upstreamRefused = true },
             onRecovering = { on ->
                 cur.recovering = on
                 // The wait for the first PLAYING counts again from the moment the server has bytes (or has given up).
@@ -2138,8 +2139,10 @@ class Renderer(
         // Our own busy answer says nothing about the format: once per start, the same format is tried again (the wait for
         // this start was longer than the Retry-After) instead of stepping down a format and forgetting a good one.
         val sameFormatAgain = c.busy && !busyRetried.getAndSet(true)
-        val next = if (sameFormatAgain) c.format else formats.nextAfter(c.format, c.sourceMime)
-        if (!sameFormatAgain) formats.forgetUnproven(c)
+        // YouTube refused every way of reading the source: the next format would read the same source and wait out a second ladder.
+        val refused = c.upstreamRefused && !sameFormatAgain
+        val next = if (sameFormatAgain) c.format else if (refused) null else formats.nextAfter(c.format, c.sourceMime)
+        if (!sameFormatAgain && !refused) formats.forgetUnproven(c)
         if (next != null) {
             note("warn", if (sameFormatAgain) "Media server was busy for ${c.format} - trying it again" else "Renderer did not start ${c.format} - trying $next")
             pollLoop.stop()
@@ -2156,16 +2159,17 @@ class Renderer(
             return
         }
         val why = if (c.fetched) "fetched the stream but never started playing" else "never requested the stream"
-        lastError = "Renderer $why"
+        lastError = if (refused) "YouTube refused the stream" else "Renderer $why"
         note(
             "error",
-            lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
+            if (refused) "YouTube refused the stream (every attempt got a 403) - ending the cast, no other format can read it."
+            else lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
         )
         pollLoop.stop()
         // Nothing is left to try: the cast ends visibly. A Stop, a newer play or removal in between wins.
         val seq = loadSeq.get()
         scope.launch {
-            if (!superseded(seq)) reportPlaybackFailure("the speaker never started playing")
+            if (!superseded(seq)) reportPlaybackFailure(if (refused) "YouTube refused the stream" else "the speaker never started playing")
         }
     }
 
