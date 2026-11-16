@@ -258,12 +258,7 @@ private fun YtDlpSection(ui: SettingsUi, autoUpdate: Boolean, presenter: Setting
         supportingContent = {
             Column {
                 Text("Version ${ui.ytdlpVersion}", modifier = Modifier.testTag("ytdlp-version"))
-                if (BuildConfigFacts.fdroid) {
-                    // F-Droid's rule: downloaded code needs the user's consent, off until they turn it on, and the text says what it does
-                    Text("Off until you turn it on. When on, a newer yt-dlp is downloaded from GitHub once a day, never during a cast. This bypasses F-Droid's checks. If casting fails, press Update now.")
-                } else {
-                    Text("Updates once a day, never during a cast")
-                }
+                Text("Updates once a day, never during a cast")
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
