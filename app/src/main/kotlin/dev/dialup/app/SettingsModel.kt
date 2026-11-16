@@ -38,6 +38,7 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             val c = applySettings(loadAppConfig(app.filesDir).config, settings.data.value)
             EffectiveSettings(
                 logEnabled = c.logLevel != "off",
+                prefetch = c.prefetch,
                 gapless = c.gapless,
                 cacheMb = c.cacheMb,
                 outputFormat = c.outputFormat,
