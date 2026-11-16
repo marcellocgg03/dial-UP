@@ -970,6 +970,11 @@ class Renderer(
         stopGracePolls.set(0)
         expectStop = false
         loadedThisSession = true
+        // A track just sent to the speaker is shown to the sender as loading until the speaker plays, so the bar does not run ahead
+        // of a silent speaker (a slow recovery of the stream can take half a minute); a Seek's own hold, if any, stays.
+        if (!alreadyPlaying && item.current.playSent && pending == null) {
+            pending = PendingSeek(seekSeq.incrementAndGet(), item.current.wantedAt, deps.clock(), awaitPlay = true, start = true)
+        }
         pollLoop.start()
     }
 
@@ -1457,8 +1462,12 @@ class Renderer(
      */
     private fun seekSettled(p: PendingSeek, state: String?, raw: Double?, now: Long): Boolean {
         if (state != null && state !in SEEK_SETTLED_STATES) p.sawTransitioning = true
-        if (now - p.startedMs > SEEK_SETTLE_DEADLINE_MS) return true
+        // A start is held until the speaker plays or the start is given up on (the hard cap), not for a Seek's 15 s.
+        val deadline = if (p.start) config.startTimeoutMs * START_HARD_CAP_FACTOR else SEEK_SETTLE_DEADLINE_MS
+        if (now - p.startedMs > deadline) return true
         // The hold of a Play after a paused Seek: PAUSED_PLAYBACK at the target is still the old state, only PLAYING ends it.
+        // A start hold ends only when the speaker plays, or is paused from its own app: STOPPED is how a speaker looks before it starts.
+        if (p.start) return state == "PLAYING" || state == "PAUSED_PLAYBACK"
         if (p.awaitPlay) return state == "PLAYING" || state == "STOPPED" || state == "NO_MEDIA_PRESENT"
         if (state == null || state !in SEEK_SETTLED_STATES) return false
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
@@ -1494,6 +1503,7 @@ class Renderer(
         val wasBuffering = status == PlayerStatus.PLAYING
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
+        if (p.start && state == "PAUSED_PLAYBACK") return // paused from the speaker's own app: the external-pause mirror tells the sender
         if (state !in SEEK_SETTLED_STATES)
             note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
         val raw = polledRaw ?: speakerPosition() ?: return
@@ -1967,7 +1977,7 @@ class Renderer(
         if (now - c.startedAt > config.startTimeoutMs * START_HARD_CAP_FACTOR) return true
         if (c.recovering) return false
         if (now - c.loadedAt <= config.startTimeoutMs) return false
-        val seeking = pending?.let { now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
+        val seeking = pending?.let { !it.start && now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
         return !seeking
     }
 

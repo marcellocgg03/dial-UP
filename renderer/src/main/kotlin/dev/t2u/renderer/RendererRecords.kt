@@ -115,7 +115,14 @@ internal fun isGaplessRefusal(e: UpnpError): Boolean =
  * [awaitPlay] marks the hold of a Play that followed a paused Seek: the speaker is believed only once it is
  * PLAYING (or stopped), because it still reports PAUSED_PLAYBACK at the target for a moment after the Play.
  */
-internal class PendingSeek(val id: Int, val target: Double, val startedMs: Long, val awaitPlay: Boolean = false) {
+internal class PendingSeek(
+    val id: Int,
+    val target: Double,
+    val startedMs: Long,
+    val awaitPlay: Boolean = false,
+    /** The hold of a track that was just sent to the speaker (not of a Seek): it lasts until the speaker plays or the start is given up on. */
+    val start: Boolean = false,
+) {
     @Volatile var shown: Double = target
 
     @Volatile var shownAt: Long = startedMs
