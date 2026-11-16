@@ -9,6 +9,7 @@ package dev.t2u.renderer
 
 import dev.t2u.lounge.AutoplayMode
 import dev.t2u.lounge.CastReceiver
+import dev.t2u.lounge.PairingCode
 import dev.t2u.lounge.Player
 import dev.t2u.lounge.PlayerStatus
 import dev.t2u.lounge.ReceiverOptions
@@ -399,6 +400,23 @@ class Renderer(
             throw e
         } catch (e: Exception) {
             note("warn", "Cast receiver could not take the new name (${e.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * Manual pairing: the TV codes of the running cast receiver; empty without a receiver, after [destroy] or when the lounge
+     * does not answer. The codes are never logged.
+     */
+    suspend fun pairingCodes(): List<PairingCode> {
+        val rec = receiver ?: return emptyList()
+        if (destroyed) return emptyList()
+        return try {
+            rec.pairingCodes()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note("warn", "Pairing codes failed (${e.javaClass.simpleName})")
+            emptyList()
         }
     }
 
