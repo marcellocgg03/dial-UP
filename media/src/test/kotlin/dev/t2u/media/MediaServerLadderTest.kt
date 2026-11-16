@@ -19,6 +19,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -227,6 +228,53 @@ class MediaServerLadderTest {
         val path = ms.registerVideo(VideoEntry("ttttttttttt", "mp3", onRecovering = { events += it }))
         assertEquals(502, get(ms, path).status)
         assertEquals(listOf(true, false), events.toList())
+    }
+
+    @Test
+    @DisplayName("a ladder where every attempt got a 403 tells the entry the stream was refused, before it reports the failure")
+    fun aLadderRefusedEverywhereReportsUpstreamRefused() {
+        val order = CopyOnWriteArrayList<String>()
+        val ms = serve(TestResolver(forbiddenUrls()))
+        val path = ms.registerVideo(
+            VideoEntry("uuuuuuuuuuu", "mp3", onUpstreamRefused = { order += "refused" }, onFailure = { order += "failure" }),
+        )
+        assertEquals(502, get(ms, path).status)
+        assertEquals(listOf("refused", "failure"), order.toList())
+    }
+
+    @Test
+    @DisplayName("a ladder that failed for another reason than a 403 is an ordinary failure")
+    fun aLadderThatFailedForAnotherReasonIsNotRefused() {
+        val order = CopyOnWriteArrayList<String>()
+        val ms = serve(TestResolver({ "http://127.0.0.1:1/unreachable.m4a" }))
+        val path = ms.registerVideo(
+            VideoEntry("vvvvvvvvvvv", "mp3", onUpstreamRefused = { order += "refused" }, onFailure = { order += "failure" }),
+        )
+        assertEquals(502, get(ms, path).status)
+        assertEquals(listOf("failure"), order.toList())
+    }
+
+    @Test
+    @DisplayName("a ladder that recovered is neither refused nor failed")
+    fun aRecoveredLadderReportsNeitherRefusedNorFailure() {
+        val order = CopyOnWriteArrayList<String>()
+        val ms = serve(TestResolver({ n -> "$base/${if (n == 0) "forbidden" else "s"}.m4a" }))
+        val path = ms.registerVideo(
+            VideoEntry("wwwwwwwwwww", "mp3", onUpstreamRefused = { order += "refused" }, onFailure = { order += "failure" }),
+        )
+        assertEquals(200, get(ms, path).status)
+        assertTrue(order.isEmpty(), "events: $order")
+    }
+
+    @Test
+    @DisplayName("upstream refusal is read from ffmpeg and yt-dlp error text only")
+    fun upstreamRefusalIsRecognisedInBothToolsErrorText() {
+        assertTrue(isUpstreamRefusal("Error opening input: Server returned 403 Forbidden (access denied)"))
+        assertTrue(isUpstreamRefusal("yt-dlp download failed for x: ERROR: unable to download video data: HTTP Error 403: Forbidden"))
+        assertTrue(isUpstreamRefusal("Server returned 410 Gone"))
+        assertFalse(isUpstreamRefusal("Server returned 404 Not Found"))
+        assertFalse(isUpstreamRefusal("Connection refused"))
+        assertFalse(isUpstreamRefusal("ffmpeg exit 255"))
     }
 
     @Test

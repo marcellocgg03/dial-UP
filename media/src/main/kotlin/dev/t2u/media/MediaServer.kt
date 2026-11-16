@@ -437,7 +437,16 @@ class MediaServer(
                 val src = entry.source
                 val video = (src as? StreamSource.VideoPipe)?.entry ?: (src as? StreamSource.DirectProxy)?.entry
                 // our own busy answer is not a failure of the format: the renderer must not step down a format for it
-                video?.let { v -> runCatching { if (out.busy) v.onBusy?.invoke() else v.onFailure?.invoke() } }
+                video?.let { v ->
+                    runCatching {
+                        if (out.busy) {
+                            v.onBusy?.invoke()
+                        } else {
+                            if (out.upstreamRefused) v.onUpstreamRefused?.invoke()
+                            v.onFailure?.invoke()
+                        }
+                    }
+                }
             }
         } finally {
             report(call, out)
@@ -751,6 +760,8 @@ class MediaServer(
         }
         out.status = 502
         out.note = failures.joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
+        // Every way of reading the stream was refused by YouTube: another output format would read the same refused source.
+        out.upstreamRefused = failures.isNotEmpty() && failures.all(::isUpstreamRefusal)
         call.respond(HttpStatusCode.BadGateway)
     }
 

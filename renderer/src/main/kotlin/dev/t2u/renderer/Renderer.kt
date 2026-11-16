@@ -892,6 +892,7 @@ class Renderer(
             },
             onFailure = { cur.streamFailed = true },
             onBusy = { cur.busy = true },
+            onUpstreamRefused = { cur.upstreamRefused = true },
             onRecovering = { on ->
                 cur.recovering = on
                 // The wait for the first PLAYING counts again from the moment the server has bytes (or has given up).
@@ -969,6 +970,11 @@ class Renderer(
         stopGracePolls.set(0)
         expectStop = false
         loadedThisSession = true
+        // A track just sent to the speaker is shown to the sender as loading until the speaker plays, so the bar does not run ahead
+        // of a silent speaker (a slow recovery of the stream can take half a minute); a Seek's own hold, if any, stays.
+        if (!alreadyPlaying && item.current.playSent && pending == null) {
+            pending = PendingSeek(seekSeq.incrementAndGet(), item.current.wantedAt, deps.clock(), awaitPlay = true, start = true)
+        }
         pollLoop.start()
     }
 
@@ -1456,8 +1462,12 @@ class Renderer(
      */
     private fun seekSettled(p: PendingSeek, state: String?, raw: Double?, now: Long): Boolean {
         if (state != null && state !in SEEK_SETTLED_STATES) p.sawTransitioning = true
-        if (now - p.startedMs > SEEK_SETTLE_DEADLINE_MS) return true
+        // A start is held until the speaker plays or the start is given up on (the hard cap), not for a Seek's 15 s.
+        val deadline = if (p.start) config.startTimeoutMs * START_HARD_CAP_FACTOR else SEEK_SETTLE_DEADLINE_MS
+        if (now - p.startedMs > deadline) return true
         // The hold of a Play after a paused Seek: PAUSED_PLAYBACK at the target is still the old state, only PLAYING ends it.
+        // A start hold ends only when the speaker plays, or is paused from its own app: STOPPED is how a speaker looks before it starts.
+        if (p.start) return state == "PLAYING" || state == "PAUSED_PLAYBACK"
         if (p.awaitPlay) return state == "PLAYING" || state == "STOPPED" || state == "NO_MEDIA_PRESENT"
         if (state == null || state !in SEEK_SETTLED_STATES) return false
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
@@ -1493,6 +1503,7 @@ class Renderer(
         val wasBuffering = status == PlayerStatus.PLAYING
         pending = null
         if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return // the stop branch of the poll decides what that means
+        if (p.start && state == "PAUSED_PLAYBACK") return // paused from the speaker's own app: the external-pause mirror tells the sender
         if (state !in SEEK_SETTLED_STATES)
             note("warn", "Speaker did not settle ${SEEK_SETTLE_DEADLINE_MS / 1000} s after the Seek - using its own position")
         val raw = polledRaw ?: speakerPosition() ?: return
@@ -1966,7 +1977,7 @@ class Renderer(
         if (now - c.startedAt > config.startTimeoutMs * START_HARD_CAP_FACTOR) return true
         if (c.recovering) return false
         if (now - c.loadedAt <= config.startTimeoutMs) return false
-        val seeking = pending?.let { now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
+        val seeking = pending?.let { !it.start && now - it.startedMs <= SEEK_SETTLE_DEADLINE_MS } == true
         return !seeking
     }
 
@@ -2138,8 +2149,10 @@ class Renderer(
         // Our own busy answer says nothing about the format: once per start, the same format is tried again (the wait for
         // this start was longer than the Retry-After) instead of stepping down a format and forgetting a good one.
         val sameFormatAgain = c.busy && !busyRetried.getAndSet(true)
-        val next = if (sameFormatAgain) c.format else formats.nextAfter(c.format, c.sourceMime)
-        if (!sameFormatAgain) formats.forgetUnproven(c)
+        // YouTube refused every way of reading the source: the next format would read the same source and wait out a second ladder.
+        val refused = c.upstreamRefused && !sameFormatAgain
+        val next = if (sameFormatAgain) c.format else if (refused) null else formats.nextAfter(c.format, c.sourceMime)
+        if (!sameFormatAgain && !refused) formats.forgetUnproven(c)
         if (next != null) {
             note("warn", if (sameFormatAgain) "Media server was busy for ${c.format} - trying it again" else "Renderer did not start ${c.format} - trying $next")
             pollLoop.stop()
@@ -2156,16 +2169,17 @@ class Renderer(
             return
         }
         val why = if (c.fetched) "fetched the stream but never started playing" else "never requested the stream"
-        lastError = "Renderer $why"
+        lastError = if (refused) "YouTube refused the stream" else "Renderer $why"
         note(
             "error",
-            lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
+            if (refused) "YouTube refused the stream (every attempt got a 403) - ending the cast, no other format can read it."
+            else lastError + if (c.fetched) "." else ". Check that it can reach http://$ip:${config.mediaPort} (firewall, advertise address).",
         )
         pollLoop.stop()
         // Nothing is left to try: the cast ends visibly. A Stop, a newer play or removal in between wins.
         val seq = loadSeq.get()
         scope.launch {
-            if (!superseded(seq)) reportPlaybackFailure("the speaker never started playing")
+            if (!superseded(seq)) reportPlaybackFailure(if (refused) "YouTube refused the stream" else "the speaker never started playing")
         }
     }
 
