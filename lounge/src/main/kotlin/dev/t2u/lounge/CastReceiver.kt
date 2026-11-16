@@ -39,6 +39,12 @@ interface CastReceiver {
      * (YouTube and YouTube Music). Empty when the receiver is not running or the lounge cannot be reached. The default has none.
      */
     suspend fun pairingCodes(): List<PairingCode> = emptyList()
+
+    /**
+     * Ends the cast from the speaker's side (the phone is told the screen is gone, the player is reset and, with the clear setting
+     * on, the speaker emptied). Does nothing when no sender is connected. The default does nothing.
+     */
+    suspend fun endCast(reason: String) {}
 }
 
 /** A TV code for one lounge screen; [app] is the name of the YouTube app it pairs. */
