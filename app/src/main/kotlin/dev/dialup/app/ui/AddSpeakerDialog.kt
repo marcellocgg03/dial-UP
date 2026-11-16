@@ -72,7 +72,7 @@ fun AddSpeakerDialog(model: AppModel, onDismiss: () -> Unit) {
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     supportingText = {
-                        Text("Enter the renderer's IP address on this LAN. If it is ever re-assigned, the renderer may need to be re-added.")
+                        Text("Enter the renderer's IP address on this LAN. If it is ever re-assigned, the renderer may need to be re-added. $ADD_BY_ADDRESS_PAIR_HINT")
                     },
                     modifier = Modifier.fillMaxWidth().testTag("field-ip"),
                 )

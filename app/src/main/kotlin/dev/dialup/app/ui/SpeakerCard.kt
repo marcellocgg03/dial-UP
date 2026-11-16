@@ -145,7 +145,7 @@ fun SpeakerCard(
                     // pairing needs a running receiver, so only a live card gets the item
                     if (onPair != null) {
                         DropdownMenuItem(
-                            text = { Text("Pair with TV code") },
+                            text = { Text(PAIR_MENU_LABEL) },
                             onClick = {
                                 menuOpen = false
                                 onPair()
