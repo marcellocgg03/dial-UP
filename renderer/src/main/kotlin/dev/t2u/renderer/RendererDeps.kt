@@ -34,6 +34,11 @@ data class RendererDeps(
      */
     val clearOnCastEnd: () -> Boolean = { config.clearOnCastEnd },
     /**
+     * How long a cast may stay paused before it is ended, in milliseconds; 0 or less means never. Read each time a pause
+     * starts, so a change applies from the next pause. A pause that ends in [pause] time is counted from its start.
+     */
+    val idleDisconnectMs: () -> Long = { 0L },
+    /**
      * Rename: the author's name for the speaker with this UDN, read once at init; null keeps the described name.
      * Matching (hide, manual, ports, the name filter) never uses it.
      */

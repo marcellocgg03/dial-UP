@@ -87,6 +87,8 @@ data class BridgeDeps(
      * means the fixed [Config.clearOnCastEnd] decides; the app passes a supplier over its settings.
      */
     val clearOnCastEnd: (() -> Boolean)? = null,
+    /** How long a paused cast may idle before it is ended, in milliseconds (0 = never), read at each pause. Null means never. */
+    val idleDisconnectMs: (() -> Long)? = null,
     /**
      * The prefix of the names shown in the cast menu, read when a renderer is set up and when [Bridge.refreshNames] runs.
      * Null means the fixed [Config.nameTemplate] decides; the app passes a supplier over its settings.
