@@ -189,6 +189,7 @@ class SettingsTest {
             bridgeEnabled = false,
             dialAccess = DialAccessMode.LAN,
             clearOnCastEnd = true,
+            idleDisconnectMin = 120,
             showAudioFormat = true,
             theme = ThemeMode.DARK,
             updateCheckEnabled = false,
@@ -226,6 +227,8 @@ class SettingsTest {
             """{"bridgeEnabled":"no","gapless":false}""",
             """{"showAudioFormat":"yes","gapless":false}""",
             """{"cacheMb":12.5,"gapless":false}""",
+            """{"idleDisconnectMin":45,"gapless":false}""",
+            """{"idleDisconnectMin":"30","gapless":false}""",
         )
         for (content in cases) {
             errors.clear()
@@ -237,8 +240,25 @@ class SettingsTest {
             assertEquals(null, d.ytdlpChannel, content)
             assertEquals(null, d.logEnabled, content)
             assertTrue(d.bridgeEnabled, content)
+            assertEquals(0, d.idleDisconnectMin, content)
             assertEquals(listOf("settings:read"), errors, content)
         }
+    }
+
+    @Test
+    fun theIdleDisconnectIsOffByDefaultAndWrittenOnlyWhenSet() {
+        assertEquals(0, AppSettingsData().idleDisconnectMin)
+        assertEquals(listOf(0, 30, 60, 120), IDLE_DISCONNECT_MINUTES)
+        val f = File(dir, SETTINGS_FILE)
+        val s = settings(f)
+        s.update { it.copy(clearOnCastEnd = true) }
+        assertFalse("idleDisconnectMin" in f.readText(), f.readText())
+        s.update { it.copy(idleDisconnectMin = 60) }
+        assertTrue(f.readText().contains("""idleDisconnectMin":60"""), f.readText())
+        assertEquals(60, settings(f).data.value.idleDisconnectMin)
+        s.update { it.copy(idleDisconnectMin = 0) }
+        assertFalse("idleDisconnectMin" in f.readText(), f.readText())
+        assertTrue(errors.isEmpty())
     }
 
     @Test

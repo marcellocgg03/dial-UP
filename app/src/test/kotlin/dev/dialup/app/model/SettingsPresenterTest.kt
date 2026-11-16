@@ -3,6 +3,7 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.AppSettingsData
+import dev.dialup.app.IDLE_DISCONNECT_MINUTES
 import dev.dialup.app.MAX_NAME_PREFIX_LENGTH
 import dev.dialup.app.ThemeMode
 import dev.t2u.dial.DialAccessMode
@@ -245,6 +246,24 @@ class SettingsPresenterTest {
         assertTrue(settings.data.value.clearOnCastEnd)
         assertTrue(p.state.value.clearOnCastEnd)
         assertNull(p.state.value.message)
+    }
+
+    @Test
+    fun `the idle disconnect takes only the offered times and needs no restart`() = runTest {
+        val settings = FakeSettingsPort()
+        val p = presenter(settings)
+        assertEquals(0, p.state.value.idleDisconnectMin)
+        for (m in listOf(30, 60, 120, 0)) {
+            assertFalse(p.setIdleDisconnect(m))
+            runCurrent()
+            assertEquals(m, settings.data.value.idleDisconnectMin)
+            assertEquals(m, p.state.value.idleDisconnectMin)
+        }
+        p.setIdleDisconnect(60)
+        runCurrent()
+        assertFalse(p.setIdleDisconnect(45), "a time that is not offered is refused")
+        runCurrent()
+        assertEquals(60, settings.data.value.idleDisconnectMin)
     }
 
     @Test
