@@ -46,6 +46,12 @@ android {
         buildConfig = true
     }
 
+    // F-Droid and IzzyOnDroid want no Google-encrypted dependency blob in the signing block: it cannot be checked against the source
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig {
         buildConfigField("boolean", "FDROID", fdroidBuild.toString())
         applicationId = "dev.dialup"
