@@ -60,8 +60,8 @@ internal fun PairDialog(model: AppModel, udn: String, speaker: String, onDismiss
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "In YouTube or YouTube Music open Settings, then Connected TVs or Link with TV code, and type the code of that app. " +
-                        "It adds $speaker to the cast list.",
+                    "In YouTube or YouTube Music open Settings, then Connected TVs or Link with TV code. Type the code listed under " +
+                        "that app's name: each code works only in its own app. It adds $speaker to the cast list.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 val shown = codes
