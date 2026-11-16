@@ -306,7 +306,8 @@ class Session(
             checkOk(r, request)
             withContext(Dispatchers.IO) { String(r.body.bytes(), Charsets.UTF_8) }
         }.trim()
-        if (code.isEmpty()) throw IOException("get_pairing_code returned an empty body")
+        // a captive portal or an error page can answer 200: a code is short and has no markup or spaces
+        if (!PAIRING_CODE_SHAPE.matches(code)) throw IOException("get_pairing_code returned something that is not a code")
         log.addSecret(code)
         return code
     }
@@ -441,6 +442,8 @@ class Session(
         log.addSecret(screenId)
     }
 }
+
+private val PAIRING_CODE_SHAPE = Regex("^[0-9A-Za-z-]{4,32}$")
 
 internal fun checkOk(response: Response, request: Request) {
     if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)

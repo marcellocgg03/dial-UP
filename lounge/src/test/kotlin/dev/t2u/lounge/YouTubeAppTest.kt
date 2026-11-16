@@ -456,6 +456,8 @@ class YouTubeAppTest {
         val a = startedApp()
         fake.pairingCodeText = ""
         assertEquals(emptyList(), a.pairingCodes())
+        fake.pairingCodeText = "<html>Sign in to the network</html>"
+        assertEquals(emptyList(), a.pairingCodes(), "a 200 page that is not a code is not shown")
         a.stop()
         assertEquals(emptyList(), a.pairingCodes())
     }
