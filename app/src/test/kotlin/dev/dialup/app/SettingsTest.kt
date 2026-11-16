@@ -246,15 +246,23 @@ class SettingsTest {
     }
 
     @Test
-    fun anFdroidBuildHoldsTheAutomaticUpdateSwitchesOffWhateverTheFileSays() {
-        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"updateCheckEnabled":true,"ytdlpAutoUpdate":true,"clearOnCastEnd":true}""") }
+    fun anFdroidBuildHoldsTheAppUpdateCheckOffAndStartsTheYtdlpUpdateOff() {
+        val f = File(dir, SETTINGS_FILE).apply { writeText("""{"updateCheckEnabled":true,"clearOnCastEnd":true}""") }
         val s = Settings(f, fdroid = true) { where, _ -> errors.add(where) }
-        assertFalse(s.data.value.updateCheckEnabled)
-        assertFalse(s.data.value.ytdlpAutoUpdate)
+        assertFalse(s.data.value.updateCheckEnabled, "F-Droid delivers the app's updates")
+        assertFalse(s.data.value.ytdlpAutoUpdate, "off until the user turns it on")
         assertTrue(s.data.value.clearOnCastEnd, "other settings are untouched")
-        s.update { it.copy(updateCheckEnabled = true, ytdlpAutoUpdate = true) }
+        s.update { it.copy(updateCheckEnabled = true) }
         assertFalse(s.data.value.updateCheckEnabled)
-        assertFalse(s.data.value.ytdlpAutoUpdate)
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun anFdroidUserCanTurnTheYtdlpUpdateOnAndItSurvivesARestart() {
+        val f = File(dir, SETTINGS_FILE)
+        Settings(f, fdroid = true) { where, _ -> errors.add(where) }.update { it.copy(ytdlpAutoUpdate = true) }
+        assertTrue(f.readText().contains("""ytdlpAutoUpdate":true"""), f.readText())
+        assertTrue(Settings(f, fdroid = true) { where, _ -> errors.add(where) }.data.value.ytdlpAutoUpdate)
         assertTrue(errors.isEmpty())
     }
 

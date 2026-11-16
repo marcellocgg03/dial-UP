@@ -291,7 +291,7 @@ class YtDlpUpdater(
     } catch (e: CancellationException) {
         throw e
     } catch (_: Throwable) {
-        true
+        false // unreadable setting: no download without the user's consent
     }
 
     /** SKIPPED "off" was announced for the current stretch of the switch being off. */
