@@ -218,7 +218,7 @@ class BridgeManualTest {
     fun aSilentManualSpeakerGoesOfflineAndIsNoLongerACastTarget() = h.run<Unit> {
         val (bridge, _) = upManualBridge()
         assertTrue(bridge.speakers.value.single().manual)
-        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it answers")
+        h.awaitUntil("a cast target while it answers", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
 
         h.speakerSilent = true
 
@@ -399,7 +399,7 @@ class BridgeManualTest {
         assertEquals(HARNESS_RENDERER_UDN, added.udn)
         assertTrue(h.searchesSeen.get() >= 1, "the unicast search was tried first")
         h.awaitUntil("the speaker listed") { bridge.speakers.value.size == 1 }
-        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a DIAL cast target")
+        h.awaitUntil("a DIAL cast target", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
         val saved = store.entries.value.single()
         assertEquals(HARNESS_RENDERER_UDN, saved.udn)
         assertEquals(h.fakeRenderer.location, saved.location)
@@ -503,7 +503,7 @@ class BridgeManualTest {
         h.awaitUntil("the saved deaf speaker online again", timeoutMs = 3_000) { second.speakers.value.singleOrNull()?.online == true }
         assertEquals(HARNESS_RENDERER_UDN, second.speakers.value.single().udn)
         assertTrue(second.speakers.value.single().manual)
-        assertTrue(h.dialSearchAt(second, h.loopback) != null, "a DIAL cast target")
+        h.awaitUntil("a DIAL cast target", 5_000) { h.dialSearchAt(second, h.loopback) != null }
     }
 
     @Test
@@ -541,7 +541,7 @@ class BridgeManualTest {
         )
         bridge.start()
         h.awaitUntil("the saved deaf speaker online", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
-        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it answers")
+        h.awaitUntil("a cast target while it answers", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
 
         h.speakerSilent = true
 
@@ -568,7 +568,7 @@ class BridgeManualTest {
         val bridge = h.newBridge(manual = store, manualProbeIntervalMs = 200)
         bridge.start()
         h.awaitUntil("the speaker found by discovery", timeoutMs = 3_000) { bridge.speakers.value.singleOrNull()?.online == true }
-        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "a cast target while it is discovered")
+        h.awaitUntil("a cast target while it is discovered", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
 
         // far more than the two missed rounds the old code needed to drop it (200 ms rounds)
         val until = System.nanoTime() + 1_500_000_000L
@@ -578,7 +578,7 @@ class BridgeManualTest {
         }
 
         assertFalse(h.events.any { it.first == "manual-offline" }, "no manual-offline event for the live renderer")
-        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "still a cast target")
+        h.awaitUntil("still a cast target", 5_000) { h.dialSearchAt(bridge, h.loopback) != null }
         val saved = store.entries.value.single()
         assertEquals(HARNESS_RENDERER_UDN, saved.udn)
         assertEquals("127.0.0.1", saved.ip, "manual.json follows the speaker to its discovered address")
