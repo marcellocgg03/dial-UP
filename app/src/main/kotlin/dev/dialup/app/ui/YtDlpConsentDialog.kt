@@ -23,11 +23,7 @@ fun YtDlpConsentDialog(onAnswer: (Boolean) -> Unit) {
         onDismissRequest = {},
         title = { Text("Update yt-dlp?") },
         text = {
-            Text(
-                "DialUP plays YouTube with yt-dlp, which YouTube breaks every few weeks. The copy inside this app is old, so casting " +
-                    "will fail until it is updated. Download the newest yt-dlp from GitHub now, and keep it updated daily? " +
-                    "You can change this in Settings.",
-            )
+            Text("This is needed to be able to cast. If you decline now, you can update in Settings later")
         },
         confirmButton = {
             TextButton(onClick = { onAnswer(true) }, modifier = Modifier.testTag("btn-ytdlp-consent-yes")) { Text("Update") }
