@@ -16,6 +16,14 @@ class MemoryFactsTest {
     }
 
     @Test
+    fun anExitInfoCarriesItsTimeAsIsoWithTheOffset() {
+        val zone = java.time.ZoneId.of("America/New_York")
+        val f = exitInfoFields(3, 0, 1794882827492L, null, 125, pssKb = 0, rssKb = 0, zone = zone)
+        assertEquals("2026-11-16T21:33:47.492-05:00", f["at"])
+        assertEquals(1794882827492L, f["timestamp"])
+    }
+
+    @Test
     fun anExitInfoLeavesOutMemoryTheSystemDidNotRecord() {
         val f = exitInfoFields(10, 0, 1000L, null, 100, pssKb = 0, rssKb = -1)
         assertFalse("pssMb" in f)

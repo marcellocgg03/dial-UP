@@ -45,6 +45,23 @@ class BridgeHousekeepingTest {
     }
 
     @Test
+    fun aSearchRepeatedWithinTheWindowIsAnsweredEachTimeButLoggedOnce() = h.run {
+        val bridge = h.newBridge()
+        bridge.start()
+        var first: String? = null
+        h.awaitUntil("a DIAL search reply") {
+            first = h.dialSearchAt(bridge, h.loopback)
+            first != null
+        }
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "the second search is answered too")
+        assertTrue(h.dialSearchAt(bridge, h.loopback) != null, "and the third")
+        val replies = h.events.filter { it.first == "ssdp-tx" && it.second["dest"] != "notify" }.map { it.second }
+        assertTrue(replies.isNotEmpty(), "the first reply is logged")
+        val byReply = replies.groupBy { Triple(it["dest"].toString().substringBefore(':'), it["st"], it["usn"]) }
+        assertTrue(byReply.values.all { it.size == 1 }, "one line per address, type and speaker: $replies")
+    }
+
+    @Test
     fun lanModeSendsAliveForEveryReceiver() = h.run {
         h.accessMode = DialAccessMode.LAN
         val bridge = h.newBridge()
