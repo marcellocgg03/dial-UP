@@ -450,11 +450,12 @@ class SettingsPresenter(
     }
 
     /**
-     * The answer to the F-Droid first-launch question whether yt-dlp may be downloaded. Either answer is remembered so it is asked
-     * once. Yes turns the daily update on and installs the newest yt-dlp now, so the first cast works; No leaves everything off.
+     * The answer to the first-launch question whether yt-dlp may be updated (the copy inside the app is old, so the first cast fails
+     * until it is). Either answer is remembered so it is asked once. Yes turns the daily update on and installs the newest yt-dlp
+     * now; No turns the daily update off and installs nothing.
      */
     fun answerYtdlpConsent(accept: Boolean) {
-        settings.update { it.copy(ytdlpConsentAsked = true, ytdlpAutoUpdate = it.ytdlpAutoUpdate || accept) }
+        settings.update { it.copy(ytdlpConsentAsked = true, ytdlpAutoUpdate = accept) }
         if (accept) updateNow()
     }
 

@@ -77,7 +77,7 @@ data class AppSettingsData(
     val updateCheckEnabled: Boolean = true,
     /** App-only: whether yt-dlp updates itself once a day (never during a cast). Update now works either way. */
     val ytdlpAutoUpdate: Boolean = true,
-    /** App-only: an F-Droid build has asked once, at first launch, whether yt-dlp may be downloaded. Any answer sets it. */
+    /** App-only: a new install has been asked once, at first launch, whether yt-dlp may be updated. Any answer sets it; an earlier install counts as asked. */
     val ytdlpConsentAsked: Boolean = false,
     /** App-only: which DialUP releases the update check follows (stable, or also the nightly builds). */
     val updateChannel: UpdateChannel = UpdateChannel.STABLE,
@@ -386,8 +386,11 @@ object AppSettings {
     }
 }
 
-/** The generation of built-in defaults this build stamps on a settings file. 2: gapless is off for new installs. */
-const val DEFAULTS_VERSION = 2
+/**
+ * The generation of built-in defaults this build stamps on a settings file. 2: gapless is off for new installs. 3: a new install is
+ * asked once whether yt-dlp may be updated; an earlier install is not.
+ */
+const val DEFAULTS_VERSION = 3
 
 /**
  * Whether [filesDir] already holds data this app wrote (settings.json or the bridge's data directory), so the app was run
@@ -403,8 +406,15 @@ fun earlierInstall(filesDir: File): Boolean =
  */
 internal fun stampDefaults(settings: Settings, earlierInstall: Boolean, filesDir: File) {
     if (settings.data.value.defaultsVersion >= DEFAULTS_VERSION) return
-    val keepGapless = earlierInstall && !configNamesKey(filesDir, "gapless")
-    settings.update { it.copy(defaultsVersion = DEFAULTS_VERSION, gapless = it.gapless ?: if (keepGapless) true else null) }
+    // Gapless was on by default only before generation 2: a file stamped 2 already holds what it runs with.
+    val keepGapless = earlierInstall && settings.data.value.defaultsVersion == 0 && !configNamesKey(filesDir, "gapless")
+    settings.update {
+        it.copy(
+            defaultsVersion = DEFAULTS_VERSION,
+            gapless = it.gapless ?: if (keepGapless) true else null,
+            ytdlpConsentAsked = it.ytdlpConsentAsked || earlierInstall,
+        )
+    }
 }
 
 /** Does config.json mention [key]? A plain text test: it only decides who owns a default, so a bad file simply says no. */

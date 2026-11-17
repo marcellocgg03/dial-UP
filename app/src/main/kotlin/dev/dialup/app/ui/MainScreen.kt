@@ -82,7 +82,7 @@ fun MainScreen(
         }
     }
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
-    if (BuildConfigFacts.fdroid && !appData.ytdlpConsentAsked) YtDlpConsentDialog(settings::answerYtdlpConsent)
+    if (!appData.ytdlpConsentAsked) YtDlpConsentDialog(settings::answerYtdlpConsent)
     DialUpTheme(theme) {
         Scaffold(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },

@@ -12,7 +12,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 
 /**
- * The one question an F-Droid build asks at first launch: the yt-dlp inside the app is old and YouTube refuses its streams, so
+ * The one question a new install asks at first launch: the yt-dlp inside the app is old and YouTube refuses its streams, so
  * casting works only after it is updated, which downloads code. Nothing is downloaded without this answer. Not dismissible by
  * tapping outside, so the answer is a choice, not an accident.
  */
