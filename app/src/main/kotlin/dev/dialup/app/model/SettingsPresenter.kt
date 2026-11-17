@@ -449,6 +449,16 @@ class SettingsPresenter(
         settings.update { it.copy(ytdlpAutoUpdate = on) }
     }
 
+    /**
+     * The answer to the first-launch question whether yt-dlp may be updated (the copy inside the app is old, so the first cast fails
+     * until it is). Either answer is remembered so it is asked once. Yes installs the newest yt-dlp now; No installs nothing. Neither
+     * touches the daily update switch: on by default, off in an F-Droid build until it is turned on in Settings.
+     */
+    fun answerYtdlpConsent(accept: Boolean) {
+        settings.update { it.copy(ytdlpConsentAsked = true) }
+        if (accept) updateNow()
+    }
+
     /** The one global log switch; applies to the running bridge at once. Returns whether a restart is needed. */
     fun setLogEnabled(on: Boolean): Boolean {
         settings.update { it.copy(logEnabled = on) }
