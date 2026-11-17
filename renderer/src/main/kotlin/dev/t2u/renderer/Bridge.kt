@@ -750,7 +750,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
         override fun onReply(dest: InetSocketAddress, st: String, usn: String, deviceName: String) {
             // A search is answered once per speaker and type, and a sender searches over and over: one line per address, type and
-            // speaker in each window shows what was advertised without burying the log (two thirds of it was these lines).
+            // speaker in each five minutes shows what was advertised without burying the log (two thirds of it was these lines).
             if (!firstInWindow("tx:${dest.address.hostAddress}|$st|$usn", SSDP_REPLY_LOG_WINDOW_MS)) return
             emit("ssdp-tx", "dest" to "${dest.address.hostAddress}:${dest.port}", "st" to st, "usn" to usn, "device" to deviceName)
         }
