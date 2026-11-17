@@ -194,6 +194,7 @@ class SettingsTest {
             theme = ThemeMode.DARK,
             updateCheckEnabled = false,
             ytdlpAutoUpdate = false,
+            ytdlpConsentAsked = true,
             updateChannel = dev.dialup.app.model.UpdateChannel.NIGHTLY,
             logEnabled = false,
             gapless = false,
@@ -263,6 +264,18 @@ class SettingsTest {
         Settings(f, fdroid = true) { where, _ -> errors.add(where) }.update { it.copy(ytdlpAutoUpdate = true) }
         assertTrue(f.readText().contains("""ytdlpAutoUpdate":true"""), f.readText())
         assertTrue(Settings(f, fdroid = true) { where, _ -> errors.add(where) }.data.value.ytdlpAutoUpdate)
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun theYtdlpConsentQuestionIsAskedOnceAndTheAnswerSurvivesARestart() {
+        val f = File(dir, SETTINGS_FILE)
+        val s = Settings(f, fdroid = true) { where, _ -> errors.add(where) }
+        assertFalse(s.data.value.ytdlpConsentAsked)
+        assertFalse("ytdlpConsentAsked" in f.takeIf { it.isFile }?.readText().orEmpty())
+        s.update { it.copy(ytdlpConsentAsked = true) }
+        assertTrue(Settings(f, fdroid = true) { where, _ -> errors.add(where) }.data.value.ytdlpConsentAsked)
+        assertFalse(Settings(f, fdroid = true) { where, _ -> errors.add(where) }.data.value.ytdlpAutoUpdate, "asking is not consenting")
         assertTrue(errors.isEmpty())
     }
 
