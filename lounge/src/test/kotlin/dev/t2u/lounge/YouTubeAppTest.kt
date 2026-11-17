@@ -67,6 +67,10 @@ class YouTubeAppTest {
         }
     }
 
+    /** The policy that resets the player when the last sender goes, implicitly or not (the default keeps an implicit one playing). */
+    private fun resetOptions() =
+        AppOptions("T2U test", "T2U", "Test", store, resetPlayerOnDisconnect = ResetPlayerOnDisconnectPolicy.ALL_DISCONNECTED)
+
     private suspend fun startedApp(
         options: AppOptions = AppOptions("T2U test", "T2U", "Test", store),
         clock: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -280,7 +284,7 @@ class YouTubeAppTest {
 
     @Test
     fun implicitDisconnectIsReportedAsImplicit() = run {
-        startedApp()
+        startedApp(resetOptions())
         connect()
         castAndPlay("VID00000001")
         rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
@@ -304,6 +308,24 @@ class YouTubeAppTest {
         assertTrue(disconnects.isEmpty(), "no implicit disconnect: ${disconnects.toList()}")
         assertEquals(listOf("dev-1"), a.connectedSenders.map { it.id })
         assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun byDefaultAnImplicitDisconnectKeepsThePlayerPlayingAndAnExplicitOneResetsIt() = run {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        // the phone's app is killed: the lounge status no longer lists it, and nothing says it left on purpose
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+        assertEquals(listOf("dev-1" to true), disconnects.toList())
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(events.any { it.first == "lounge-app" && it.second["type"] == "noSendersLeft" && it.second["resetPlayer"] == false })
+        // the phone comes back and then leaves on purpose: now the player resets
+        connect()
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "explicit disconnect resets player") { player.status == PlayerStatus.IDLE }
     }
 
     @Test
@@ -365,7 +387,7 @@ class YouTubeAppTest {
     @Test
     fun implicitDisconnectAfterRecoveryWindowStillResetsPlayer() = run {
         var now = 1_000L
-        val a = startedApp(clock = { now })
+        val a = startedApp(resetOptions(), clock = { now })
         connect()
         castAndPlay("VID00000001")
         a.onNetworkLost()
@@ -377,7 +399,7 @@ class YouTubeAppTest {
 
     @Test
     fun senderConnectedAfterNetworkLossIsNotProtected() = run {
-        val a = startedApp()
+        val a = startedApp(resetOptions())
         a.onNetworkLost()
         a.onNetworkReturned()
         connect()
@@ -388,7 +410,7 @@ class YouTubeAppTest {
 
     @Test
     fun senderReconnectedDuringRecoveryIsNotProtectedFromLaterDisconnects() = run {
-        val a = startedApp()
+        val a = startedApp(resetOptions())
         connect()
         castAndPlay("VID00000001")
         a.onNetworkLost()
@@ -968,7 +990,7 @@ class YouTubeAppTest {
 
     @Test
     fun withTwoSendersOneLeavingChangesNothingAndTheLastOneClearsTheSpeaker() = run {
-        startedApp()
+        startedApp(resetOptions())
         connect(id = "dev-1")
         castAndPlay("VID00000001")
         connect(id = "dev-2")
