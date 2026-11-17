@@ -5,6 +5,9 @@ package dev.t2u.renderer
 /** One denial per source per minute in the log, so a scanner on the LAN cannot flood it. */
 internal const val DROP_LOG_WINDOW_MS = 60_000L
 
+/** One logged SSDP reply per address, search type and speaker per five minutes: a sender that searches again and again repeats the same replies. */
+internal const val SSDP_REPLY_LOG_WINDOW_MS = 5 * 60_000L
+
 /**
  * How often the bridge re-announces (LAN mode), probes its own SSDP listener and searches for speakers. Five minutes
  * is six times inside the advertised max-age of 1800 s (SsdpMessage CACHE-CONTROL); there is no jitter because one host
