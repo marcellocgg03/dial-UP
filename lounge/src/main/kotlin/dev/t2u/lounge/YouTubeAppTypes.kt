@@ -10,7 +10,7 @@ data class AppOptions(
     val model: String,
     val dataStore: DataStore?,
     val mutePolicy: MutePolicy = MutePolicy.AUTO,
-    val resetPlayerOnDisconnect: ResetPlayerOnDisconnectPolicy = ResetPlayerOnDisconnectPolicy.ALL_DISCONNECTED,
+    val resetPlayerOnDisconnect: ResetPlayerOnDisconnectPolicy = ResetPlayerOnDisconnectPolicy.ALL_EXPLICITLY_DISCONNECTED,
 )
 
 /** The app could not start; the cause carries the detail. */
