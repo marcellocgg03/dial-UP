@@ -19,7 +19,8 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 ## Features
 
-- **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait. on by default, for renderers that support it.
+- **Gapless track changes**: Helps ensure a seamless transition between tracks without an noticable wait, for renderers that support it. Off for new installs (an install that has already run keeps its setting); turn it on in Settings.
+- **Prefetch**: the next track is looked up and prepared while the current one plays (Settings, *Prepare the next track ahead*, on by default). With it off there is a noticeable pause between tracks, and gapless is unavailable.
 - **Caching** (Cached mode): renderer-ready audio files are cached locally so they aren't downloaded with yt-dlp again. Newly downloaded sources are temporary and removed when no longer in use; sources retained by older versions can be removed with "Clear cache". Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
 - **Playback modes**: Streaming, Direct or Cached, chosen in Settings; see [Playback modes](#playback-modes) below.
 - **Audio format display**: Optionally show the format currently loaded on each renderer's card. It updates if playback falls back to another format.
@@ -27,6 +28,7 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Manual code pairing**: if your network blocks YouTube and YouTube Music from discovering renderers, a card's menu has *Pair manually with code*, which shows a code to type under Link with TV code in the app.
 - **Idle disconnect**: optionally end a cast that stays paused for 15 minutes, 30 minutes, 1 hour or 2 hours (Settings; off by default). The renderer's queue is cleared only if *Clear the renderer when a cast ends* is on.
+- **A killed YouTube app doesn't end the cast**: if the phone's YouTube or YouTube Music app is killed or updated, the speaker keeps playing and the queue goes on; open the app again to take control. Pressing disconnect in the app still ends the cast.
 - **Wi-Fi recovery**: Brief Wi-Fi drops don't interrupt the cast; the bridge resyncs when Wi-Fi returns
 
 ## Playback modes

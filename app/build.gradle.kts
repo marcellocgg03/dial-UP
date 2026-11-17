@@ -27,7 +27,7 @@ plugins {
 }
 
 // The last stable release's code; see versionCode in defaultConfig.
-val stableVersionCode = 5
+val stableVersionCode = 6
 
 // Nightly build number (1..999): the commits on main since the last stable tag, passed by the nightly workflow.
 val nightlyBuild: Int? = (findProperty("nightlyBuild") as String?)?.let {
@@ -47,7 +47,7 @@ android {
         // stable release and the next stable release (6000) installs over every nightly. versionName of a stable build
         // follows the git tag v<versionName>.
         versionCode = stableVersionCode * 1000 + (nightlyBuild ?: 0)
-        versionName = "1.1.1"
+        versionName = "1.2.0"
         // A nightly (-PnightlyBuild=N from the nightly workflow) keeps the stable version and adds -nightly.<build date>:
         // SemVer ranks a nightly above the stable release it grew from and below the next one, which is what the update
         // check compares. Two nightlies on one day share a name; versionCode still tells them apart.
