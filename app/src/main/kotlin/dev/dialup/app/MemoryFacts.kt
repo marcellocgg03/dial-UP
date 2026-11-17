@@ -2,12 +2,20 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
 /**
  * The memory numbers the event log carries, so a kill the system reports as LOW_MEMORY can be read against what the app held and
  * what the phone had left. Pure JVM: the service reads the numbers from Android and these turn them into log fields.
  */
 
 private const val BYTES_PER_MB = 1024L * 1024L
+
+/** [epochMs] as ISO-8601 with the zone's offset, like the `ts` of every log line. */
+fun isoTime(epochMs: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+    DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(epochMs).atZone(zone))
 
 private fun mb(bytes: Long): Long = bytes / BYTES_PER_MB
 
@@ -25,10 +33,13 @@ fun exitInfoFields(
     importance: Int,
     pssKb: Long,
     rssKb: Long,
+    zone: ZoneId = ZoneId.systemDefault(),
 ): Map<String, Any?> = buildMap {
     put("reason", reason)
     put("status", status)
     put("timestamp", timestamp)
+    // the same shape as the line's own ts, so the exit can be read against the lines around it
+    put("at", isoTime(timestamp, zone))
     put("description", description)
     put("importance", importance)
     if (pssKb > 0) put("pssMb", kbToMb(pssKb))

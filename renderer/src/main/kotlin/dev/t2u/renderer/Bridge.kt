@@ -748,8 +748,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             }
         }
 
-        override fun onReply(dest: InetSocketAddress, st: String, usn: String, deviceName: String) =
+        override fun onReply(dest: InetSocketAddress, st: String, usn: String, deviceName: String) {
+            // A search is answered once per speaker and type, and a sender searches over and over: one line per address, type and
+            // speaker in each window shows what was advertised without burying the log (two thirds of it was these lines).
+            if (!firstInWindow("tx:${dest.address.hostAddress}|$st|$usn", SSDP_REPLY_LOG_WINDOW_MS)) return
             emit("ssdp-tx", "dest" to "${dest.address.hostAddress}:${dest.port}", "st" to st, "usn" to usn, "device" to deviceName)
+        }
 
         override fun onNotify(nts: String, nt: String, deviceName: String) =
             emit("ssdp-tx", "dest" to "notify", "nts" to nts, "nt" to nt, "device" to deviceName)
@@ -765,12 +769,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         }
     }
 
-    private fun firstInWindow(key: String): Boolean {
+    private fun firstInWindow(key: String, windowMs: Long = DROP_LOG_WINDOW_MS): Boolean {
         val now = System.currentTimeMillis()
         if (dropLogged.size > 1024) dropLogged.clear()
         var first = false
         dropLogged.compute(key) { _, last ->
-            if (last == null || now - last >= DROP_LOG_WINDOW_MS) {
+            if (last == null || now - last >= windowMs) {
                 first = true
                 now
             } else {
