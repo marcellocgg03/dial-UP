@@ -154,14 +154,15 @@ fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
  * Turns the text of settings.json into [AppSettingsData]. Pure: it never throws. Text that is not a JSON object gives
  * the defaults and one problem; a key with a wrong type or value falls back alone and adds its name to the problems.
  */
-fun parseSettings(text: String): ParsedSettings {
+/** [ytdlpAutoDefault] is what the automatic yt-dlp update is when the file does not say: on, but off in an F-Droid build. */
+fun parseSettings(text: String, ytdlpAutoDefault: Boolean = !BuildConfigFacts.fdroid): ParsedSettings {
     val o = try {
         Json.parseToJsonElement(text) as? JsonObject
     } catch (_: SerializationException) {
         null
     } ?: return ParsedSettings(AppSettingsData(), emptyMap(), listOf("settings.json"))
     val problems = mutableListOf<String>()
-    var data = AppSettingsData()
+    var data = AppSettingsData(ytdlpAutoUpdate = ytdlpAutoDefault)
 
     fun bool(key: String): Boolean? {
         val e = o[key] ?: return null
@@ -221,7 +222,7 @@ fun parseSettings(text: String): ParsedSettings {
 /** The settings in [file], or the defaults when it is missing or unreadable. Never throws; problems are dropped here. */
 fun readSettingsFile(file: File): AppSettingsData =
     try {
-        if (file.isFile) parseSettings(file.readText()).data else AppSettingsData()
+        if (file.isFile) parseSettings(file.readText()).data else AppSettingsData(ytdlpAutoUpdate = !BuildConfigFacts.fdroid)
     } catch (_: IOException) {
         AppSettingsData()
     } catch (_: SecurityException) {
@@ -229,7 +230,7 @@ fun readSettingsFile(file: File): AppSettingsData =
     }
 
 /** The JSON written for [data]: known keys in a stable order, null overrides and default switches left out. */
-private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>): JsonObject {
+private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>, ytdlpAutoDefault: Boolean): JsonObject {
     val known = LinkedHashMap<String, JsonElement>()
     // The two plain switches and the theme are written only when they differ from the fresh-install default, so the file stays small.
     if (!data.bridgeEnabled) known[KEY_BRIDGE_ENABLED] = JsonPrimitive(false)
@@ -240,7 +241,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     if (data.namePrefix != DEFAULT_NAME_PREFIX) known[KEY_NAME_PREFIX] = JsonPrimitive(data.namePrefix)
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)
-    if (!data.ytdlpAutoUpdate) known[KEY_YTDLP_AUTO] = JsonPrimitive(false)
+    if (data.ytdlpAutoUpdate != ytdlpAutoDefault) known[KEY_YTDLP_AUTO] = JsonPrimitive(data.ytdlpAutoUpdate)
     if (data.updateChannel != UpdateChannel.STABLE) known[KEY_UPDATE_CHANNEL] = JsonPrimitive(data.updateChannel.wire)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     if (data.defaultsVersion > 0) known[KEY_DEFAULTS_VERSION] = JsonPrimitive(data.defaultsVersion)
@@ -264,11 +265,12 @@ class Settings(
     private val writer: (File, String) -> Unit = { target, text ->
         writeTextAtomic(target, text, AtomicWriteOptions.APP.copy(atomicOnly = true))
     },
+    private val fdroid: Boolean = BuildConfigFacts.fdroid,
     private val onError: (String, Throwable) -> Unit = { _, _ -> },
 ) {
     private val lock = Any()
     private var extras: Map<String, JsonElement> = emptyMap()
-    private val state = MutableStateFlow(AppSettingsData())
+    private val state = MutableStateFlow(AppSettingsData(ytdlpAutoUpdate = !fdroid))
     private val mode = MutableStateFlow(DEFAULT_DIAL_ACCESS)
 
     /** What a restart would read for [AppSettingsData.dialAccess]: the last value known to be in the file. */
@@ -316,8 +318,12 @@ class Settings(
         }
     }
 
+    /** An F-Droid build holds the app's own update check off, whatever the file says; F-Droid delivers the app's updates. */
+    private fun forBuild(data: AppSettingsData): AppSettingsData =
+        if (fdroid) data.copy(updateCheckEnabled = false) else data
+
     private fun publish(data: AppSettingsData) {
-        state.value = data
+        state.value = forBuild(data)
         mode.value = data.dialAccess
     }
 
@@ -328,9 +334,9 @@ class Settings(
     private fun load() {
         if (!file.exists()) return
         try {
-            val parsed = parseSettings(file.readText())
+            val parsed = parseSettings(file.readText(), !fdroid)
             extras = parsed.extras
-            state.value = parsed.data
+            state.value = forBuild(parsed.data)
             mode.value = parsed.data.dialAccess
             persistedDialAccess = parsed.data.dialAccess
             if (parsed.problems.isNotEmpty()) {
@@ -344,7 +350,7 @@ class Settings(
     /** Writes [data]; true when the file now holds it. A failure is reported through [onError]. */
     private fun write(data: AppSettingsData): Boolean {
         try {
-            val json = settingsJson(data, extras).toString()
+            val json = settingsJson(data, extras, !fdroid).toString()
             file.absoluteFile.parentFile?.mkdirs()
             writer(file, json)
             return true

@@ -193,14 +193,17 @@ fun SettingsTab(presenter: SettingsPresenter, model: AppModel, modifier: Modifie
         SectionHeader("Maintenance")
         YtDlpSection(ui, appData.ytdlpAutoUpdate, presenter)
         HorizontalDivider()
-        AppUpdatesSection(
-            model = AppUpdates.of(context),
-            autoEnabled = appData.updateCheckEnabled,
-            currentVersion = BuildConfigFacts.versionName(context) ?: "0",
-            onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
-            channel = appData.updateChannel,
-            onChannelChange = presenter::setUpdateChannel,
-        )
+        // F-Droid delivers the app's updates: no release check, channel or nightly choice in that build
+        if (!BuildConfigFacts.fdroid) {
+            AppUpdatesSection(
+                model = AppUpdates.of(context),
+                autoEnabled = appData.updateCheckEnabled,
+                currentVersion = BuildConfigFacts.versionName(context) ?: "0",
+                onAutoChange = { on -> presenter.setUpdateCheckEnabled(on) },
+                channel = appData.updateChannel,
+                onChannelChange = presenter::setUpdateChannel,
+            )
+        }
         SectionHeader("Appearance")
         ChoiceRow(
             title = "Theme",
