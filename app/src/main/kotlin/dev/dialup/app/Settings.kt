@@ -77,6 +77,8 @@ data class AppSettingsData(
     val updateCheckEnabled: Boolean = true,
     /** App-only: whether yt-dlp updates itself once a day (never during a cast). Update now works either way. */
     val ytdlpAutoUpdate: Boolean = true,
+    /** App-only: an F-Droid build has asked once, at first launch, whether yt-dlp may be downloaded. Any answer sets it. */
+    val ytdlpConsentAsked: Boolean = false,
     /** App-only: which DialUP releases the update check follows (stable, or also the nightly builds). */
     val updateChannel: UpdateChannel = UpdateChannel.STABLE,
     /**
@@ -120,6 +122,7 @@ private const val KEY_NAME_PREFIX = "namePrefix"
 private const val KEY_THEME = "theme"
 private const val KEY_UPDATE_CHECK = "updateCheckEnabled"
 private const val KEY_YTDLP_AUTO = "ytdlpAutoUpdate"
+private const val KEY_YTDLP_CONSENT = "ytdlpConsentAsked"
 private const val KEY_UPDATE_CHANNEL = "updateChannel"
 private const val KEY_LOG_ENABLED = "logEnabled"
 private const val KEY_GAPLESS = "gapless"
@@ -130,7 +133,7 @@ private const val KEY_OUTPUT_FORMAT = "outputFormat"
 private const val KEY_YTDLP_CHANNEL = "ytdlpChannel"
 
 private val KNOWN_KEYS = setOf(
-    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_IDLE_DISCONNECT, KEY_SHOW_AUDIO_FORMAT, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
+    KEY_BRIDGE_ENABLED, KEY_DIAL_ACCESS, KEY_CLEAR_ON_CAST_END, KEY_IDLE_DISCONNECT, KEY_SHOW_AUDIO_FORMAT, KEY_NAME_PREFIX, KEY_THEME, KEY_UPDATE_CHECK, KEY_YTDLP_AUTO, KEY_YTDLP_CONSENT, KEY_UPDATE_CHANNEL, KEY_LOG_ENABLED,
     KEY_PREFETCH, KEY_GAPLESS, KEY_DEFAULTS_VERSION, KEY_CACHE_MB, KEY_OUTPUT_FORMAT, KEY_YTDLP_CHANNEL,
 )
 
@@ -199,6 +202,7 @@ fun parseSettings(text: String, ytdlpAutoDefault: Boolean = !BuildConfigFacts.fd
     }
     bool(KEY_UPDATE_CHECK)?.let { data = data.copy(updateCheckEnabled = it) }
     bool(KEY_YTDLP_AUTO)?.let { data = data.copy(ytdlpAutoUpdate = it) }
+    bool(KEY_YTDLP_CONSENT)?.let { data = data.copy(ytdlpConsentAsked = it) }
     o[KEY_UPDATE_CHANNEL]?.let { e ->
         val ch = (e as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { UpdateChannel.fromWire(it) }
         if (ch != null) data = data.copy(updateChannel = ch) else problems += KEY_UPDATE_CHANNEL
@@ -242,6 +246,7 @@ private fun settingsJson(data: AppSettingsData, extras: Map<String, JsonElement>
     if (data.theme != DEFAULT_THEME) known[KEY_THEME] = JsonPrimitive(data.theme.wire)
     if (!data.updateCheckEnabled) known[KEY_UPDATE_CHECK] = JsonPrimitive(false)
     if (data.ytdlpAutoUpdate != ytdlpAutoDefault) known[KEY_YTDLP_AUTO] = JsonPrimitive(data.ytdlpAutoUpdate)
+    if (data.ytdlpConsentAsked) known[KEY_YTDLP_CONSENT] = JsonPrimitive(true)
     if (data.updateChannel != UpdateChannel.STABLE) known[KEY_UPDATE_CHANNEL] = JsonPrimitive(data.updateChannel.wire)
     data.logEnabled?.let { known[KEY_LOG_ENABLED] = JsonPrimitive(it) }
     if (data.defaultsVersion > 0) known[KEY_DEFAULTS_VERSION] = JsonPrimitive(data.defaultsVersion)
