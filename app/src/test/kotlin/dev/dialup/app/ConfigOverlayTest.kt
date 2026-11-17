@@ -59,6 +59,27 @@ class ConfigOverlayTest {
     }
 
     @Test
+    fun aFreshInstallIsAskedAboutYtdlpAndAnEarlierOneIsNot() {
+        val fresh = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(fresh, earlierInstall(dir), dir)
+        assertFalse(fresh.data.value.ytdlpConsentAsked)
+        writeSettings("""{"theme":"dark"}""")
+        val earlier = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(earlier, earlierInstall(dir), dir)
+        assertTrue(earlier.data.value.ytdlpConsentAsked)
+    }
+
+    @Test
+    fun aFileStampedWithTheOldGenerationKeepsItsGaplessDefaultWhenRestamped() {
+        writeSettings("""{"defaultsVersion":2}""")
+        val s = Settings(File(dir, SETTINGS_FILE))
+        stampDefaults(s, earlierInstall(dir), dir)
+        assertEquals(null, s.data.value.gapless)
+        assertEquals(DEFAULTS_VERSION, s.data.value.defaultsVersion)
+        assertTrue(s.data.value.ytdlpConsentAsked)
+    }
+
+    @Test
     fun aFreshInstallStampedOnceStaysOffEvenAfterItsFilesExist() {
         val earlier = earlierInstall(dir)
         assertFalse(earlier)
