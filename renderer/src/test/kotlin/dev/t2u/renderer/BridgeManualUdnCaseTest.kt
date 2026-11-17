@@ -85,7 +85,7 @@ class BridgeManualUdnCaseTest {
         val card = second.speakers.value.single()
         assertEquals(LOWER_UDN, card.udn)
         assertTrue(card.manual)
-        assertTrue(h.dialSearchAt(second, h.loopback) != null, "a DIAL cast target")
+        h.awaitUntil("a DIAL cast target", 5_000) { h.dialSearchAt(second, h.loopback) != null }
         assertTrue(
             h.events.any { it.first == "manual-probe" && it.second["result"] == "Answered" && it.second["via"] == "http" },
             "manual-probe Answered via http: ${h.events.takeLast(8)}",
