@@ -11,6 +11,7 @@
 
 ### Changed
 
+- **The event log is quieter.** The replies the app sends to a search for a speaker (`ssdp-tx`, about two thirds of a typical log, because the YouTube apps search again and again) are logged once per address, search type and speaker per minute instead of every time. The searches are still answered every time. An `exit-info` entry now also has `at`, the time of the exit in the same form as the line's own `ts`.
 - **Gapless track changes are off for new installs.** An install that has already run keeps its current setting. With it off the next track is still prepared ahead and starts about a second after the speaker reports the end.
 - The "Notify when another device casts" switch is gone from Settings. The notice itself stays; to silence it, turn off the "Other devices" notification channel in Android's app notification settings. A phone that had the switch off will get the notice again until you do.
 - The event log's lookup records now name the YouTube client that signed the URL, its itag and format id, whether it carries a PO token, and the IP family it is bound to, so a refused (403) stream can be told apart from a working one. The URL, the address and the token are never logged.
