@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- **A cast no longer ends when the phone's YouTube app is killed.** When the phone's app disappears without saying it left (an Android System WebView or app update, or the system freeing memory), the speaker now keeps playing instead of being stopped and emptied; the phone picks the cast up again when its app returns. Pressing disconnect in the YouTube app still ends it. Before, an overnight update stopped a 10-hour track after four hours.
 - **A slow recovery no longer reads as a speaker that cannot play the format.** When YouTube refused a stream's first URL and the app had to extract a fresh one (which takes about 15 s on a cold start), the speaker's wait timed out and the app stepped down from adts to mp3. The start wait now holds while the media server is recovering and restarts when the first audio arrives.
 - **A stream YouTube refuses on every attempt ends the cast at once.** When every way of reading the stream gets a 403 (or 410), the app no longer tries the next format on the same refused source and waits out a second round; it ends the cast and says "YouTube refused the stream".
 - **A track that has not started playing is shown as loading, not playing.** Until the speaker plays, the phone's seek bar stays at the start position instead of running ahead and jumping back; once the speaker plays, the phone is told its real position. The renderer's card in the app says Loading too, instead of Playing, until then.
