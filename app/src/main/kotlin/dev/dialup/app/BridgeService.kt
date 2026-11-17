@@ -382,7 +382,34 @@ class BridgeService : Service(), SpikeHost {
             "uptimeMillis" to SystemClock.uptimeMillis(),
             "standbyBucket" to standbyBucket(),
             "casting" to casting,
+        ) + memoryHeartbeatFields()
+    }
+
+    /** What the phone has left and what this process holds; empty when the numbers cannot be read. */
+    private fun memoryHeartbeatFields(): Map<String, Any?> = try {
+        val info = ActivityManager.MemoryInfo()
+        getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+        val rt = Runtime.getRuntime()
+        memoryFields(
+            availBytes = info.availMem,
+            totalBytes = info.totalMem,
+            thresholdBytes = info.threshold,
+            lowMemory = info.lowMemory,
+            javaUsedBytes = rt.totalMemory() - rt.freeMemory(),
+            javaMaxBytes = rt.maxMemory(),
+            nativeBytes = android.os.Debug.getNativeHeapAllocatedSize(),
+            pssKb = android.os.Debug.getPss(),
         )
+    } catch (_: Throwable) {
+        emptyMap()
+    }
+
+    /** The system asks the app to give memory back; the level and what the process holds go to the log. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::evidence.isInitialized) {
+            evidence.event("trim-memory", mapOf("level" to level, "name" to trimLevelName(level)) + memoryHeartbeatFields())
+        }
     }
 
     /** The app's own standby bucket (API 28+, no permission needed for one's own package), else null. */
@@ -438,12 +465,7 @@ class BridgeService : Service(), SpikeHost {
             for (info in am.getHistoricalProcessExitReasons(packageName, 0, 5)) {
                 evidence.event(
                     "exit-info",
-                    mapOf(
-                        "reason" to info.reason,
-                        "status" to info.status,
-                        "timestamp" to info.timestamp,
-                        "description" to info.description,
-                    ),
+                    exitInfoFields(info.reason, info.status, info.timestamp, info.description, info.importance, info.pss, info.rss),
                 )
             }
         } catch (t: Throwable) {
