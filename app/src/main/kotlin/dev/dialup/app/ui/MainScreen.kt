@@ -82,8 +82,8 @@ fun MainScreen(
         }
     }
     var tab by rememberSaveable { mutableIntStateOf(TAB_SPEAKERS) }
-    if (!appData.ytdlpConsentAsked) YtDlpConsentDialog(settings::answerYtdlpConsent)
     DialUpTheme(theme) {
+        if (!appData.ytdlpConsentAsked) YtDlpConsentDialog(settings::answerYtdlpConsent)
         Scaffold(
             modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
             topBar = { Header(model) },

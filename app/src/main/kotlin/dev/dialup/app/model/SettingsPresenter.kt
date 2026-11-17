@@ -451,11 +451,11 @@ class SettingsPresenter(
 
     /**
      * The answer to the first-launch question whether yt-dlp may be updated (the copy inside the app is old, so the first cast fails
-     * until it is). Either answer is remembered so it is asked once. Yes turns the daily update on and installs the newest yt-dlp
-     * now; No turns the daily update off and installs nothing.
+     * until it is). Either answer is remembered so it is asked once. Yes installs the newest yt-dlp now; No installs nothing. Neither
+     * touches the daily update switch: on by default, off in an F-Droid build until it is turned on in Settings.
      */
     fun answerYtdlpConsent(accept: Boolean) {
-        settings.update { it.copy(ytdlpConsentAsked = true, ytdlpAutoUpdate = accept) }
+        settings.update { it.copy(ytdlpConsentAsked = true) }
         if (accept) updateNow()
     }
 
