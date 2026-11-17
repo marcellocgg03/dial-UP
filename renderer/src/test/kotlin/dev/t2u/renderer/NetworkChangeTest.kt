@@ -72,6 +72,8 @@ internal class NetworkChangeTest {
                 h.renderer.init()
                 assertTrue(h.renderer.play(Video(A), 0.0))
                 val uri = fake.uris().single()
+                // The card shows loading until the speaker plays, then playing.
+                waitUntil { h.renderer.ui.value.status == PlayerStatus.PLAYING }
 
                 h.renderer.onNetworkLost()
                 assertEquals(PlayerStatus.PLAYING, h.renderer.ui.value.status)

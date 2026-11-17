@@ -45,10 +45,13 @@ internal class StartBufferingTest {
                     Thread.sleep(600)
                     assertTrue(events.all { code(it) == 3 }, "states: ${events.map { code(it) }}")
                     assertEquals(12.0, events.last().current.position)
+                    // the app's own card says the same: loading, not playing
+                    assertEquals(PlayerStatus.LOADING, h.renderer.ui.value.status)
                     // the speaker starts: the sender is told playing
                     fake.state.transport = "PLAYING"
                     waitUntil { events.any { code(it) == 1 } }
                     assertEquals(PlayerStatus.PLAYING, h.renderer.status)
+                    waitUntil { h.renderer.ui.value.status == PlayerStatus.PLAYING }
                 }
             }
         } finally {

@@ -109,7 +109,7 @@ class Renderer(
         }
 
     /** What the sender-facing player state says that no other flow carries: the nav buttons, the queue and the position. */
-    private data class Live(val hasPrevious: Boolean, val hasNext: Boolean, val queueHasCurrent: Boolean, val position: SpeakerPosition?)
+    private data class Live(val hasPrevious: Boolean, val hasNext: Boolean, val queueHasCurrent: Boolean, val position: SpeakerPosition?, val buffering: Boolean = false)
 
     private val _live = MutableStateFlow(Live(hasPrevious = false, hasNext = false, queueHasCurrent = false, position = null))
 
@@ -117,7 +117,8 @@ class Renderer(
         udn = udn,
         name = name ?: address,
         address = address,
-        status = status,
+        // A PLAYING player the sender is told is loading (the speaker has not played yet) shows as loading here too.
+        status = if (status == PlayerStatus.PLAYING && live.buffering) PlayerStatus.LOADING else status,
         track = track,
         error = error,
         hasPrevious = live.hasPrevious,
@@ -300,6 +301,7 @@ class Renderer(
                 hasNext = nav.hasNext,
                 queueHasCurrent = state.queue.current != null,
                 position = if (idle) null else SpeakerPosition(state.position, state.duration, deps.clock()),
+                buffering = state.buffering,
             )
         }
     }
