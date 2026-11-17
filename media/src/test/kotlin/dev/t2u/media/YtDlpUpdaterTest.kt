@@ -592,6 +592,17 @@ class YtDlpUpdaterTest {
     }
 
     @Test
+    fun updateIfDueDownloadsNothingWhenTheAutomaticUpdateSettingCannotBeRead() {
+        val g = FakeGateway()
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, autoEnabled = { throw IllegalStateException("unreadable") })
+        assertNull(runBlocking { u.updateIfDue("job") })
+        assertTrue(g.updates.isEmpty())
+        assertEquals("off", events.single()["reason"])
+        assertEquals(true, runBlocking { u.updateNow() }.ok)
+    }
+
+    @Test
     fun updateIfDuePostponesWhileCastingOrBusy() {
         val g = FakeGateway()
         val events = CopyOnWriteArrayList<Map<String, Any?>>()

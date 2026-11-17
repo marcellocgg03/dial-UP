@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A first-launch question about yt-dlp.** The yt-dlp inside the app is old and YouTube refuses its streams, so the first cast of a new install fails until it is updated. A new install now asks once whether to update it. Update installs the newest yt-dlp at once; Not now installs nothing, and Update now in Settings does it later. The answer does not change the daily automatic update switch (on by default). It is asked once per install; an install that has already run is not asked.
+
 ## 1.2.0
 
 ### Added

@@ -39,6 +39,8 @@ private const val JOB_RUN_LIMIT_MS = 2L * 60_000L
 object UpdateCheckJob {
     /** Schedules a periodic job (24 h, flex 6 h, any network, persisted) unless one is pending; scheduling again would restart the period. */
     fun schedule(context: Context) {
+        // an F-Droid build never looks for its own updates: F-Droid delivers them
+        if (BuildConfigFacts.fdroid) return
         try {
             val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
             if (scheduler.getPendingJob(UPDATE_JOB_ID) != null) return
@@ -98,6 +100,7 @@ class UpdateCheckJobService : JobService() {
     }
 
     private suspend fun check() {
+        if (BuildConfigFacts.fdroid) return
         val enabled = AppSettings.of(this).data.value.updateCheckEnabled
         if (!enabled) return
         val model = AppUpdates.of(this)

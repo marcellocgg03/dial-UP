@@ -30,6 +30,16 @@ class MediaServerCacheTest {
     private val servers = CopyOnWriteArrayList<MediaServer>()
     private val seen = CopyOnWriteArrayList<MediaRequest>()
 
+    /** The server reports a request after it has answered it, so a client can see the response first. */
+    private fun awaitReport(predicate: (MediaRequest) -> Boolean): MediaRequest {
+        val deadline = System.currentTimeMillis() + 5000
+        while (System.currentTimeMillis() < deadline) {
+            seen.lastOrNull(predicate)?.let { return it }
+            Thread.sleep(25)
+        }
+        throw AssertionError("no matching request reported, saw $seen")
+    }
+
     /** Copies a generated source to the requested target, as a real download would leave a file there. */
     private class FakeSourceDownloader(private val src: File) : SourceDownloader {
         val calls = AtomicInteger()
@@ -291,7 +301,7 @@ class MediaServerCacheTest {
         buildDir.listFiles()!!.forEach { it.delete() }
         downloader.failing = true
         assertEquals(502, get(ms, path).status)
-        val failed = seen.last { it.status == 502 }
+        val failed = awaitReport { it.status == 502 }
         assertEquals("rebuild failed", failed.note)
         assertTrue(!failed.note!!.contains("http"), "no URL in the note")
         assertEquals(tokens, ms.tokenCount(), "the token table is unchanged")
@@ -310,7 +320,7 @@ class MediaServerCacheTest {
         file.delete()
         assertEquals(404, get(ms, path).status)
         assertEquals(404, RawHttp.request(ms.resolvedPort(), "HEAD", path).status)
-        assertTrue(seen.any { it.status == 404 && it.note == "file vanished" }, seen.toString())
+        awaitReport { it.status == 404 && it.note == "file vanished" }
         Unit
     }
 
