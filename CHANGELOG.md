@@ -5,6 +5,7 @@
 ### Fixed
 
 - **A stream that goes quiet no longer leaves the speaker waiting until it gives up.** On a very long track the audio source could stop sending without closing the connection (seen after about 6 h 50 min of a 10 h video). ffmpeg then waited on it for hours, the speaker ran out of audio and stopped, and nothing in the app noticed. ffmpeg now fails a network read that is silent for 30 s so it can reconnect from where it was, and a live stream that gets no bytes from ffmpeg for 60 s is ended instead of held open. If the audio link has expired the track still ends; restarting it is not part of this fix.
+- **A video that plays for more than about 6 hours no longer loses its audio link.** YouTube's audio links stop working after about 6 hours. The media server now sits between ffmpeg and YouTube: it looks up the next link in the background shortly before the current one expires and ends the response a little early, so ffmpeg reconnects at the byte where it stopped and continues on the new link. The speaker and the phone see one unbroken stream. Tested against a local stand-in for YouTube and real ffmpeg; the old way of reading the link directly is kept as the fallback.
 
 ## 1.2.1
 

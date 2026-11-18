@@ -462,6 +462,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 events = EventSink { kind, fields -> h.evidence.event(kind, fields) },
                 scope = h.scope,
                 bufferDir = mediaBufferDir(h.context),
+                feedMaxResponseMs = BuildConfig.FEED_MAX_RESPONSE_MS,
                 onMediaRequest = { onMediaRequest(h, it) },
                 onDialRequest = { onDialRequest(h, it) },
                 // a lounge sender connected: another device's cast is told to the author

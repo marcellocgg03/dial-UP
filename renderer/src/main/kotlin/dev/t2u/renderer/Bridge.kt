@@ -556,6 +556,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             files = files,
             mp3Bitrate = base.mp3Bitrate,
             ffmpegLogLevel = base.ffmpegLogLevel,
+            feedMaxResponseMs = deps.feedMaxResponseMs,
         )
         media.startSuspending()
         mediaServer = media
