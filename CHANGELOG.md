@@ -6,6 +6,10 @@
 
 - **A first-launch question about yt-dlp.** The yt-dlp inside the app is old and YouTube refuses its streams, so the first cast of a new install fails until it is updated. A new install now asks once whether to update it. Update installs the newest yt-dlp at once; Not now installs nothing, and Update now in Settings does it later. The answer does not change the daily automatic update switch (on by default). It is asked once per install; an install that has already run is not asked.
 
+### Fixed
+
+- **A paused cast whose phone is gone is now ended by the idle limit.** When the phone's YouTube app disappears without saying it left, the speaker keeps the cast (1.2.0), but the "Disconnect an idle cast" setting then did nothing for a cast paused in that state, because there was no sender to end it for. The speaker stayed loaded and the app's notification kept saying it was casting. The idle limit now resets the player in that case too, which empties the speaker when "Clear the renderer when a cast ends" is on.
+
 ## 1.2.0
 
 ### Added
