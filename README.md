@@ -12,10 +12,22 @@ audio with yt-dlp, remuxes or transcodes with ffmpeg, and serves the stream to t
 
 ## Requirements
 
-- Android 8.0 (API 26) or newer
+- Android 8.0 (API 26) or newer, on a 64-bit ARM phone (arm64-v8a)
 - UPnP/DLNA renderer(s)
 - YouTube/YouTube Music apps for casting
 
+
+## Install
+
+Download the APK from the [Releases page](https://github.com/marcellocgg03/dial-UP/releases) and open it on the phone
+(Android asks once to allow installs from your browser or file manager). Stable releases are the ones named like `v1.2.1`. There is
+also one rolling **nightly** pre-release, a signed build of `main` that is replaced when `main` changes; it installs over the stable
+app and the next stable release installs over it.
+
+- **First launch:** the yt-dlp inside the app is old and YouTube refuses its streams, so a new install asks once whether to update it.
+  Choose *Update* to get the newest yt-dlp now; *Not now* installs nothing and *Update now* in Settings does it later.
+- **Updates:** DialUP shows a card and a notification when a newer version is on the Releases page. It never installs anything
+  by itself. Choose Stable or Nightly under Settings, App updates. yt-dlp updates itself once a day while the switch is on, never during a cast.
 
 ## Features
 
