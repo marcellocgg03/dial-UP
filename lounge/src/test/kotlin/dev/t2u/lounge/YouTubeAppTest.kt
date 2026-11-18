@@ -862,6 +862,45 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun anIdleEndOfAPausedCastWhoseSenderVanishedResetsThePlayer() = run<Unit> {
+        val a = startedApp(AppOptions("T2U test", "T2U", "Test", store, resetPlayerOnDisconnect = ResetPlayerOnDisconnectPolicy.ALL_EXPLICITLY_DISCONNECTED))
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "pause")
+        awaitUntil(what = "paused") { player.status == PlayerStatus.PAUSED }
+        // the phone's app goes away without saying so: the default policy keeps the cast, now paused with no sender
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+        assertEquals(PlayerStatus.PAUSED, player.status)
+        assertTrue(a.connectedSenders.isEmpty())
+        val screenGone = count("cl", "loungeScreenDisconnected")
+
+        a.endCast("paused for 30 min", "idleDisconnect")
+
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertEquals(1, clearCount())
+        assertEquals(screenGone, count("cl", "loungeScreenDisconnected"), "there is no sender to tell")
+    }
+
+    @Test
+    fun aPlaybackFailureWithNoSenderLeftDoesNotResetAPausedCast() = run<Unit> {
+        val a = startedApp(AppOptions("T2U test", "T2U", "Test", store, resetPlayerOnDisconnect = ResetPlayerOnDisconnectPolicy.ALL_EXPLICITLY_DISCONNECTED))
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "pause")
+        awaitUntil(what = "paused") { player.status == PlayerStatus.PAUSED }
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = null))
+        awaitUntil(what = "implicit disconnect") { disconnects.isNotEmpty() }
+        barrier("cl")
+
+        a.endCast("the speaker never started playing", "playbackFailed")
+
+        assertEquals(PlayerStatus.PAUSED, player.status)
+        assertEquals(0, clearCount())
+    }
+
+    @Test
     fun aPlaybackFailureWithoutASenderPostsNothing() = run<Unit> {
         startedApp()
         player.reportPlaybackFailure("the speaker never started playing")

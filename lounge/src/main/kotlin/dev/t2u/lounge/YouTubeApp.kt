@@ -352,7 +352,8 @@ class YouTubeApp(
     /**
      * Ends the cast from the receiver's side: tells the sender the screen is gone, drops the senders and resets the player,
      * which also clears the speaker when the clear-when-cast-ends setting is on. The reset policy is not consulted: no sender of
-     * this receiver is served any more. [kind] names the evidence event. Protocol-risk: every sender-facing message name stays
+     * this receiver is served any more. With no sender left only an idle disconnect of a paused player does anything: it resets
+     * the player, with nobody to tell. [kind] names the evidence event. Protocol-risk: every sender-facing message name stays
      * in this file.
      */
     suspend fun endCast(reason: String, kind: String = "castEnded") {
@@ -361,6 +362,19 @@ class YouTubeApp(
             if (state != AppState.RUNNING || session == null) return
             if (connected.isEmpty()) {
                 note(kind, "reason" to reason, "senders" to 0)
+                // A cast that outlived its phone (the sender vanished and the default policy kept it playing) can sit paused with
+                // nobody to tell. The idle limit still ends it, or the speaker stays loaded and counted as casting for good.
+                if (kind == "idleDisconnect" && player.status == PlayerStatus.PAUSED) {
+                    implicitlyDisconnected.clear()
+                    lastNav = null
+                    try {
+                        player.reset()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        problem("reset", e)
+                    }
+                }
                 return
             }
             val dropped = connected.toList()
