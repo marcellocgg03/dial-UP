@@ -36,8 +36,6 @@ internal class FeedRelay(
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val refreshMarginMs: Long = REFRESH_MARGIN_MS,
     private val cutMarginMs: Long = CUT_MARGIN_MS,
-    /** A test switch: when positive, every response is ended after this long, whatever its URL's expiry. 0 is off. */
-    private val maxResponseMs: Long = 0,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -96,7 +94,6 @@ internal class FeedRelay(
                 )
                 return
             }
-            val startedMs = nowMs()
             val cutAtMs = expireMs?.minus(cutMarginMs)
             if (expireMs != null) refresh = scheduleRefresh(videoId, expireMs - refreshMarginMs)
             val status = HttpStatusCode.fromValue(resp.status)
@@ -110,7 +107,7 @@ internal class FeedRelay(
                         withContext(Dispatchers.IO) {
                             val buf = ByteArray(FILE_CHUNK)
                             while (true) {
-                                if ((cutAtMs != null && nowMs() >= cutAtMs) || (maxResponseMs > 0 && nowMs() - startedMs >= maxResponseMs)) {
+                                if (cutAtMs != null && nowMs() >= cutAtMs) {
                                     out.note = "feed ended before the URL expires"
                                     break
                                 }

@@ -90,8 +90,6 @@ class MediaServer(
     private val feedFirst: Boolean = true,
     private val feedRefreshMarginMs: Long = FeedRelay.REFRESH_MARGIN_MS,
     private val feedCutMarginMs: Long = FeedRelay.CUT_MARGIN_MS,
-    /** A test switch for the feed (see [FeedRelay]); 0 is off. */
-    private val feedMaxResponseMs: Long = 0,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -161,7 +159,7 @@ class MediaServer(
 
     /** The source ffmpeg reads for a video pipe: this server, which asks YouTube per request (see [FeedRelay]). Null without a resolver and fetcher. */
     private val feedRelay: FeedRelay? =
-        if (resolver != null && upstream != null) FeedRelay(resolver, upstream, refreshMarginMs = feedRefreshMarginMs, cutMarginMs = feedCutMarginMs, maxResponseMs = feedMaxResponseMs) else null
+        if (resolver != null && upstream != null) FeedRelay(resolver, upstream, refreshMarginMs = feedRefreshMarginMs, cutMarginMs = feedCutMarginMs) else null
 
     /** Feed token to video ID; a token is secret and made for one ffmpeg attempt. Guarded by itself; the oldest go first. */
     private val feeds = object : LinkedHashMap<String, String>() {

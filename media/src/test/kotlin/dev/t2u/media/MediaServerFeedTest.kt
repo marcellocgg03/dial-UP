@@ -117,10 +117,10 @@ class MediaServerFeedTest {
         if (::upstream.isInitialized) upstream.stop(0)
     }
 
-    private fun serve(resolver: VideoResolver, maxResponseMs: Long = 0): MediaServer = MediaServer(
+    private fun serve(resolver: VideoResolver): MediaServer = MediaServer(
         "127.0.0.1", 0, JvmPipeLauncher(ffmpeg), { seen.add(it) }, File(dir, "buffer"), resolver,
         PipeRangeConfig(enabled = false), upstream = HttpFetcher(), ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP,
-        feedRefreshMarginMs = 5_000, feedCutMarginMs = 3_000, feedMaxResponseMs = maxResponseMs,
+        feedRefreshMarginMs = 5_000, feedCutMarginMs = 3_000,
     ).also {
         it.start()
         server = it
@@ -163,19 +163,5 @@ class MediaServerFeedTest {
         assertEquals(404, r.status)
         assertEquals(0, resolver.resolves.get())
         assertTrue(upstreamRequests.isEmpty())
-    }
-
-    @Test
-    @DisplayName("the test switch ends every response early however far off the expiry is, and the answer is still exact")
-    fun theMaxResponseSwitchCutsEarly() {
-        val resolver = ExpiringResolver(base, ttlSeconds = 3600)
-        val ms = serve(resolver, maxResponseMs = 2_000)
-        val path = ms.registerVideo(VideoEntry("sssssssssss", "adts"))
-        val r = RawHttp.request(ms.resolvedPort(), "GET", path)
-        assertEquals(200, r.status, "reported: $seen")
-        val whole = ProcessBuilder(ffmpeg, "-v", "error", "-i", File(dir, "src.m4a").absolutePath, "-vn", "-c:a", "copy", "-f", "adts", "-")
-            .start().inputStream.readBytes()
-        assertTrue(r.body.contentEquals(whole), "answer ${r.body.size} bytes, uncut ${whole.size} bytes")
-        assertTrue(upstreamRequests.size >= 4, "ffmpeg reconnected after each cut: $upstreamRequests")
     }
 }

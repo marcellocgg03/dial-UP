@@ -59,8 +59,6 @@ data class BridgeDeps(
     val events: EventSink,
     val scope: CoroutineScope,
     val bufferDir: File?,
-    /** A test switch: when positive the media server ends each ffmpeg feed response after this many ms (0 is off; see FeedRelay). */
-    val feedMaxResponseMs: Long = 0,
     val loungeEndpoints: LoungeEndpoints = LoungeEndpoints(),
     val onMediaRequest: (MediaRequest) -> Unit = {},
     val onDialRequest: (DialRequest) -> Unit = {},

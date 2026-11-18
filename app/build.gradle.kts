@@ -32,9 +32,6 @@ val stableVersionCode = 7
 // F-Droid build (-Pfdroid=true, set by F-Droid's recipe): the app never fetches code or looks for its own updates by itself.
 // The one place the F-Droid differences are decided is BuildConfig.FDROID; nothing is patched in the recipe.
 val fdroidBuild: Boolean = findProperty("fdroid") == "true"
-// Test builds only (-PfeedMaxResponseMs=8000): the media server ends every ffmpeg feed response after that many ms, to exercise the
-// reconnect with a fresh URL. 0, the default, is off.
-val feedMaxResponseMs: Long = (findProperty("feedMaxResponseMs") as String?)?.toLongOrNull() ?: 0L
 
 // Nightly build number (1..999): the commits on main since the last stable tag, passed by the nightly workflow.
 val nightlyBuild: Int? = (findProperty("nightlyBuild") as String?)?.let {
@@ -57,7 +54,6 @@ android {
 
     defaultConfig {
         buildConfigField("boolean", "FDROID", fdroidBuild.toString())
-        buildConfigField("long", "FEED_MAX_RESPONSE_MS", "${feedMaxResponseMs}L")
         applicationId = "dev.dialup"
         minSdk = 26
         targetSdk = 36 // stay on 36: Android 17 local-network enforcement starts at 37
