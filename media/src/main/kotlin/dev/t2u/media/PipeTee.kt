@@ -14,10 +14,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 private const val PIPE_CHUNK = 16 * 1024
 private const val FIRST_BYTE_TIMEOUT_MS = 20_000L
+
+/** How long one read of ffmpeg's output may wait for bytes after the first one before the stream counts as stalled. */
+internal const val STALL_TIMEOUT_MS = 60_000L
+private const val STALL_CHECK_MS = 5_000L
 
 /** Kills [proc] and waits up to 2 s for it to be gone (Node `res.on('close', kill)`). */
 internal suspend fun killAndWait(proc: Process) {
@@ -48,7 +53,11 @@ internal suspend fun PipeLauncher.startOwned(args: List<String>): Process {
  * One attempt's process for a live GET: starts it, waits for the first byte under a watchdog, then pumps stdout to
  * the speaker while teeing the same bytes into the range cache. The process never outlives the call.
  */
-internal class PipeTee(private val launcher: PipeLauncher) {
+internal class PipeTee(
+    private val launcher: PipeLauncher,
+    private val stallTimeoutMs: Long = STALL_TIMEOUT_MS,
+    private val stallCheckMs: Long = STALL_CHECK_MS,
+) {
     /**
      * Runs [args] and answers [call] from its stdout. Returns null when the answer was written (the call is done,
      * whether the speaker stayed to the end or hung up), else the failure detail of this attempt with nothing sent yet.
@@ -82,10 +91,30 @@ internal class PipeTee(private val launcher: PipeLauncher) {
                         writeFully(first, 0, first.size)
                         out.bytes += first.size
                         flush()
+                        // Nanotime at which the read now in progress began, 0 while none is. Time the speaker takes to
+                        // accept bytes (a pause) is not counted: only a read that waits on ffmpeg is.
+                        val readSince = AtomicLong(0)
+                        coroutineScope {
+                            val watchdog = launch {
+                                while (true) {
+                                    delay(stallCheckMs)
+                                    val since = readSince.get()
+                                    if (since != 0L && System.nanoTime() - since > TimeUnit.MILLISECONDS.toNanos(stallTimeoutMs)) {
+                                        out.note = "ffmpeg stalled for $stallTimeoutMs ms"
+                                        proc.destroyForcibly() // the read below ends, the answer closes, the speaker sees the end
+                                        return@launch
+                                    }
+                                }
+                            }
                         while (true) {
                             // file writes stay on the IO dispatcher, never on the Ktor event loop
                             val n = withContext(Dispatchers.IO) {
-                                val k = stdout.read(buf)
+                                readSince.set(System.nanoTime())
+                                val k = try {
+                                    stdout.read(buf)
+                                } finally {
+                                    readSince.set(0)
+                                }
                                 val t = tee
                                 if (t != null) {
                                     if (k > 0) {
@@ -105,6 +134,8 @@ internal class PipeTee(private val launcher: PipeLauncher) {
                             writeFully(buf, 0, n)
                             out.bytes += n
                             flush()
+                        }
+                            watchdog.cancel()
                         }
                     } catch (e: CancellationException) {
                         throw e

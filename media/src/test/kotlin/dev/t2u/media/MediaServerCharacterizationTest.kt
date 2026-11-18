@@ -142,8 +142,8 @@ class MediaServerCharacterizationTest {
             server = it
         }
 
-    private fun serveVideoPipe(launcher: PipeLauncher?, resolver: VideoResolver?, config: PipeRangeConfig = PipeRangeConfig()): MediaServer =
-        MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, config).also {
+    private fun serveVideoPipe(launcher: PipeLauncher?, resolver: VideoResolver?, config: PipeRangeConfig = PipeRangeConfig(), stallMs: Long = STALL_TIMEOUT_MS): MediaServer =
+        MediaServer("127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver, config, pipeStallTimeoutMs = stallMs).also {
             it.start()
             server = it
         }
@@ -481,6 +481,35 @@ class MediaServerCharacterizationTest {
         assertEquals(502, r.status)
         assertEquals("no first byte after 20 s", awaitReport().note)
         assertTrue(proc.destroyed)
+    }
+
+    @Test
+    @DisplayName("pipe: an ffmpeg that goes quiet after its first bytes is killed and the answer ends, so the speaker is not left waiting")
+    fun aStalledFfmpegIsKilledAndTheAnswerEnds() {
+        val release = CountDownLatch(1)
+        val stalls = object : InputStream() {
+            private var sent = false
+
+            override fun read(): Int = throw UnsupportedOperationException()
+
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (!sent) {
+                    sent = true
+                    java.util.Arrays.fill(b, off, off + 1000, 7)
+                    return 1000
+                }
+                release.await(60, TimeUnit.SECONDS)
+                return -1
+            }
+        }
+        val proc = FakeProcess(stdout = stalls, exit = 137, onDestroy = { release.countDown() })
+        val ms = serveVideoPipe(ScriptedLauncher { proc }, null, stallMs = 400)
+        val path = ms.register(StreamEntry(StreamSource.PipeSource(listOf("-i", "x", "-vn")), "adts", "audio/aac", "unit"))
+        val r = RawHttp.request(ms.resolvedPort(), "GET", path)
+        assertEquals(200, r.status)
+        assertEquals(1000, r.body.size)
+        assertTrue(proc.destroyed, "a stalled ffmpeg must be killed")
+        assertEquals("ffmpeg stalled for 400 ms", awaitReport().note)
     }
 
     @Test

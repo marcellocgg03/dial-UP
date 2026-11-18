@@ -483,7 +483,7 @@ class MediaServerLadderTest {
             listOf(
                 "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "https,tls,tcp,crypto",
                 "-headers", "User-Agent: ua\r\nAccept: */*\r\n",
-                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", "30000000",
                 "-ss", "30", "-i", "https://rr1---sn-x.googlevideo.com/v?x=1", "-vn",
             ),
             urlInputArgs(info, 30),
@@ -492,7 +492,7 @@ class MediaServerLadderTest {
         assertEquals(
             listOf(
                 "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "https,tls,tcp,crypto",
-                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-rw_timeout", "30000000",
                 "-i", "https://rr1---sn-x.googlevideo.com/v?x=1", "-vn",
             ),
             bare,
