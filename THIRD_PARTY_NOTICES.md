@@ -77,6 +77,6 @@ carried into the APK with that library.
 
 ## Data and other notes
 
-- yt-dlp downloads extractor code and EJS scripts from GitHub at the user's request (Settings, Update now).
+- yt-dlp downloads extractor code and EJS scripts from GitHub when the user asks (Settings, Update now, or the Update answer to the question asked once at first launch) and, unless the user turns it off, once a day through the automatic update switch (off by default in an F-Droid build).
   That code is not part of this repository.
 - This project is not affiliated with or endorsed by YouTube, Google, or any speaker maker. The names are used only to say what the app works with.
