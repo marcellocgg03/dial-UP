@@ -259,7 +259,7 @@ class EvidenceLog(
     fun clear(): Boolean {
         if (closed.get()) return false
         return try {
-            executor.submit { rotating.clear() }.get(2000, TimeUnit.MILLISECONDS)
+            executor.submit { rotating.clear(); File(dir, LogArchive.ZIP_NAME).delete() }.get(2000, TimeUnit.MILLISECONDS)
             true
         } catch (t: Throwable) {
             warn("evidence clear failed", t)
