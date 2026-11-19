@@ -126,13 +126,18 @@ class MediaServerFeedTest {
         server = it
     }
 
+    /**
+     * The playing time of [bytes], found by decoding them. ffprobe's `format=duration` is only an estimate for ADTS (size over
+     * bitrate) and moves with the ffmpeg version's AAC encoder (64 s for this 60 s track with ffmpeg 7, 59.6 s with 4.4).
+     */
     private fun durationOf(bytes: ByteArray, name: String): Double {
         val f = File(dir, name).also { it.writeBytes(bytes) }
-        val p = ProcessBuilder(ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f.absolutePath)
+        val p = ProcessBuilder(ffmpeg, "-v", "error", "-nostats", "-progress", "pipe:1", "-i", f.absolutePath, "-f", "null", "-")
             .redirectErrorStream(true).start()
-        val text = p.inputStream.readBytes().toString(Charsets.UTF_8).trim()
+        val text = p.inputStream.readBytes().toString(Charsets.UTF_8)
         p.waitFor()
-        return text.toDouble()
+        val micros = Regex("out_time_us=(\\d+)").findAll(text).last().groupValues[1].toLong()
+        return micros / 1_000_000.0
     }
 
     @Test
