@@ -1,1 +1,0 @@
-Cast YouTube and YouTube Music audio to UPnP/DLNA renderers on your Wi-Fi. See the project's release notes for the full list of changes.
