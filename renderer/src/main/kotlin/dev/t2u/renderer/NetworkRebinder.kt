@@ -79,6 +79,13 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
         }
     }
 
+    private suspend fun flushRenderers(oldIp: String, newIp: String) {
+        val reg = registry ?: return
+        for (r in reg.renderers().toList()) {
+            step("renderer", "flush") { reg.remove(r.udn, "removed", "the network changed from $oldIp to $newIp") }
+        }
+    }
+
     /** See [Bridge.rebindNetwork]. */
     suspend fun rebindNetwork(newNet: BridgeNetwork) {
         netLock.withLock {
@@ -123,6 +130,9 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
                     if (fresh.isBound()) ssdp = fresh else withContext(Dispatchers.IO) { fresh.stop() }
                 }
             }
+            // a different LAN (the phone joined a car, a hotspot, another site): the speakers of the old one are gone and nothing
+            // is sent to them; discovery runs again on the new network below
+            if (!sameLan(oldIp, newIp)) flushRenderers(oldIp, newIp)
             var moved = 0
             for (receiver in host.receivers) {
                 val running = receiver.status == "running"
@@ -163,4 +173,14 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
             }
         }
     }
+}
+
+/**
+ * True when both IPv4 addresses sit in the same /24, the size of a home LAN. A rebind between them is a roam or a new lease
+ * on the same network; anything else (or an address that is not IPv4) is a different LAN.
+ */
+internal fun sameLan(a: String, b: String): Boolean {
+    val pa = a.split('.')
+    val pb = b.split('.')
+    return pa.size == 4 && pb.size == 4 && pa.take(3) == pb.take(3)
 }

@@ -542,7 +542,7 @@ class BridgeCharacterizationTest {
     }
 
     @Test
-    @DisplayName("a move to an address nothing can bind leaves no client, no responder, no media listener and no DIAL server, and housekeeping tries each")
+    @DisplayName("a move to an address nothing can bind leaves no client, no responder and no media listener, and housekeeping tries each; the move is to another LAN, so the renderer and its DIAL server are flushed first")
     fun aMoveToAnAddressNothingCanBindIsRetriedByHousekeeping() = h.run<Unit> {
         val unbindable = InetAddress.getByName("192.0.2.1")
         val bridge = h.newBridge(mediaRebindBackoffMs = emptyList())
@@ -563,18 +563,17 @@ class BridgeCharacterizationTest {
         assertNull(bridge.ssdpClientForTest(), "a client that could not bind is not installed")
         val rebind = h.events.filter { it.first == "bridge-error" }.map { it.second["where"] }
         assertTrue("rebind:media" in rebind, "the media step failed and was logged: $rebind")
-        assertTrue("rebind:dial" in rebind, "the DIAL step failed and was logged: $rebind")
+        // another LAN: the renderer was flushed, so no receiver is left for a DIAL step to fail on
+        assertFalse("rebind:dial" in rebind, "no DIAL step runs after the flush: $rebind")
 
         val marker = h.events.size
         assertTrue(bridge.housekeeping("adb"))
 
         val where = after(marker, "bridge-error").map { it["where"] }
         assertTrue("repair:media" in where, "the media server was tried again: $where")
-        assertTrue("repair:dial" in where, "the DIAL server was tried again: $where")
         val client = after(marker, "ssdp-repair").single { it["what"] == "client" }
         assertEquals(false, client["ok"], "the new client could not bind either")
         assertEquals(false, after(marker, "media-repair").single()["ok"])
-        assertEquals(false, after(marker, "dial-repair").single()["ok"])
         assertNull(bridge.ssdpClientForTest())
     }
 

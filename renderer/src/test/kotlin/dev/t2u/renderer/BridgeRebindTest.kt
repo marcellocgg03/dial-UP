@@ -275,4 +275,33 @@ class BridgeRebindTest {
         h.awaitUntil("the receiver is told to play again") { h.speakerCount("Play") > playCount }
         assertEquals("PLAYING", rendererStatus(bridge))
     }
+
+    @Test
+    @DisplayName("a move to another LAN flushes the renderers of the old one and sends nothing to them; a move inside the same /24 keeps them")
+    fun moveToAnotherLanFlushesRenderers() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(other)) // 127.0.0.1 -> 127.0.0.2, same /24
+        assertTrue(bridge.state()["renderers"].toString().contains(HARNESS_RENDERER_UDN), "same LAN keeps the renderer")
+        assertTrue(h.events.none { it.first == "renderer" && it.second["event"] == "removed" })
+
+        val marker = h.events.size
+        bridge.networkLost()
+        bridge.rebindNetwork(h.network(InetAddress.getByName("127.0.1.1"))) // another /24
+        val removed = h.events.drop(marker).filter { it.second["event"] == "removed" }
+        assertTrue(removed.isNotEmpty(), "the old LAN's renderer is removed: ${h.events.drop(marker).map { it.first to it.second["event"] }}")
+        assertTrue(removed.any { it.second["reason"].toString().contains("the network changed") })
+    }
+
+    @Test
+    @DisplayName("sameLan compares the first three octets and treats anything that is not IPv4 as another LAN")
+    fun sameLanRule() {
+        assertTrue(sameLan("192.168.86.27", "192.168.86.200"))
+        assertFalse(sameLan("192.168.86.27", "192.168.8.102"))
+        assertFalse(sameLan("192.168.86.27", "fe80::1"))
+        assertFalse(sameLan("", "192.168.86.27"))
+    }
 }
