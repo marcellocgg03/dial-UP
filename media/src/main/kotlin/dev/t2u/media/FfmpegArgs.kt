@@ -29,6 +29,19 @@ fun urlInputArgs(
 }
 
 /**
+ * The input for a [FeedRelay] URL (this server, plain http on the phone's own address, no headers): the same reconnect and
+ * timeout switches as [urlInputArgs], so a response the feed ends early is continued by a new Range request.
+ */
+fun feedInputArgs(url: String, startAt: Int, logLevel: String = "error"): List<String> {
+    val args = mutableListOf("-hide_banner", "-loglevel", logLevel, "-protocol_whitelist", "http,tcp")
+    args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
+    args += listOf("-rw_timeout", RW_TIMEOUT_US)
+    if (startAt > 0) args += listOf("-ss", startAt.toString())
+    args += listOf("-i", url, "-vn")
+    return args
+}
+
+/**
  * The input side of mediaServer.js `#fileInputArgs`: ffmpeg reads the downloaded file at [path], seeking on the
  * input side to [startAt] seconds when that is positive. [logLevel] is the `ffmpegLogLevel` config switch.
  */

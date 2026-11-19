@@ -86,6 +86,10 @@ class MediaServer(
     private val maxFfmpegPerToken: Int = MAX_FFMPEG_PER_TOKEN,
     /** How long a live pipe may wait on ffmpeg for bytes, after the first, before it is killed and the answer ends. */
     private val pipeStallTimeoutMs: Long = STALL_TIMEOUT_MS,
+    /** When true a video pipe's first attempt reads through this server instead of YouTube's URL. For tests that pin the old arguments. */
+    private val feedFirst: Boolean = true,
+    private val feedRefreshMarginMs: Long = FeedRelay.REFRESH_MARGIN_MS,
+    private val feedCutMarginMs: Long = FeedRelay.CUT_MARGIN_MS,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -152,6 +156,15 @@ class MediaServer(
     }
 
     private val directRelay = DirectRelay(resolver, upstream)
+
+    /** The source ffmpeg reads for a video pipe: this server, which asks YouTube per request (see [FeedRelay]). Null without a resolver and fetcher. */
+    private val feedRelay: FeedRelay? =
+        if (resolver != null && upstream != null) FeedRelay(resolver, upstream, refreshMarginMs = feedRefreshMarginMs, cutMarginMs = feedCutMarginMs) else null
+
+    /** Feed token to video ID; a token is secret and made for one ffmpeg attempt. Guarded by itself; the oldest go first. */
+    private val feeds = object : LinkedHashMap<String, String>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>): Boolean = size > MAX_FEEDS
+    }
     private val byteRanges = ByteRangeResponder()
 
     /** Finished runs of video pipe tokens, for ranged GETs; null when disabled or without a [bufferDir]. */
@@ -246,6 +259,7 @@ class MediaServer(
         server?.stop(200, 1000)
         server = null
         rangeCache?.clear()
+        feedRelay?.close()
         releaseAllTokenPins()
         files?.close()
     }
@@ -407,6 +421,11 @@ class MediaServer(
         try {
             val uri = call.request.uri
             val method = call.request.httpMethod
+            val feed = FEED_PATH.matchEntire(uri)
+            if (feed != null) {
+                serveFeed(call, feed.groupValues[1], method, out)
+                return
+            }
             val match = TOKEN_PATH.matchEntire(uri)
             val token = match?.groupValues?.get(1).orEmpty()
             val entry = match?.let { synchronized(tokens) { tokens[token] } }
@@ -453,6 +472,32 @@ class MediaServer(
         } finally {
             report(call, out)
         }
+    }
+
+    /** A GET or HEAD of an ffmpeg feed: only from this phone, only for a token this server made. */
+    private suspend fun serveFeed(call: ApplicationCall, token: String, method: HttpMethod, out: Outcome) {
+        val relay = feedRelay
+        val id = synchronized(feeds) { feeds[token] }
+        val remote = call.request.local.remoteAddress
+        val own = remote == "127.0.0.1" || remote == "::1" || remote == host
+        if (relay == null || id == null || !own || (method != HttpMethod.Get && method != HttpMethod.Head)) {
+            out.status = 404
+            call.respond(HttpStatusCode.NotFound)
+            return
+        }
+        out.label = "feed"
+        relay.serve(call, id, method == HttpMethod.Head, out)
+    }
+
+    /** The URL ffmpeg reads for [videoId]: this server's own address and a new secret token. */
+    private fun feedUrl(videoId: String): String {
+        val bytes = ByteArray(16)
+        random.nextBytes(bytes)
+        val token = bytes.joinToString("") { "%02x".format(it) }
+        synchronized(feeds) { feeds[token] = videoId }
+        val h = host.takeIf { it != "0.0.0.0" && it != "::" && it.isNotBlank() } ?: "127.0.0.1"
+        val shown = if (':' in h) "[$h]" else h
+        return "http://$shown:$boundPort/feed/$token"
     }
 
     private fun report(call: ApplicationCall, out: Outcome) {
@@ -566,7 +611,13 @@ class MediaServer(
         is StreamSource.VideoPipe -> resolver?.let { r ->
             val id = src.entry.videoId
             val startAt = src.entry.startAt
-            val attempts = mutableListOf(
+            val attempts = mutableListOf<PipeAttempt>()
+            if (feedFirst && feedRelay != null) {
+                attempts += PipeAttempt("the feed") {
+                    feedInputArgs(feedUrl(id), startAt, ffmpegLogLevel)
+                }
+            }
+            attempts += listOf(
                 PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy) },
                 PipeAttempt("a fresh extraction") {
                     r.invalidate(id)
@@ -939,5 +990,7 @@ class MediaServer(
         private val DIRECT_EXT = Regex("[a-z0-9]{1,5}")
         private val DIRECT_MIME = Regex("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
         private val TOKEN_PATH = Regex("^/stream/([0-9a-f]{32})\\.\\w+$")
+        private val FEED_PATH = Regex("^/feed/([0-9a-f]{32})$")
+        private const val MAX_FEEDS = 64
     }
 }
