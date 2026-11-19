@@ -367,7 +367,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val ip = h.wifiIpv4() ?: return null
         val ifaceName = h.wifiInterfaceName() ?: return null
         val nif = NetworkInterface.getByName(ifaceName)
-        return BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false)))
+        val prefix = nif?.interfaceAddresses?.firstOrNull { it.address == ip }?.networkPrefixLength?.toInt()
+        return BridgeNetwork(ip, nif, listOf(ListenSpec("explicit", null, 1900, nif, false)), prefixLength = prefix)
     }
 
     /**
