@@ -955,6 +955,9 @@ class Renderer(
                 cur.fetched = true
             },
             onFailure = { cur.streamFailed = true },
+            onResponseEnd = { bytes ->
+                if (bytes > 0) cur.sentSomething = true else cur.sentNothing = true
+            },
             onBusy = { cur.busy = true },
             onUpstreamRefused = { cur.upstreamRefused = true },
             onRecovering = { on ->
@@ -2232,7 +2235,13 @@ class Renderer(
             }
             return
         }
-        val why = if (c.fetched) "fetched the stream but never started playing" else "never requested the stream"
+        // a speaker that asked for the stream and got no byte did not fail to play it: our side had no audio to send
+        val noData = c.fetched && c.sentNothing && !c.sentSomething
+        val why = when {
+            noData -> "asked for the stream but the media server had no audio to send"
+            c.fetched -> "fetched the stream but never started playing"
+            else -> "never requested the stream"
+        }
         lastError = if (refused) "YouTube refused the stream" else "Renderer $why"
         note(
             "error",

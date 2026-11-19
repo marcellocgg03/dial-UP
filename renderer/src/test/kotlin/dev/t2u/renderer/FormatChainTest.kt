@@ -109,6 +109,45 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("a speaker that fetched a stream the server sent no byte of is not blamed: the error says the server had no audio to send")
+    fun aStreamThatGotNoBytesIsNotBlamedOnTheSpeaker() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        val forced = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, outputFormat = "mp3", prefetch = false)
+        }
+        RendererHarness(fake, config = forced).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            val first = h.registered.first()
+            checkNotNull(first.onRequest).invoke()
+            checkNotNull(first.onResponseEnd).invoke(0L)
+            checkNotNull(first.onFailure).invoke()
+            waitUntil { h.renderer.status == PlayerStatus.STOPPED }
+            assertEquals("Renderer asked for the stream but the media server had no audio to send", h.renderer.lastError)
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that fetched a stream and was sent bytes still gets the old wording")
+    fun aStreamThatGotBytesKeepsTheOldWording() = withFake(FakeRenderer(neverPlay = true)) { fake ->
+        val forced = { dir: File ->
+            Config(dataDir = dir, pollIntervalMs = 50, startTimeoutMs = 60_000, outputFormat = "mp3", prefetch = false)
+        }
+        RendererHarness(fake, config = forced).use { h ->
+            h.renderer.init()
+            assertTrue(h.renderer.play(Video(DQW), 0.0))
+            waitUntil { h.registered.isNotEmpty() }
+            val first = h.registered.first()
+            checkNotNull(first.onRequest).invoke()
+            checkNotNull(first.onResponseEnd).invoke(0L)
+            checkNotNull(first.onResponseEnd).invoke(4096L)
+            checkNotNull(first.onFailure).invoke()
+            waitUntil { h.renderer.status == PlayerStatus.STOPPED }
+            assertEquals("Renderer fetched the stream but never started playing", h.renderer.lastError)
+        }
+    }
+
+    @Test
     @DisplayName("the media server's own busy answer does not step down a format: the same format is tried again once")
     fun aBusyAnswerRepeatsTheFormatInsteadOfFallingBack() = withFake(FakeRenderer(neverPlay = true).playsOnlyMp3()) { fake ->
         RendererHarness(fake, config = ::streaming).use { h ->

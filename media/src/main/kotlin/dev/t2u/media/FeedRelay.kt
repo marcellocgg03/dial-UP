@@ -18,6 +18,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 /**
  * The source an ffmpeg pipe reads from, instead of YouTube's own URL: ffmpeg asks this server (over the phone's own address),
@@ -82,8 +83,12 @@ internal class FeedRelay(
         val range = call.request.headers[HttpHeaders.Range]?.takeIf { it.length <= MAX_RANGE_HEADER && SIMPLE_RANGE.matches(it) }
         var resp: UpstreamResponse? = null
         var refresh: Job? = null
+        var timing: UpstreamTiming? = null
+        val started = System.nanoTime()
         try {
             var info = lookup(videoId)
+            // how long the URL took to get (0 when it was remembered): ffmpeg waits on this under its 30 s read timeout
+            out.upstream.add(UpstreamTiming("lookup").also { it.totalMs = elapsedMs(started) })
             // A URL already inside the cut margin gets one fresh lookup first, so the answer is not cut at once.
             var expireMs = urlExpire(info.url)?.times(1000)
             if (expireMs != null && expireMs - nowMs() <= cutMarginMs) {
@@ -95,16 +100,22 @@ internal class FeedRelay(
                 val headers = LinkedHashMap<String, String>(info.headers)
                 headers["Accept-Encoding"] = "identity"
                 if (range != null) headers["Range"] = range
+                val fetchStart = System.nanoTime()
                 val fetched = upstream.fetch(UpstreamRequest(info.url, if (head) "HEAD" else "GET", headers))
-                out.upstream.add(UpstreamTiming("feed", fetched.status, 0))
+                val first = UpstreamTiming(if (retried) "feed retry" else "feed", fetched.status, elapsedMs(fetchStart))
+                out.upstream.add(first)
                 if ((fetched.status == 403 || fetched.status == 410) && !retried) {
                     fetched.close()
+                    first.totalMs = first.ttfbMs
                     retried = true
+                    val refreshStart = System.nanoTime()
                     info = lookupFresh(videoId)
+                    out.upstream.add(UpstreamTiming("fresh lookup").also { it.totalMs = elapsedMs(refreshStart) })
                     expireMs = urlExpire(info.url)?.times(1000)
                     continue
                 }
                 resp = fetched
+                timing = first
                 break
             }
             val success = resp.status in 200..299
@@ -134,6 +145,17 @@ internal class FeedRelay(
                     override val contentLength: Long? = length
 
                     override suspend fun writeTo(channel: ByteWriteChannel) {
+                        try {
+                            streamBody(channel)
+                        } finally {
+                            timing?.let {
+                                it.totalMs = elapsedMs(started)
+                                it.bytes = out.bytes
+                            }
+                        }
+                    }
+
+                    private suspend fun streamBody(channel: ByteWriteChannel) {
                         withContext(Dispatchers.IO) {
                             val buf = ByteArray(FILE_CHUNK)
                             while (true) {
@@ -173,6 +195,8 @@ internal class FeedRelay(
             resp?.close()
         }
     }
+
+    private fun elapsedMs(startNanos: Long): Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
 
     /** One background lookup at [atMs]: drop the cached URL and resolve again, so the answer after the cut is already there. */
     private fun scheduleRefresh(videoId: String, atMs: Long): Job = scope.launch {
