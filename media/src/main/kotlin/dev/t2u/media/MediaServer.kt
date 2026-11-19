@@ -454,6 +454,11 @@ class MediaServer(
                     directRelay.serveDirect(call, entry, src, head, out, token)
                 }
             }
+            if (!head) {
+                val src = entry.source
+                val video = (src as? StreamSource.VideoPipe)?.entry ?: (src as? StreamSource.DirectProxy)?.entry
+                video?.let { v -> runCatching { v.onResponseEnd?.invoke(out.bytes) } }
+            }
             if (!head && out.status in 500..599) {
                 val src = entry.source
                 val video = (src as? StreamSource.VideoPipe)?.entry ?: (src as? StreamSource.DirectProxy)?.entry

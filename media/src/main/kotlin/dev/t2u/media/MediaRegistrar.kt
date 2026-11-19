@@ -32,6 +32,11 @@ data class VideoEntry(
      * not at fault, so the renderer should end the cast instead of trying the same source in another format.
      */
     val onUpstreamRefused: (() -> Unit)? = null,
+    /**
+     * Runs when a GET of this stream has ended, with the number of bytes that went to the speaker. Zero means the server had
+     * nothing to send (the audio source gave no data in time), which is not the speaker's doing.
+     */
+    val onResponseEnd: ((Long) -> Unit)? = null,
 )
 
 /** What the renderer side needs from the media server: hand a video over, get the path to give the speaker. */
