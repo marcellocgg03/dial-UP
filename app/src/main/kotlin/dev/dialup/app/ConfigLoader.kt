@@ -33,7 +33,7 @@ fun applySettings(base: Config, s: AppSettingsData): Config =
         logLevel = when (s.logEnabled) {
             null -> base.logLevel
             false -> "off"
-            true -> if (base.logLevel == "off") "info" else base.logLevel
+            true -> if (base.logLevel == "off") "debug" else base.logLevel
         },
         prefetch = s.prefetch ?: base.prefetch,
         gapless = s.gapless ?: base.gapless,

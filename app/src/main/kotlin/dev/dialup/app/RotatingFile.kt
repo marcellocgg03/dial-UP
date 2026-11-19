@@ -7,7 +7,8 @@ import java.io.FileOutputStream
 
 /**
  * Append-only file with size-based rotation: current -> name.1 -> ... -> name.<keep>, the oldest
- * file is deleted on a rotation (3 files of 8 MB). Pure JVM (no android.*).
+ * file is deleted on a rotation. With [maxAgeMs] above 0 a file whose last write is older than that is deleted as a whole
+ * (checked when the log opens, at each rotation and at most once an hour while it is written). Pure JVM (no android.*).
  *
  * Not thread-safe: the owner calls it from one thread (EvidenceLog uses its single writer thread).
  */
@@ -16,12 +17,36 @@ class RotatingFile(
     val name: String,
     private val rotateBytes: Long,
     private val keep: Int = 2,
+    private val maxAgeMs: Long = 0L,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     val current: File = File(dir, name)
     private var stream: FileOutputStream? = null
     private var size = 0L
+    private var lastPurge = Long.MIN_VALUE
+
+    /**
+     * Deletes every file whose last write is more than [maxAgeMs] ago, the current one included (a file keeps its write time
+     * when it is renamed, so a rotated file's age is the time of its newest line). Returns how many were deleted.
+     */
+    fun purgeOld(): Int {
+        if (maxAgeMs <= 0) return 0
+        val now = clock()
+        lastPurge = now
+        var deleted = 0
+        for (f in allFiles()) {
+            if (!f.exists() || now - f.lastModified() <= maxAgeMs) continue
+            if (f == current) {
+                closeQuietly()
+                size = 0
+            }
+            if (f.delete()) deleted++
+        }
+        return deleted
+    }
 
     fun append(bytes: ByteArray) {
+        if (maxAgeMs > 0 && (stream == null || clock() - lastPurge >= PURGE_EVERY_MS)) purgeOld()
         var out = stream
         if (out == null) {
             dir.mkdirs()
@@ -33,6 +58,7 @@ class RotatingFile(
             out.close()
             stream = null
             rotate()
+            purgeOld()
             dir.mkdirs()
             out = FileOutputStream(current, true)
             stream = out
@@ -77,6 +103,10 @@ class RotatingFile(
             if (from.exists()) from.renameTo(File(dir, "$name.${i + 1}"))
         }
         current.renameTo(File(dir, "$name.1"))
+    }
+
+    private companion object {
+        const val PURGE_EVERY_MS = 60L * 60 * 1000
     }
 
     private fun closeQuietly() {

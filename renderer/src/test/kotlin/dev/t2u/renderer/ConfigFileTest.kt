@@ -193,7 +193,7 @@ class ConfigFileTest {
 
     @Test
     fun logLevelIsOffInfoOrDebugInExactLowercase() {
-        assertEquals("info", parse("{}").config.logLevel)
+        assertEquals("debug", parse("{}").config.logLevel)
         for (ok in listOf("off", "info", "debug")) {
             val r = parse("""{"logLevel":"$ok"}""")
             assertEquals(ok, r.config.logLevel)
@@ -201,7 +201,7 @@ class ConfigFileTest {
         }
         for (bad in listOf("\"verbose\"", "\"OFF\"", "1", "null", "true", "\"SECRETVALUE\"")) {
             val r = parse("""{"logLevel":$bad}""")
-            assertEquals("info", r.config.logLevel, bad)
+            assertEquals("debug", r.config.logLevel, bad)
             assertEquals(1, r.warnings.size, bad)
             assertContains(r.warnings.single(), "logLevel")
             assertFalse("verbose" in r.warnings.single() || "OFF" in r.warnings.single() || "SECRETVALUE" in r.warnings.single(), "the warning does not echo the value")

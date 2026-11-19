@@ -122,7 +122,7 @@ class ConfigOverlayTest {
     fun theLogToggleMapsToALogLevel() {
         assertEquals("off", overlay(base, AppSettingsData(logEnabled = false)).logLevel)
         assertEquals("debug", overlay(base.copy(logLevel = "debug"), AppSettingsData(logEnabled = true)).logLevel)
-        assertEquals("info", overlay(base.copy(logLevel = "off"), AppSettingsData(logEnabled = true)).logLevel)
+        assertEquals("debug", overlay(base.copy(logLevel = "off"), AppSettingsData(logEnabled = true)).logLevel)
         assertEquals("debug", overlay(base.copy(logLevel = "debug"), AppSettingsData()).logLevel)
         assertEquals("off", overlay(base.copy(logLevel = "off"), AppSettingsData()).logLevel)
     }

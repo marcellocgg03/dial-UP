@@ -11,10 +11,11 @@ import androidx.core.content.FileProvider
 import java.io.File
 
 /**
- * Opens the system share sheet with the current log file and nothing else (an unrelated file must never be shared). Started
+ * Opens the system share sheet with one zip of the event-log files (every rotated file and the current one, behind a
+ * summary of their time ranges) and nothing else (an unrelated file must never be shared). Started
  * by the Share log button on the Settings tab (no longer by the notification); not exported. A chooser started by an Activity carries the
  * one-file read grant reliably, which is why this is an Activity and not a service trampoline.
- * Rotated logs, state.json, store.json and config.json are never offered.
+ * state.json, store.json and config.json are never offered.
  */
 class ShareLogActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -22,13 +23,17 @@ class ShareLogActivity : Activity() {
         try {
             // Make the file complete before it is handed over.
             ServiceHub.service?.evidence?.flush()
-            val file = File(eventLogDir(filesDir), EvidenceLog.FILE_NAME)
-            if (!file.isFile || file.length() == 0L) {
+            val dir = eventLogDir(filesDir)
+            val file = File(dir, LogArchive.ZIP_NAME)
+            val logs = LogArchive.logFiles(dir)
+            if (logs.isEmpty()) {
+                file.delete()
                 Toast.makeText(this, "No log yet", Toast.LENGTH_SHORT).show()
             } else {
+                LogArchive.build(logs, file)
                 val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
                 val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
+                    type = "application/zip"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     putExtra(Intent.EXTRA_SUBJECT, "DialUP log")
                     clipData = ClipData.newRawUri("log", uri)
