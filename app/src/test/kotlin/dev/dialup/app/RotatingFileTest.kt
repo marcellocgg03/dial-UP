@@ -80,4 +80,33 @@ class RotatingFileTest {
         )
         rf.close()
     }
+
+    @Test
+    fun `a file whose last write is older than the age limit is deleted, a newer one stays`() {
+        val dir = File(tmp, "aged").also { it.mkdirs() }
+        val day = 24L * 60 * 60 * 1000
+        val now = 100 * day
+        val old = File(dir, "a.jsonl.2").also { it.writeText("old"); it.setLastModified(now - 8 * day) }
+        val recent = File(dir, "a.jsonl.1").also { it.writeText("recent"); it.setLastModified(now - 6 * day) }
+        val stale = File(dir, "a.jsonl").also { it.writeText("stale"); it.setLastModified(now - 9 * day) }
+        val rf = RotatingFile(dir, "a.jsonl", rotateBytes = 1000, keep = 2, maxAgeMs = 7 * day, clock = { now })
+
+        rf.append("fresh\n".toByteArray())
+
+        assertFalse(old.exists(), "8 days old: deleted")
+        assertTrue(recent.exists(), "6 days old: kept")
+        assertEquals("fresh\n", File(dir, "a.jsonl").readText(), "a stale current file is replaced, its lines are not appended to")
+        assertEquals(listOf("a.jsonl.1", "a.jsonl"), rf.files().map { it.name })
+        rf.close()
+    }
+
+    @Test
+    fun `without an age limit nothing is deleted by age`() {
+        val dir = File(tmp, "unaged").also { it.mkdirs() }
+        val f = File(dir, "a.jsonl.1").also { it.writeText("x"); it.setLastModified(1L) }
+        val rf = RotatingFile(dir, "a.jsonl", rotateBytes = 1000, keep = 2)
+        rf.append("y".toByteArray())
+        assertTrue(f.exists())
+        rf.close()
+    }
 }

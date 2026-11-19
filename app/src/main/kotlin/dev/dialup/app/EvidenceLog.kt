@@ -163,7 +163,7 @@ class EvidenceLog(
 
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
-    private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = KEEP_ROTATED)
+    private val rotating = RotatingFile(dir, FILE_NAME, ROTATE_BYTES, keep = KEEP_ROTATED, maxAgeMs = MAX_AGE_MS)
     private val closed = AtomicBoolean(false)
 
     val isClosed: Boolean get() = closed.get()
@@ -302,7 +302,10 @@ class EvidenceLog(
         const val ROTATE_BYTES = 8L * 1024 * 1024
 
         /** How many rotated files are kept next to the current one. */
-        const val KEEP_ROTATED = 2
+        const val KEEP_ROTATED = 5
+
+        /** A log file whose newest line is older than this is deleted: 7 days. */
+        const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
 
         /** The most lines that wait for the writer thread at once (about 16 MiB at the longest line). */
         const val MAX_PENDING_LINES = 2048
