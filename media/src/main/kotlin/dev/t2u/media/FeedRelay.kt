@@ -39,9 +39,41 @@ internal class FeedRelay(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * The newest answer this relay got for each video. The resolver keeps a URL for at most an hour, but a feed reconnect can
+     * come hours after the last lookup (ffmpeg only reads when the speaker has drained its pipe), and a lookup takes up to
+     * 25 s while ffmpeg waits for the response headers under its 30 s read timeout. So a URL is reused here until it is
+     * [cutMarginMs] from its expiry, whatever the resolver cache has dropped.
+     */
+    private val known = object : LinkedHashMap<String, ResolvedInfo>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ResolvedInfo>?) = size > MAX_KNOWN
+    }
+
     /** Ends the background lookups. */
     fun close() {
         scope.cancel()
+        synchronized(known) { known.clear() }
+    }
+
+    /** The remembered answer for [videoId] while its URL is further than the cut margin from expiring, else null. */
+    private fun usable(videoId: String): ResolvedInfo? {
+        val info = synchronized(known) { known[videoId] } ?: return null
+        val expireMs = urlExpire(info.url)?.times(1000) ?: return null
+        return info.takeIf { expireMs - nowMs() > cutMarginMs }
+    }
+
+    private suspend fun lookup(videoId: String): ResolvedInfo =
+        (usable(videoId) ?: resolver.resolve(videoId)).also { remember(videoId, it) }
+
+    /** A new lookup. [dropKnown] forgets the remembered URL first (a refused one); the background refresh keeps it until the new one lands. */
+    private suspend fun lookupFresh(videoId: String, dropKnown: Boolean = true): ResolvedInfo {
+        resolver.invalidate(videoId)
+        if (dropKnown) synchronized(known) { known.remove(videoId) }
+        return resolver.resolve(videoId).also { remember(videoId, it) }
+    }
+
+    private fun remember(videoId: String, info: ResolvedInfo) {
+        synchronized(known) { known[videoId] = info }
     }
 
     /** Answers one GET or HEAD of [videoId]; ffmpeg's `-headers` are not read, the resolver's headers go upstream. */
@@ -51,12 +83,11 @@ internal class FeedRelay(
         var resp: UpstreamResponse? = null
         var refresh: Job? = null
         try {
-            var info = resolver.resolve(videoId)
+            var info = lookup(videoId)
             // A URL already inside the cut margin gets one fresh lookup first, so the answer is not cut at once.
             var expireMs = urlExpire(info.url)?.times(1000)
             if (expireMs != null && expireMs - nowMs() <= cutMarginMs) {
-                resolver.invalidate(videoId)
-                info = resolver.resolve(videoId)
+                info = lookupFresh(videoId)
                 expireMs = urlExpire(info.url)?.times(1000)
             }
             var retried = false
@@ -69,8 +100,7 @@ internal class FeedRelay(
                 if ((fetched.status == 403 || fetched.status == 410) && !retried) {
                     fetched.close()
                     retried = true
-                    resolver.invalidate(videoId)
-                    info = resolver.resolve(videoId)
+                    info = lookupFresh(videoId)
                     expireMs = urlExpire(info.url)?.times(1000)
                     continue
                 }
@@ -148,8 +178,7 @@ internal class FeedRelay(
     private fun scheduleRefresh(videoId: String, atMs: Long): Job = scope.launch {
         val wait = atMs - nowMs()
         if (wait > 0) delay(wait)
-        resolver.invalidate(videoId)
-        runCatching { resolver.resolve(videoId) }
+        runCatching { lookupFresh(videoId, dropKnown = false) }
     }
 
     companion object {
@@ -158,6 +187,8 @@ internal class FeedRelay(
 
         /** A response ends this long before its URL expires. */
         const val CUT_MARGIN_MS = 3 * 60_000L
+
+        private const val MAX_KNOWN = 8
 
         private const val MAX_RANGE_HEADER = 64
         private val SIMPLE_RANGE = Regex("bytes=(?:\\d+-\\d*|-\\d+)")
