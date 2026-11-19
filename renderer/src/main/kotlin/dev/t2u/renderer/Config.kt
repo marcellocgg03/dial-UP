@@ -78,7 +78,7 @@ data class NameFilter(val include: List<String> = emptyList(), val exclude: List
  * @property ytdlpChannel the yt-dlp release channel the background updater follows: "stable" (the default) or "nightly".
  *   Read by the app before every update attempt, so an edited config.json applies at the next one.
  * @property ffmpegLogLevel debug switch, consumed by the bridge.
- * @property logLevel "off", "info" (the default) or "debug": what the app's event log file and logcat get;
+ * @property logLevel "off", "info" or "debug" (the default): what the app's event log file and logcat get;
  *   debug adds SSDP packets, raw lounge chunks, lounge noops and media GETs. Applied at service start and at every bridge start.
  * @property outputFormat "auto" walks the learned direct, adts, mp3 chain; "streaming" tries adts then mp3;
  *   other values force that format. The Android app defaults to streaming.
@@ -118,7 +118,7 @@ data class Config(
     val ytdlpVerbose: Boolean = true,
     val ytdlpChannel: String = YTDLP_DEFAULT_CHANNEL,
     val ffmpegLogLevel: String = "error",
-    val logLevel: String = "info",
+    val logLevel: String = "debug",
     val queueSettleTimeoutMs: Long = 10_000,
     val cacheMb: Int = 256,
     val prefetch: Boolean = true,

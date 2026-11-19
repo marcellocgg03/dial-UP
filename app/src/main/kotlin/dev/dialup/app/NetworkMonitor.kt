@@ -24,6 +24,7 @@ class NetworkMonitor(
     private val context: Context,
     private val evidence: EvidenceLog,
     private val tetherProbe: () -> String? = { null },
+    private val tetherName: () -> String? = { null },
     private val onChange: (String) -> Unit,
 ) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
@@ -77,7 +78,8 @@ class NetworkMonitor(
                 override fun run() {
                     val changed = runCatching { synchronized(lock) { tracker.onFallback(tetherProbe()) } }.getOrDefault(false)
                     if (changed) {
-                        evidence.event("net", mapOf("event" to "tether", "tracked" to synchronized(lock) { tracker.currentIp }))
+                        val iface = runCatching { tetherName() }.getOrNull()
+                        evidence.event("net", mapOf("event" to "tether", "tracked" to synchronized(lock) { tracker.currentIp }, "iface" to iface))
                         onChange("tether")
                     }
                 }

@@ -81,6 +81,7 @@ class LogLevelTest {
         val seen = mutableListOf<String>()
         val log = EvidenceLog(File(tmp, "logs"), monoNanos = { 42L }, logcat = { seen += it })
         fun fileText() = log.currentFile().takeIf { it.exists() }?.readText().orEmpty()
+        log.setLevel(LogLevel.INFO)
 
         log.event("ssdp-rx", mapOf("raw" to "x"))
         log.flush()

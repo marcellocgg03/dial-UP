@@ -159,7 +159,7 @@ class EvidenceLog(
     private val maxPending: Int = MAX_PENDING_LINES,
 ) {
     @Volatile
-    private var level: LogLevel = LogLevel.INFO
+    private var level: LogLevel = LogLevel.DEBUG
 
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "t2u-evidence").apply { isDaemon = true } }
     private val tsFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx")
