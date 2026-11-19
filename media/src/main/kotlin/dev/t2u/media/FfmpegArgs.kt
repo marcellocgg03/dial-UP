@@ -1,5 +1,8 @@
 package dev.t2u.media
 
+/** ffmpeg's `-rw_timeout` for a network input, in microseconds (30 s). */
+internal const val RW_TIMEOUT_US = "30000000"
+
 /**
  * The input side of mediaServer.js `#urlInputArgs`: ffmpeg reads [info]'s URL itself with the headers yt-dlp
  * chose, reconnects on a dropped read, and (input-side `-ss`) range-requests from [startAt] instead of reading from 0.
@@ -18,6 +21,8 @@ fun urlInputArgs(
     val args = mutableListOf("-hide_banner", "-loglevel", logLevel, "-protocol_whitelist", policy.protocols)
     if (hdrs.isNotEmpty()) args += listOf("-headers", hdrs)
     args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
+    // a read that goes quiet without the connection closing would otherwise hang for hours; failing it lets -reconnect retry
+    args += listOf("-rw_timeout", RW_TIMEOUT_US)
     if (startAt > 0) args += listOf("-ss", startAt.toString())
     args += listOf("-i", info.url, "-vn")
     return args

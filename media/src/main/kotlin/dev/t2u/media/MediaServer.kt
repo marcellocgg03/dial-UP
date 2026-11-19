@@ -84,6 +84,8 @@ class MediaServer(
     private val maxConcurrentFfmpeg: Int = MAX_CONCURRENT_FFMPEG,
     /** The most ffmpeg processes the server runs at once for one stream token. */
     private val maxFfmpegPerToken: Int = MAX_FFMPEG_PER_TOKEN,
+    /** How long a live pipe may wait on ffmpeg for bytes, after the first, before it is killed and the answer ends. */
+    private val pipeStallTimeoutMs: Long = STALL_TIMEOUT_MS,
 ) : MediaRegistrar {
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
@@ -711,7 +713,7 @@ class MediaServer(
         out: Outcome,
         onRecovering: ((Boolean) -> Unit)? = null,
     ) {
-        val pipeTee = PipeTee(l)
+        val pipeTee = PipeTee(l, pipeStallTimeoutMs, minOf(5_000L, pipeStallTimeoutMs / 4).coerceAtLeast(10L))
         val failures = mutableListOf<String>()
         // Tells the renderer that the wait for the first byte is the ladder's recovery, not a speaker that cannot play.
         var recovering = false

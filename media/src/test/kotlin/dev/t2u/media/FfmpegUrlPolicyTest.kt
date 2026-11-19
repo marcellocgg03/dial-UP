@@ -42,6 +42,15 @@ class FfmpegUrlPolicyTest {
     }
 
     @Test
+    fun theNetworkInputHasAReadTimeoutBeforeTheInputAndTheFileInputHasNone() {
+        val args = urlInputArgs(info("https://rr1.googlevideo.com/v"), 0)
+        val at = args.indexOf("-rw_timeout")
+        assertEquals("30000000", args[at + 1])
+        assertTrue(at < args.indexOf("-i"))
+        assertFalse("-rw_timeout" in fileInputArgs("/data/cache/a.m4a", 0))
+    }
+
+    @Test
     fun theLocalFileInputHasNoWhitelistSoItStillReadsTheFile() {
         assertFalse("-protocol_whitelist" in fileInputArgs("/data/cache/a.m4a", 0))
     }

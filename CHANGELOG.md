@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A stream that goes quiet no longer leaves the speaker waiting until it gives up.** On a very long track the audio source could stop sending without closing the connection (seen after about 6 h 50 min of a 10 h video). ffmpeg then waited on it for hours, the speaker ran out of audio and stopped, and nothing in the app noticed. ffmpeg now fails a network read that is silent for 30 s so it can reconnect from where it was, and a live stream that gets no bytes from ffmpeg for 60 s is ended instead of held open. If the audio link has expired the track still ends; restarting it is not part of this fix.
+
 ## 1.2.1
 
 ### Added
