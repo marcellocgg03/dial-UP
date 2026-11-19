@@ -116,4 +116,27 @@ class FeedRelayReuseTest {
         assertEquals(2, resolver.resolves.get())
         assertTrue(upstream.urls.size == 4 && upstream.urls[2] == upstream.urls[3] && upstream.urls[0] != upstream.urls[2], "${upstream.urls}")
     }
+
+    @Test
+    @DisplayName("the log line says how long the lookup and each upstream answer took, and that a refused URL was retried")
+    fun theOutcomeCarriesTheTimings() {
+        val now = 1_800_000_000_000L
+        val relay = FeedRelay(ScriptedResolver { now }, ScriptedUpstream(first = listOf(403)), nowMs = { now })
+        val out = Outcome()
+        try {
+            testApplication {
+                application { intercept(ApplicationCallPipeline.Call) { relay.serve(call, "fffffffffff", false, out) } }
+                assertEquals(200, client.get("/x") { header(HttpHeaders.Range, "bytes=0-") }.status.value)
+            }
+        } finally {
+            relay.close()
+        }
+        val kinds = out.upstream.map { it.kind }
+        assertEquals(listOf("lookup", "feed", "fresh lookup", "feed retry"), kinds, out.upstream.joinToString("; "))
+        assertEquals(403, out.upstream[1].status)
+        assertTrue(out.upstream[1].ttfbMs >= 0 && out.upstream[1].totalMs >= 0, "the refused answer has its time")
+        assertEquals(200, out.upstream[3].status)
+        assertEquals(10L, out.upstream[3].bytes, "the answer that was served has its byte count")
+        assertTrue(out.upstream[3].totalMs >= 0)
+    }
 }
