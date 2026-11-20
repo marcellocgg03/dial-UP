@@ -26,7 +26,9 @@ import java.net.NetworkInterface
 /**
  * Where the bridge listens and searches. [wifiIp] is the only address anything binds to; [iface] is its
  * interface (null in JVM tests); [ssdpListen] are the responder's multicast listen sockets (port 1900 on the phone).
- * [ssdpSearchTarget] and [notifyTarget] default to the SSDP group; tests point them at unicast sockets.
+ * [ssdpSearchTarget] and [notifyTarget] default to the SSDP group; tests point them at unicast sockets. [prefixLength] is
+ * the netmask length the system gave the address, read when the network is built (null when unknown, then a /24 is assumed
+ * where two networks are compared).
  */
 data class BridgeNetwork(
     val wifiIp: InetAddress,
@@ -34,6 +36,7 @@ data class BridgeNetwork(
     val ssdpListen: List<ListenSpec>,
     val ssdpSearchTarget: InetSocketAddress = InetSocketAddress(SsdpConstants.GROUP, SsdpConstants.PORT),
     val notifyTarget: InetSocketAddress? = null,
+    val prefixLength: Int? = null,
 )
 
 /** How many speakers have a player that is loading, playing or paused, out of all speakers with a receiver. */
