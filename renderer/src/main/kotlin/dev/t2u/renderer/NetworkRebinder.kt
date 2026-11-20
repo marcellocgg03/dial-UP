@@ -91,6 +91,7 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
         netLock.withLock {
             if (!started.get() || stopped.get()) return
             val oldIp = net.wifiIp.hostAddress.orEmpty()
+            val oldPrefix = net.prefixLength
             val newIp = newNet.wifiIp.hostAddress.orEmpty()
             val policy = accessPolicy
             val reg = registry
@@ -132,7 +133,7 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
             }
             // a different LAN (the phone joined a car, a hotspot, another site): the speakers of the old one are gone and nothing
             // is sent to them; discovery runs again on the new network below
-            if (!sameLan(oldIp, newIp)) flushRenderers(oldIp, newIp)
+            if (!sameLan(oldIp, newIp, oldPrefix, newNet.prefixLength)) flushRenderers(oldIp, newIp)
             var moved = 0
             for (receiver in host.receivers) {
                 val running = receiver.status == "running"
@@ -144,7 +145,7 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
             for (receiver in host.receivers) receiver.onNetworkReturned()
             networkDown = false
             step("search", "rebind") { multicastSearch("rebind") }
-            emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "receivers" to moved)
+            emit("bridge", "event" to "rebound", "oldIp" to oldIp, "newIp" to newIp, "oldPrefix" to oldPrefix, "newPrefix" to newNet.prefixLength, "receivers" to moved)
         }
     }
 
@@ -176,11 +177,28 @@ internal class NetworkRebinder(private val host: NetworkRebinderHost, private va
 }
 
 /**
- * True when both IPv4 addresses sit in the same /24, the size of a home LAN. A rebind between them is a roam or a new lease
- * on the same network; anything else (or an address that is not IPv4) is a different LAN.
+ * True when both IPv4 addresses are on the same network: the same netmask length and the same address once it is applied. A
+ * rebind between them is a roam or a new lease on one LAN; anything else (or an address that is not IPv4) is a different LAN.
+ * The lengths are what the system gave each interface ([BridgeNetwork.prefixLength]); when either is unknown a /24, the size of
+ * a home LAN, stands in for both.
  */
-internal fun sameLan(a: String, b: String): Boolean {
-    val pa = a.split('.')
-    val pb = b.split('.')
-    return pa.size == 4 && pb.size == 4 && pa.take(3) == pb.take(3)
+internal fun sameLan(a: String, b: String, prefixA: Int? = null, prefixB: Int? = null): Boolean {
+    val ia = ipv4Bits(a) ?: return false
+    val ib = ipv4Bits(b) ?: return false
+    val known = prefixA != null && prefixB != null && prefixA in 1..32 && prefixB in 1..32
+    if (known && prefixA != prefixB) return false
+    val prefix = if (known) prefixA!! else 24
+    val mask = if (prefix == 32) -1 else (-1 shl (32 - prefix))
+    return (ia and mask) == (ib and mask)
+}
+
+private fun ipv4Bits(text: String): Int? {
+    val parts = text.split('.')
+    if (parts.size != 4) return null
+    var bits = 0
+    for (p in parts) {
+        val n = p.toIntOrNull()?.takeIf { it in 0..255 } ?: return null
+        bits = (bits shl 8) or n
+    }
+    return bits
 }

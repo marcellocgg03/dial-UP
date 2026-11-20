@@ -286,7 +286,7 @@ class BridgeRebindTest {
         bridge.networkLost()
         bridge.rebindNetwork(h.network(other)) // 127.0.0.1 -> 127.0.0.2, same /24
         assertTrue(bridge.state()["renderers"].toString().contains(HARNESS_RENDERER_UDN), "same LAN keeps the renderer")
-        assertTrue(h.events.none { it.first == "renderer" && it.second["event"] == "removed" })
+        assertTrue(h.events.none { it.first == "discovery" && it.second["event"] == "removed" })
 
         val marker = h.events.size
         bridge.networkLost()
@@ -297,11 +297,45 @@ class BridgeRebindTest {
     }
 
     @Test
-    @DisplayName("sameLan compares the first three octets and treats anything that is not IPv4 as another LAN")
+    @DisplayName("sameLan uses the netmask lengths the system gave, and a /24 when either is unknown; other masks or non-IPv4 are another LAN")
     fun sameLanRule() {
+        // unknown masks: a /24
         assertTrue(sameLan("192.168.86.27", "192.168.86.200"))
         assertFalse(sameLan("192.168.86.27", "192.168.8.102"))
         assertFalse(sameLan("192.168.86.27", "fe80::1"))
         assertFalse(sameLan("", "192.168.86.27"))
+        assertFalse(sameLan("192.168.86.27", "192.168.86.300"))
+        // a /16: a move across the third octet stays on the LAN, and a /24 would have flushed it
+        assertTrue(sameLan("10.0.5.20", "10.0.9.31", 16, 16))
+        assertFalse(sameLan("10.0.5.20", "10.0.9.31", 24, 24))
+        assertFalse(sameLan("10.0.5.20", "10.1.5.20", 16, 16))
+        // a /23: .2.x and .3.x are one network, .2.x and .4.x are not
+        assertTrue(sameLan("192.168.2.10", "192.168.3.99", 23, 23))
+        assertFalse(sameLan("192.168.2.10", "192.168.4.10", 23, 23))
+        // different masks are different networks even when the address bits agree
+        assertFalse(sameLan("192.168.1.5", "192.168.1.9", 24, 16))
+        // one mask unknown: the /24 stands in
+        assertTrue(sameLan("192.168.1.5", "192.168.1.9", 24, null))
+        assertFalse(sameLan("10.0.5.20", "10.0.9.31", 16, null))
+    }
+
+    @Test
+    @DisplayName("the netmask length decides whether a rebind flushes: inside one /8 nothing is removed, a different mask removes the renderer")
+    fun prefixLengthDecidesWhetherARebindFlushes() = h.run<Unit> {
+        val bridge = h.newBridge()
+        bridge.start()
+        h.launch(bridge)
+        fun at(ip: String, prefix: Int) = h.network(InetAddress.getByName(ip)).copy(prefixLength = prefix)
+
+        bridge.networkLost()
+        bridge.rebindNetwork(at("127.0.0.2", 8))
+        bridge.networkLost()
+        bridge.rebindNetwork(at("127.0.1.1", 8)) // another /24, the same /8
+        assertTrue(h.events.none { it.first == "discovery" && it.second["event"] == "removed" }, "same /8: nothing flushed")
+        assertTrue(bridge.state()["renderers"].toString().contains(HARNESS_RENDERER_UDN))
+
+        bridge.networkLost()
+        bridge.rebindNetwork(at("127.0.2.1", 24)) // the mask changed: another network
+        assertTrue(h.events.any { it.first == "discovery" && it.second["event"] == "removed" }, "the masks differ: flushed")
     }
 }
