@@ -33,6 +33,14 @@ import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
 private val SAFE_PID = Regex("^[A-Za-z0-9-]{1,64}$")
+
+/**
+ * The one bound on a DIAL launch's pairing code: URL-safe characters, at least [LoungeLog.MIN_SECRET_LENGTH] (6, below
+ * which the log scrubber would not hide the value) and at most 40. Real launches from YouTube and YouTube Music carry 36
+ * characters. If a real code is ever refused, this line is the one to widen; the launch event's `codeLength` and
+ * `codeChars` show the shape.
+ */
+private val LAUNCH_PAIRING_CODE = Regex("^[A-Za-z0-9_-]{6,40}$")
 internal const val NETWORK_SENDER_RECOVERY_MS = 30_000L
 private const val VOLUME_SEND_KEY = "onVolumeChanged"
 
@@ -207,9 +215,16 @@ class YouTubeApp(
         val code = form["pairingCode"]
         val theme = form["theme"]
         val client = Client.fromTheme(theme)
-        note("launch", "theme" to theme?.take(16), "hasPairingCode" to !code.isNullOrEmpty())
+        note(
+            "launch",
+            "theme" to theme?.take(16),
+            "hasPairingCode" to !code.isNullOrEmpty(),
+            "codeLength" to (code?.length ?: 0),
+            "codeChars" to launchCodeChars(code),
+        )
         if (code.isNullOrEmpty()) throw IllegalArgumentException("Invalid launch data: pairingCode is missing")
         if (client == null) throw IllegalArgumentException("Invalid launch data: unknown theme")
+        if (!LAUNCH_PAIRING_CODE.matches(code)) throw IllegalArgumentException("Invalid launch data: pairingCode is malformed")
         check(state == AppState.RUNNING) { "YouTubeApp is not running" }
         val session = sessions.getValue(client)
         note("connectingSender", "client" to client.displayName)
@@ -917,6 +932,29 @@ private fun JsonObject?.text(key: String): String? =
 /** JavaScript `parseInt(text, 10)`: the leading integer of the text, or null (NaN). */
 internal fun jsParseInt(text: String?): Int? =
     if (text == null) null else Regex("^\\s*([+-]?\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull()
+
+/**
+ * The character classes a launch's pairing code uses, never the code itself: `none` for a missing or empty code, else
+ * the classes present in the fixed order digit, lower, upper, dash, underscore, other joined with `+`. Only ASCII
+ * letters count as lower or upper.
+ */
+internal fun launchCodeChars(code: String?): String {
+    if (code.isNullOrEmpty()) return "none"
+    val classes = LinkedHashSet<String>()
+    for (c in code) {
+        classes.add(
+            when (c) {
+                in '0'..'9' -> "digit"
+                in 'a'..'z' -> "lower"
+                in 'A'..'Z' -> "upper"
+                '-' -> "dash"
+                '_' -> "underscore"
+                else -> "other"
+            },
+        )
+    }
+    return listOf("digit", "lower", "upper", "dash", "underscore", "other").filter { it in classes }.joinToString("+")
+}
 
 /** `application/x-www-form-urlencoded` body to a map; the first value of a repeated key wins. */
 private fun parseForm(data: String): Map<String, String> {
