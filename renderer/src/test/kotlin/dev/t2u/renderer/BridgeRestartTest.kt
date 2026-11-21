@@ -81,4 +81,23 @@ class BridgeRestartTest {
         assertEquals(1, uris.size, "exactly one SetAVTransportURI: $uris")
         assertTrue(URI(uris.single()).path.endsWith(".mp3"), "the learned format came first: $uris")
     }
+
+    @Test
+    @DisplayName("the first bridge start after the update moves an altered speaker's old store to its new name once")
+    fun aBridgeStartMovesAnAlteredSpeakersOldStoreOnce() = h.run<Unit> {
+        // what the previous version left: ports.json naming the altered speaker, and its store under the plain-sanitised name
+        File(h.dataDir, "ports.json").writeText("""{"speaker/1": 3999}""")
+        File(h.dataDir, "speaker_1").mkdirs()
+        File(h.dataDir, "speaker_1/store.json").writeText("""{"dial.uuid":"u-old"}""")
+
+        val bridge = h.newBridge(h.testConfig())
+        bridge.start()
+        try {
+            assertTrue(!File(h.dataDir, "speaker_1").exists(), "the old directory moved")
+            assertEquals(JsonPrimitive("u-old"), RendererDataStore(h.dataDir, "speaker/1").get("dial.uuid"))
+            assertTrue(File(h.dataDir, "legacy-stores~moved").isFile, "the marker exists")
+        } finally {
+            bridge.stop()
+        }
+    }
 }
