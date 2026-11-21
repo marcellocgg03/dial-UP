@@ -69,8 +69,8 @@ class DataStoreTest {
         assertEquals(JsonPrimitive("b-pid"), RendererDataStore(base, "fake-renderer").get("app.pid"))
 
         val dirs = base.listFiles()!!.filter { it.isDirectory }.map { it.name }.sorted()
-        assertEquals(listOf("fake-renderer", "uuid_RINCON_ABC_1"), dirs)
-        assertTrue(File(base, "uuid_RINCON_ABC_1/store.json").isFile)
+        assertEquals(listOf("fake-renderer", storeDirName("uuid:RINCON_ABC:1")).sorted(), dirs)
+        assertTrue(File(base, storeDirName("uuid:RINCON_ABC:1") + "/store.json").isFile)
     }
 
     @Test
@@ -83,6 +83,26 @@ class DataStoreTest {
         second.set("dial.uuid", JsonPrimitive("u-b"))
         assertEquals(JsonPrimitive("u-a"), RendererDataStore(base, "speaker/1").get("dial.uuid"), "the second id must not overwrite the first one's identity")
         assertEquals(2, base.listFiles()!!.count { it.isDirectory }, "two ids, two directories")
+        assertNotEquals(storeDirName("speaker/1"), storeDirName("speaker?1"))
+    }
+
+    @Test
+    fun aSafeIdKeepsExactlyItsDirectoryName() {
+        for (id in listOf("rincon_000e58a1b2c301400", "fake-renderer", "lamp", "uuid_RINCON_ABC_1", "a".repeat(200))) {
+            assertEquals(id, storeDirName(id), "a safe id keeps its exact name")
+            assertEquals(id, legacyStoreDirName(id))
+        }
+    }
+
+    @Test
+    fun anAlteredIdNameIsStableAndCarriesAHash() {
+        val name = storeDirName("speaker/1")
+        assertTrue(Regex("^speaker_1~[0-9a-f]{16}$").matches(name), name)
+        assertEquals(name, storeDirName("speaker/1"))
+        assertEquals("speaker_1", legacyStoreDirName("speaker/1"))
+        val long = storeDirName("a".repeat(150) + "/" + "b".repeat(150))
+        assertTrue(long.length <= 117, "at most 100 + 1 + 16 characters: ${long.length}")
+        assertTrue(Regex("~[0-9a-f]{16}$").containsMatchIn(long), long)
     }
 
     @Test

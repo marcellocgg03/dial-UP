@@ -18,14 +18,39 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 
 private val UNSAFE_UDN_CHARS = Regex("[^A-Za-z0-9_.-]")
 
+/** An altered id keeps at most this many characters of its sanitised name before the `~` and the hash. */
+private const val ALTERED_PREFIX_MAX_CHARS = 100
+
+/** Hex digits of the SHA-256 of the id appended to an altered id's directory name (64 bits). */
+private const val NAME_HASH_HEX_CHARS = 16
+
+/** The directory name earlier versions used for [rendererId]: every character outside `[A-Za-z0-9_.-]` replaced by `_`. */
+internal fun legacyStoreDirName(rendererId: String): String = rendererId.replace(UNSAFE_UDN_CHARS, "_")
+
+/**
+ * The directory name of [rendererId]'s store. An id the replacement did not change (every real Sonos id, the fake renderer)
+ * keeps its exact name. A changed id gets its sanitised prefix (at most 100 characters), `~` and 16 lowercase hex digits of
+ * the SHA-256 of the id, so two ids that differ only in unsafe characters never share a directory. The `~` is outside the
+ * safe class, so no safe id can ever equal an altered id's name.
+ */
+internal fun storeDirName(rendererId: String): String {
+    val legacy = legacyStoreDirName(rendererId)
+    if (legacy == rendererId) return legacy
+    val digest = MessageDigest.getInstance("SHA-256").digest(rendererId.toByteArray(Charsets.UTF_8))
+    val hash = digest.take(NAME_HASH_HEX_CHARS / 2).joinToString("") { "%02x".format(it) }
+    return legacy.take(ALTERED_PREFIX_MAX_CHARS) + "~" + hash
+}
+
 /**
  * Values live in `<baseDir>/<sanitised rendererId>/store.json` as one JSON object (key to
- * JsonElement). The directory name is [rendererId] with every character outside `[A-Za-z0-9_.-]`
- * replaced by `_`; a name that would be `.`/`..`/empty, or that resolves outside [baseDir], is refused
- * with [IllegalArgumentException] (a UDN comes off the LAN).
+ * JsonElement). The directory name is [storeDirName]: an id made only of `[A-Za-z0-9_.-]` keeps its
+ * exact name; any other id becomes its sanitised prefix (every other character replaced by `_`), `~` and a
+ * 64-bit hash of the id, so two ids never share a directory. A name that would be `.`/`..`/empty, or that
+ * resolves outside [baseDir], is refused with [IllegalArgumentException] (a UDN comes off the LAN).
  *
  * Keys used:
  *  - `dial.uuid`: Kotlin addition, keeps the SSDP/DIAL UDN of the receiver stable across restarts.
@@ -49,7 +74,7 @@ class RendererDataStore(
     private var cache: MutableMap<String, JsonElement>? = null
 
     init {
-        val name = rendererId.replace(UNSAFE_UDN_CHARS, "_")
+        val name = storeDirName(rendererId)
         require(name.isNotEmpty() && name != "." && name != "..") { "refusing renderer id '$rendererId': not usable as a directory name" }
         val base = baseDir.canonicalFile
         val candidate = File(base, name).canonicalFile
