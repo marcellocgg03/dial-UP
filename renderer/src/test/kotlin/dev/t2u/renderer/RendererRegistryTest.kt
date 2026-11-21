@@ -179,9 +179,10 @@ class RendererRegistryTest {
         var initBehaviour: suspend (String) -> Boolean = { true },
         hidden: (String) -> Boolean = { false },
         maxRunning: Int = RendererRegistry.MAX_RUNNING,
+        maxSaved: Int = PortRegistry.MAX_SAVED,
     ) {
         val events = Events()
-        val ports = PortRegistry(dataDir, 3000).load()
+        val ports = PortRegistry(dataDir, 3000, maxSaved, clock = { now.get() }).load()
         val created = CopyOnWriteArrayList<FakeManagedRenderer>()
         val registry = RendererRegistry(
             Config(dataDir = dataDir),
@@ -623,6 +624,63 @@ class RendererRegistryTest {
         assertEquals(1, h.registry.retryDue(), "room again: b is retried")
         assertEquals(1, h.registry.count.value)
         assertEquals(listOf("b"), h.registry.renderers().map { it.udn })
+    }
+
+    // ---- Phase 11 plan 04: a refresh and a removal count as the speaker last seen (D-04, D-06) ----
+
+    @Test
+    @DisplayName("a speaker that left after a newer one is kept when ports.json is pruned")
+    fun aSpeakerRemovedLaterIsKeptOverOlderEntries() = runBlocking {
+        val h = Harness(maxSaved = 2)
+        h.aliveAt("lamp", 41)
+        h.aliveAt("x1", 51)
+        h.byebye("x1", "192.168.50.51")
+        h.byebye("lamp", "192.168.50.41")
+        h.aliveAt("x2", 52)
+        assertEquals(setOf("lamp", "x2"), h.ports.saved().keys, "x1 is the one seen longest ago")
+    }
+
+    @Test
+    @DisplayName("after a flood a returning pruned speaker gets a port no running speaker holds")
+    fun aPrunedSpeakerThatReturnsGetsAPortNoRunningSpeakerHolds() = runBlocking {
+        val h = Harness(maxSaved = 2)
+        h.aliveAt("lamp", 41)
+        for ((i, x) in listOf("x1", "x2", "x3").withIndex()) {
+            h.aliveAt(x, 51 + i)
+            h.byebye(x, "192.168.50.${51 + i}")
+            assertTrue(h.ports.saved().size <= 2, "after $x: ${h.ports.saved()}")
+            assertTrue("lamp" in h.ports.saved(), "after $x the running speaker keeps its entry")
+        }
+        h.aliveAt("x1", 51)
+        val running = h.registry.renderers()
+        assertEquals(listOf("lamp", "x1"), running.map { it.udn })
+        assertEquals(running.size, running.map { it.port }.toSet().size, "no two running speakers share a port")
+    }
+
+    @Test
+    @DisplayName("a speaker that kept running while more speakers than the bound came and went keeps its remembered port across a restart")
+    fun aLongRunningSpeakerKeepsItsPortAcrossARestartAfterManyLaterSpeakers() = runBlocking {
+        val h1 = Harness(maxSaved = 3)
+        h1.aliveAt("lamp", 41)
+        val lampPort = h1.created.single().port
+        for (i in 1..6) {
+            h1.aliveAt("x$i", 50 + i)
+            h1.byebye("x$i", "192.168.50.${50 + i}")
+            h1.aliveAt("lamp", 41)
+        }
+        h1.now.addAndGet(PortRegistry.RECENCY_WRITE_MS)
+        h1.aliveAt("lamp", 41)
+        // h1 is left as a kill leaves it: no stop
+
+        val h2 = Harness(dataDir = h1.dataDir, now = AtomicLong(h1.now.get()), maxSaved = 3)
+        h2.now.addAndGet(PortRegistry.PRUNE_GRACE_MS)
+        for ((i, y) in listOf("y1", "y2").withIndex()) {
+            h2.aliveAt(y, 61 + i)
+            h2.byebye(y, "192.168.50.${61 + i}")
+        }
+        assertTrue("lamp" in h2.ports.saved(), "lamp survived the flood: ${h2.ports.saved()}")
+        h2.aliveAt("lamp", 41)
+        assertEquals(lampPort, h2.created.last { it.udn == "lamp" }.port)
     }
 
     // ---- Plan 05-04 Task 1: the 5-minute retry of a failed setup (D-05) ----
