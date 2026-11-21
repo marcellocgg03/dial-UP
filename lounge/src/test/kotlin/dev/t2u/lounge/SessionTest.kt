@@ -298,6 +298,23 @@ class SessionTest {
     }
 
     @Test
+    fun aTokenTimeoutKeepsTheStoredScreenId() = run<Unit> {
+        val stored = "STOREDSCREEN00000000002"
+        val seeded = JsonObject(mapOf("deviceId" to JsonPrimitive("dev-x"), "screenId" to JsonPrimitive(stored)))
+        val store = MemoryStore()
+        store.set(StoreKeys.mdxContext("cl"), seeded)
+        val http = lanHttpClient().newBuilder().addInterceptor { chain ->
+            if (chain.request().url.encodedPath.endsWith("get_lounge_token_batch")) throw java.net.SocketTimeoutException("timeout")
+            chain.proceed(chain.request())
+        }.build()
+        val s = session(store, http = http)
+        assertFailsWith<SessionException> { s.begin() }
+        assertEquals(0, count("generate_screen_id"), "the stored screen id was replaced after a timeout")
+        assertEquals(stored, s.screenId)
+        assertEquals(seeded, store.map[StoreKeys.mdxContext("cl")])
+    }
+
+    @Test
     fun aStreamThatEndsIsReopened() = run {
         val s = session()
         s.begin()
