@@ -461,6 +461,23 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun aLaunchOfTheOtherThemeTheLoungeRefusesLeavesThePlayingCastAlone() = run<Unit> {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        fake.refusePairing = true
+
+        assertFailsWith<Exception> { a.launch("pairingCode=PAIR12&theme=m") }
+
+        barrier("cl")
+        assertEquals(Client.YT, a.activeClient)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(a.connectedSenders.isNotEmpty())
+        assertTrue(disconnects.isEmpty(), "$disconnects")
+        assertTrue("loungeScreenDisconnected" !in messages("cl").map { it.first })
+    }
+
+    @Test
     fun pairingCodesAskBothSessionsAndNeverLogTheCode() = run {
         val a = startedApp()
         val codes = a.pairingCodes()
