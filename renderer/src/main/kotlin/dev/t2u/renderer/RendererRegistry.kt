@@ -117,6 +117,9 @@ class RendererRegistry(
     private val pending = HashSet<String>()
     private val guardLogged = HashSet<String>()
 
+    /** True from the first refusal at the running cap until the next admission; guarded by [lock]. One event per episode. */
+    private var capRefusalLogged = false
+
     /** Epoch ms (of [clock]) of the last MediaRenderer search, from the schedule or from Bridge.housekeeping. */
     @Volatile private var lastSearchAt: Long = clock()
 
@@ -184,6 +187,31 @@ class RendererRegistry(
             if (oldest != null) skipped.remove(oldest)
         }
         skipped[udn] = skip
+    }
+
+    /** What [admitNewSpeaker] decided. */
+    private enum class Admission { ADMITTED, REFUSED, REFUSED_FIRST }
+
+    /**
+     * Call with [lock] held, for a speaker that is not running and not pending. The one place the running cap lives: a new
+     * speaker is refused when the running and the pending speakers together are at [maxRunning]; nobody is evicted. The first
+     * refusal of an episode is told apart so the caller logs it once; an admission ends the episode.
+     */
+    private fun admitNewSpeaker(): Admission {
+        if (running.size + pending.size < maxRunning) {
+            capRefusalLogged = false
+            return Admission.ADMITTED
+        }
+        if (capRefusalLogged) return Admission.REFUSED
+        capRefusalLogged = true
+        return Admission.REFUSED_FIRST
+    }
+
+    private fun logCapRefused(udn: String, location: String?) {
+        log(
+            "renderer-cap-refused", udn, location = location,
+            reason = "$maxRunning speakers are running; a new speaker is refused until one leaves",
+        )
     }
 
     /** One `skipped` event per UDN and reason, however many datagrams repeat it. */
@@ -299,12 +327,18 @@ class RendererRegistry(
             removeRenderer(udn, "moved", "now at $location")
         }
 
-        val go = lock.withLock {
+        val admission = lock.withLock {
             val skip = skipped[udn]
-            if (skip != null && skip.location == location && isWaiting(skip, clock())) return@withLock false
-            pending.add(udn)
+            if (skip != null && skip.location == location && isWaiting(skip, clock())) return@withLock null
+            // one init per UDN: a setup of it is already running
+            if (udn in pending) return@withLock null
+            admitNewSpeaker().also { if (it == Admission.ADMITTED) pending.add(udn) }
         }
-        if (!go) return
+        if (admission == null) return
+        if (admission != Admission.ADMITTED) {
+            if (admission == Admission.REFUSED_FIRST) logCapRefused(udn, location)
+            return
+        }
 
         setUp(udn, location, src, age, null)
     }
@@ -382,23 +416,36 @@ class RendererRegistry(
      * Sets up again every speaker whose setup threw and whose 5 minutes are over, without waiting for a new
      * alive, and asks every running speaker to revive a receiver that stopped itself ([ManagedRenderer.reviveIfDue]).
      * A device that was refused (not a usable renderer), one an alive is setting up right now and one that already
-     * runs are left alone. Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
+     * runs are left alone, and so are the ones that do not fit under [maxRunning] (they stay queued for a later pass). Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
      * number of setup attempts made; receiver revivals are logged but not counted. A cancelled pass releases every
      * reservation it made, destroys any half-built renderer and does not change any skip entry, so the next pass
      * retries the same speakers at the same attempt number.
      */
     suspend fun retryDue(): Int {
+        var refusedFirst: Pair<String, String>? = null
         val due = lock.withLock {
             val now = clock()
-            val picked = skipped.entries
+            val candidates = skipped.entries
                 .filter { (udn, skip) ->
                     !isWaiting(skip, now) && skip.src != null &&
                         udn !in pending && udn !in running && !hidden(udn)
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
-            picked.forEach { pending.add(it.first) }
+            // Only as many as there is room for, in the order found; the rest stay in [skipped] for a later pass.
+            val picked = ArrayList<Triple<String, Skip, Int>>()
+            for (candidate in candidates) {
+                val admission = admitNewSpeaker()
+                if (admission == Admission.ADMITTED) {
+                    pending.add(candidate.first)
+                    picked.add(candidate)
+                } else {
+                    if (admission == Admission.REFUSED_FIRST) refusedFirst = candidate.first to candidate.second.location
+                    break
+                }
+            }
             picked
         }
+        refusedFirst?.let { (udn, location) -> logCapRefused(udn, location) }
         if (due.isNotEmpty()) {
             val gate = Semaphore(RETRY_PARALLEL)
             coroutineScope {
