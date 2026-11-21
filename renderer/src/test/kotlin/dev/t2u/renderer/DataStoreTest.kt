@@ -74,6 +74,18 @@ class DataStoreTest {
     }
 
     @Test
+    fun idsThatDifferOnlyInUnsafeCharactersGetDifferentStores() = runBlocking<Unit> {
+        val base = tempDir()
+        RendererDataStore(base, "speaker/1").set("dial.uuid", JsonPrimitive("u-a"))
+        assertNull(RendererDataStore(base, "speaker?1").get("dial.uuid"), "the second id must not read the first one's identity")
+        assertEquals(JsonPrimitive("u-a"), RendererDataStore(base, "speaker/1").get("dial.uuid"))
+        val second = RendererDataStore(base, "speaker?1")
+        second.set("dial.uuid", JsonPrimitive("u-b"))
+        assertEquals(JsonPrimitive("u-a"), RendererDataStore(base, "speaker/1").get("dial.uuid"), "the second id must not overwrite the first one's identity")
+        assertEquals(2, base.listFiles()!!.count { it.isDirectory }, "two ids, two directories")
+    }
+
+    @Test
     fun hostileUdnStaysInsideTheBaseDirectory() = runBlocking {
         val base = tempDir()
         val store = RendererDataStore(base, "../../etc")
