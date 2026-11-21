@@ -175,7 +175,7 @@ class BridgeClearTest {
         val launch = http.send(
             HttpRequest.newBuilder(URI("$appUrl/YouTube"))
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString("pairingCode=XYZ&theme=cl"))
+                .POST(HttpRequest.BodyPublishers.ofString("pairingCode=$TEST_LAUNCH_CODE&theme=cl"))
                 .build(),
             HttpResponse.BodyHandlers.ofString(),
         )

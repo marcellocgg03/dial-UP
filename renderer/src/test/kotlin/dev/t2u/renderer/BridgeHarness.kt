@@ -53,6 +53,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 internal const val HARNESS_RENDERER_UDN = "fake-renderer"
+
+/** A launch code of the length real YouTube launches carry (36 characters). */
+internal const val TEST_LAUNCH_CODE = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
 private const val DIAL_SEARCH_TARGET = "urn:dial-multiscreen-org:service:dial:1"
 
 /** Where the DIAL launch put the receiver: its port (on the Wi-Fi address) and its UUID in the SSDP replies. */
@@ -342,7 +346,7 @@ internal class BridgeHarness(
         val launch = http.send(
             HttpRequest.newBuilder(URI("$appUrl/YouTube"))
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString("pairingCode=XYZ&theme=cl"))
+                .POST(HttpRequest.BodyPublishers.ofString("pairingCode=$TEST_LAUNCH_CODE&theme=cl"))
                 .build(),
             HttpResponse.BodyHandlers.ofString(),
         )
