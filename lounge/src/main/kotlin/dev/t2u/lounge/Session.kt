@@ -143,14 +143,17 @@ class Session(
     var deliveringInitStatus: Boolean = false
         private set
 
-    /** generate_screen_id, token, bind init, then the RPC connection. */
+    /**
+     * generate_screen_id, token, bind init, then the RPC connection.
+     * A stored screen id is replaced only after the token service refused it with a 4xx; any other failure ends the attempt with the id kept.
+     */
     private suspend fun establish(screenFromStore: Boolean) {
         if (screenId == null) screenId = generateScreenId()
         val token = try {
             getLoungeToken()
         } catch (e: IOException) {
-            if (!screenFromStore) throw e
-            // the stored screen id may be what the token service refused: use a fresh one once
+            if (!screenFromStore || !refusesStoredScreen(e)) throw e
+            // the token service refused the stored screen id: use a fresh one once
             screenId = generateScreenId()
             getLoungeToken()
         }
@@ -448,6 +451,14 @@ private val PAIRING_CODE_SHAPE = Regex("^[0-9A-Za-z-]{4,32}$")
 internal fun checkOk(response: Response, request: Request) {
     if (!response.isSuccessful) throw LoungeHttpException(response.code, request.url.encodedPath)
 }
+
+/**
+ * True when the token service refused the screen id: an HTTP 4xx answer other than 408 and 429.
+ * Refusing the id is the only reason to give up a screen id phones paired with. A timeout, a connection reset,
+ * a 5xx, 408 Request Timeout, 429 Too Many Requests or a 200 answer with no screens are not a refusal.
+ */
+internal fun refusesStoredScreen(e: IOException): Boolean =
+    e is LoungeHttpException && e.status in 400..499 && e.status != 408 && e.status != 429
 
 /** Awaits an OkHttp call; cancelling the coroutine cancels the call. */
 internal suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
