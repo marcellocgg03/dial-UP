@@ -20,7 +20,12 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.AfterEach
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -312,6 +317,108 @@ class SessionTest {
         assertEquals(0, count("generate_screen_id"), "the stored screen id was replaced after a timeout")
         assertEquals(stored, s.screenId)
         assertEquals(seeded, store.map[StoreKeys.mdxContext("cl")])
+    }
+
+    private val storedScreenId = "STOREDSCREEN00000000002"
+
+    private fun seededStore(screenId: String = storedScreenId): MemoryStore {
+        val store = MemoryStore()
+        store.map[StoreKeys.mdxContext("cl")] =
+            JsonObject(mapOf("deviceId" to JsonPrimitive("dev-x"), "screenId" to JsonPrimitive(screenId)))
+        return store
+    }
+
+    /**
+     * A client whose token request for [storedScreenId] is answered by the interceptor with [status] and [body], or fails with [fail];
+     * every other request, a token request for another screen id included, reaches the fake server.
+     */
+    private fun tokenAnswer(status: Int, body: String = "{}", fail: IOException? = null): OkHttpClient =
+        lanHttpClient().newBuilder().addInterceptor { chain ->
+            val req = chain.request()
+            val sent = Buffer().also { req.body?.writeTo(it) }.readUtf8()
+            if (!req.url.encodedPath.endsWith("get_lounge_token_batch") || storedScreenId !in sent) return@addInterceptor chain.proceed(req)
+            if (fail != null) throw fail
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(status).message("test")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+
+    /** Begins a session on a store holding [storedScreenId] against [http]; the failure of begin, if any, is returned. */
+    private suspend fun beginWithStored(store: MemoryStore, http: OkHttpClient): Pair<Session, SessionException?> {
+        fake.requests.clear()
+        val s = session(store, http = http)
+        val failure = try {
+            s.begin()
+            null
+        } catch (e: SessionException) {
+            e
+        }
+        return s to failure
+    }
+
+    private fun assertStoredIdKept(store: MemoryStore, s: Session, failure: SessionException?, what: String) {
+        assertTrue(failure != null, "$what: begin must fail")
+        assertEquals(0, count("generate_screen_id"), "$what: a screen id was generated")
+        assertEquals(storedScreenId, s.screenId, what)
+        assertEquals(seededStore().map[StoreKeys.mdxContext("cl")], store.map[StoreKeys.mdxContext("cl")], "$what: the store changed")
+    }
+
+    @Test
+    fun refusesStoredScreenOnlyForA4xxOtherThan408And429() = run<Unit> {
+        for (status in listOf(400, 401, 403, 404, 410, 499)) {
+            assertTrue(refusesStoredScreen(LoungeHttpException(status, "/p")), "$status refuses")
+        }
+        for (status in listOf(408, 429, 500, 502, 503, 599, 200)) {
+            assertFalse(refusesStoredScreen(LoungeHttpException(status, "/p")), "$status does not refuse")
+        }
+        assertFalse(refusesStoredScreen(IOException("lounge token data error")))
+        assertFalse(refusesStoredScreen(java.net.SocketTimeoutException("timeout")))
+    }
+
+    @Test
+    fun aServerErrorOrResetKeepsTheStoredScreenId() = run<Unit> {
+        val cases = listOf(
+            "503" to tokenAnswer(503),
+            "500" to tokenAnswer(500),
+            "connection reset" to tokenAnswer(0, fail = IOException("connection reset")),
+        )
+        for ((what, http) in cases) {
+            val store = seededStore()
+            val (s, failure) = beginWithStored(store, http)
+            assertStoredIdKept(store, s, failure, what)
+        }
+    }
+
+    @Test
+    fun aRequestTimeoutOrTooManyRequestsKeepsTheStoredScreenId() = run<Unit> {
+        for (status in listOf(408, 429)) {
+            val store = seededStore()
+            val (s, failure) = beginWithStored(store, tokenAnswer(status))
+            assertStoredIdKept(store, s, failure, status.toString())
+        }
+    }
+
+    @Test
+    fun aTokenAnswerWithNoScreensKeepsTheStoredScreenId() = run<Unit> {
+        val store = seededStore()
+        val (s, failure) = beginWithStored(store, tokenAnswer(200, "{}"))
+        assertStoredIdKept(store, s, failure, "200 without screens")
+    }
+
+    @Test
+    fun aForbiddenOrNotFoundStoredScreenIdIsReplacedOnce() = run<Unit> {
+        for (status in listOf(403, 404)) {
+            val store = seededStore()
+            val (s, failure) = beginWithStored(store, tokenAnswer(status))
+            assertEquals(null, failure, "$status: begin must succeed with a fresh id")
+            assertEquals(1, count("generate_screen_id"), "$status")
+            // the interceptor answered the request for the stored id; the fake server saw the one for the fresh id
+            assertEquals(1, count("get_lounge_token_batch"), "$status")
+            assertTrue(s.screenId != storedScreenId, "$status: the stored id was kept")
+            assertEquals(SessionStatus.RUNNING, s.status)
+            val persisted = store.map[StoreKeys.mdxContext("cl")] as JsonObject
+            assertEquals(s.screenId, (persisted["screenId"] as JsonPrimitive).content, "$status")
+            s.end()
+        }
     }
 
     @Test
