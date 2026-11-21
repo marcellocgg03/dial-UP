@@ -495,9 +495,17 @@ class RendererRegistry(
         return true
     }
 
-    /** index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. */
-    suspend fun onByebye(headers: Map<String, String>) {
+    /**
+     * index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. index.js removes on a byebye from any
+     * host; here only a byebye sent from the speaker's recorded address ([ManagedRenderer.address], what [setUp] was given) removes it,
+     * so another device on the LAN cannot take a speaker out of the cast menu with one forged NOTIFY. There is no LOCATION-host
+     * fallback. [src] has no default: a caller that drops the datagram source does not compile.
+     */
+    suspend fun onByebye(headers: Map<String, String>, src: InetSocketAddress) {
         val udn = udnFromUsn(headers["USN"]) ?: return
+        val existing = lock.withLock { running[udn] } ?: return
+        val sender = src.address?.hostAddress.orEmpty()
+        if (sender != existing.address) return
         removeRenderer(udn)
     }
 

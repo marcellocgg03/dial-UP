@@ -715,7 +715,7 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
             if (stopped.get()) return
             handlerScope.launch {
                 try {
-                    reg.onByebye(headers)
+                    reg.onByebye(headers, src)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {

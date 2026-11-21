@@ -649,7 +649,10 @@ class ClearSpeakerTest {
             rig.alive("b", "192.168.50.42")
             rig.alive("c", "192.168.50.43")
 
-            rig.registry.onByebye(mapOf("USN" to "uuid:a::$RENDERER_ST", "NTS" to "ssdp:byebye"))
+            rig.registry.onByebye(
+                mapOf("USN" to "uuid:a::$RENDERER_ST", "NTS" to "ssdp:byebye"),
+                InetSocketAddress(InetAddress.getByName("192.168.50.41"), 1900),
+            )
             rig.speaker("b").stale = true
             rig.registry.prune()
             rig.registry.removeAll()

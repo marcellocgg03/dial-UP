@@ -215,7 +215,11 @@ class RendererRegistryTest {
             registry.onAlive(h, InetSocketAddress(InetAddress.getByName(src), 1900))
         }
 
-        suspend fun byebye(udn: String) = registry.onByebye(mapOf("USN" to "uuid:$udn::$RENDERER_ST", "NTS" to "ssdp:byebye"))
+        suspend fun byebye(udn: String, src: String = "192.168.50.42") =
+            registry.onByebye(
+                mapOf("USN" to "uuid:$udn::$RENDERER_ST", "NTS" to "ssdp:byebye"),
+                InetSocketAddress(InetAddress.getByName(src), 1900),
+            )
     }
 
     @Test
