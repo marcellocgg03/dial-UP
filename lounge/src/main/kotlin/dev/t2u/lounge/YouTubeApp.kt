@@ -197,8 +197,10 @@ class YouTubeApp(
     }
 
     /**
-     * The sender's DIAL launch (`pairingCode=...&theme=cl|m`): switches to that theme's session, registers the pairing
-     * code with the lounge and returns the pid for the LOCATION header. Never logs the code.
+     * The sender's DIAL launch (`pairingCode=...&theme=cl|m`): registers the pairing code with that theme's session and
+     * switches to that session only once the lounge accepted it, then returns the pid for the LOCATION header. A code the
+     * lounge refuses therefore leaves the player, the senders and the active session alone (yt-cast-receiver's
+     * YouTubeApp.js switches first). Never logs the code.
      */
     suspend fun launch(data: String): String {
         val form = parseForm(data)
@@ -210,9 +212,9 @@ class YouTubeApp(
         if (client == null) throw IllegalArgumentException("Invalid launch data: unknown theme")
         check(state == AppState.RUNNING) { "YouTubeApp is not running" }
         val session = sessions.getValue(client)
-        checkAndSwitchActiveSession(session)
         note("connectingSender", "client" to client.displayName)
         session.registerPairingCode(code)
+        checkAndSwitchActiveSession(session)
         return checkNotNull(pid) { "no pid" }
     }
 
