@@ -564,8 +564,10 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /** Builds the registry over the saved ports and the receiver and renderer factories, and keeps it in [registry]. */
     private fun buildRegistry(config: Config, media: MediaServer, policy: DialAccessPolicy): RendererRegistry {
-        // Unbounded for now: nothing leaves ports.json until the one-time store move has read it (plan 11-05 passes the real bound).
-        val ports = PortRegistry(config.dataDir, config.receiverBasePort, Int.MAX_VALUE) { line -> emit("ports", "warn" to line) }.load()
+        // The one-time store move reads ports.json as the previous version left it, before the PortRegistry can drop an entry
+        // and before any speaker's store opens; savedPortsBound is evaluated after it, so the marker it wrote turns the bound on.
+        moveLegacyStores(config.dataDir) { line -> emit("store", "warn" to line) }
+        val ports = PortRegistry(config.dataDir, config.receiverBasePort, savedPortsBound(config.dataDir)) { line -> emit("ports", "warn" to line) }.load()
         val receivers = receiverFactory(policy)
         val factory = RendererFactory { udn, location, address, maxAge, port ->
             Renderer(

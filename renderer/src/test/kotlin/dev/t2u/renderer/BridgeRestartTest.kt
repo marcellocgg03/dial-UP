@@ -95,7 +95,8 @@ class BridgeRestartTest {
         try {
             assertTrue(!File(h.dataDir, "speaker_1").exists(), "the old directory moved")
             assertEquals(JsonPrimitive("u-old"), RendererDataStore(h.dataDir, "speaker/1").get("dial.uuid"))
-            assertTrue(File(h.dataDir, "legacy-stores~moved").isFile, "the marker exists")
+            assertTrue(File(h.dataDir, LEGACY_STORES_MARKER).isFile, "the marker exists")
+            assertEquals(PortRegistry.MAX_SAVED, savedPortsBound(h.dataDir))
         } finally {
             bridge.stop()
         }
