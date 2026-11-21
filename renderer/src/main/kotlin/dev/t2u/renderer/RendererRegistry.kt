@@ -202,6 +202,24 @@ class RendererRegistry(
     }
 
     /**
+     * One `byebye-refused` event per UDN and sender, however many datagrams repeat it. The only trace of a refused byebye: no `removed`
+     * event, no destroy, no port release, and the datagram's headers are never logged. Shares the [guardLogged] memory, so after it
+     * is cleared at [MAX_REMEMBERED_GUARD_HITS] entries a sender is logged again.
+     */
+    private suspend fun logByebyeRefusedOnce(udn: String, existing: ManagedRenderer, sender: String) {
+        val first = lock.withLock {
+            if (guardLogged.size >= MAX_REMEMBERED_GUARD_HITS) guardLogged.clear()
+            guardLogged.add("$udn|byebye-refused|$sender")
+        }
+        if (first) {
+            log(
+                "byebye-refused", udn, existing.name, existing.location,
+                reason = "kept ${existing.address}, refused a byebye from $sender",
+            )
+        }
+    }
+
+    /**
      * The LOCATION must name the host that sent the datagram, and it must be a private LAN address
      * (otherwise any device could make the app fetch an arbitrary URL). Names are refused
      * without a lookup. Returns null when the location is acceptable, else the reason.
@@ -499,13 +517,17 @@ class RendererRegistry(
      * index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. index.js removes on a byebye from any
      * host; here only a byebye sent from the speaker's recorded address ([ManagedRenderer.address], what [setUp] was given) removes it,
      * so another device on the LAN cannot take a speaker out of the cast menu with one forged NOTIFY. There is no LOCATION-host
-     * fallback. [src] has no default: a caller that drops the datagram source does not compile.
+     * fallback. A refused byebye leaves one `byebye-refused` discovery event per UDN and sender (bounded by the shared
+     * [MAX_REMEMBERED_GUARD_HITS]-entry memory; after a clear a sender is logged again) and touches nothing else. [src] has no default: a caller that drops the datagram source does not compile.
      */
     suspend fun onByebye(headers: Map<String, String>, src: InetSocketAddress) {
         val udn = udnFromUsn(headers["USN"]) ?: return
         val existing = lock.withLock { running[udn] } ?: return
         val sender = src.address?.hostAddress.orEmpty()
-        if (sender != existing.address) return
+        if (sender != existing.address) {
+            logByebyeRefusedOnce(udn, existing, sender)
+            return
+        }
         removeRenderer(udn)
     }
 

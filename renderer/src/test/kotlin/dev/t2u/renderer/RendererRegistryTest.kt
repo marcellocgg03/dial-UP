@@ -323,6 +323,42 @@ class RendererRegistryTest {
     }
 
     @Test
+    @DisplayName("a byebye from another address leaves the running speaker up and is logged once per sender")
+    fun forgedByebyeFromAnotherAddressIsRefusedAndLoggedOnce() = runBlocking {
+        val h = Harness()
+        h.alive()
+        val kitchen = h.created.single()
+        repeat(3) { h.byebye("Kitchen", src = "192.168.50.77") }
+        assertEquals(1, h.registry.count.value)
+        assertEquals(0, kitchen.destroyCalls.get())
+        assertEquals(0, h.events.named("removed").size)
+        val refused = h.events.named("byebye-refused").single()
+        val reason = refused["reason"].toString()
+        assertTrue("192.168.50.42" in reason && "192.168.50.77" in reason, reason)
+        // another sender is another line
+        h.byebye("Kitchen", src = "192.168.50.78")
+        assertEquals(2, h.events.named("byebye-refused").size)
+        assertEquals(1, h.registry.count.value)
+        // a byebye for an unknown UDN from any address writes no event
+        h.byebye("Nobody", src = "192.168.50.77")
+        assertEquals(2, h.events.named("byebye-refused").size)
+    }
+
+    @Test
+    @DisplayName("after refused byebyes the speaker's own byebye still removes it and frees its port")
+    fun theOwnByebyeStillRemovesAfterRefusedOnes() = runBlocking {
+        val h = Harness()
+        h.alive()
+        val kitchen = h.created.single()
+        repeat(2) { h.byebye("Kitchen", src = "192.168.50.77") }
+        h.byebye("Kitchen")
+        assertEquals(0, h.registry.count.value)
+        assertEquals(1, kitchen.destroyCalls.get())
+        assertEquals(1, h.events.named("removed").size)
+        assertEquals(3000, h.ports.claim("kitchen"))
+    }
+
+    @Test
     @DisplayName("a renderer last seen exactly maxAge x 1.5 ago is kept and one more millisecond prunes it")
     fun pruneBoundary() = runBlocking {
         val h = Harness()
