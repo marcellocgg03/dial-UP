@@ -58,6 +58,8 @@ class RendererRegistry(
     private val destroyBudgetMs: Long = DESTROY_BUDGET_MS,
     /** True for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
     private val hidden: (String) -> Boolean = { false },
+    /** The running-speaker bound: a test seam, production uses the default [MAX_RUNNING]. */
+    private val maxRunning: Int = MAX_RUNNING,
 ) {
     companion object {
         /**
@@ -75,6 +77,12 @@ class RendererRegistry(
 
         /** The skipped-speaker memory never holds more than this many entries; the earliest retry time goes first. */
         const val MAX_SKIPPED = 256
+
+        /**
+         * The running-speaker bound, the same number as [MAX_SKIPPED]. At the cap a new speaker is refused before any port is
+         * claimed or receiver built; a running speaker is never evicted to make room.
+         */
+        const val MAX_RUNNING = 256
 
         /** How many due setups [retryDue] runs at once. */
         internal const val RETRY_PARALLEL = 8

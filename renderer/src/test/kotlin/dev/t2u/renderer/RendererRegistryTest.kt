@@ -178,6 +178,7 @@ class RendererRegistryTest {
         val friendlyName: String? = null,
         var initBehaviour: suspend (String) -> Boolean = { true },
         hidden: (String) -> Boolean = { false },
+        maxRunning: Int = RendererRegistry.MAX_RUNNING,
     ) {
         val events = Events()
         val ports = PortRegistry(dataDir, 3000).load()
@@ -195,7 +196,12 @@ class RendererRegistryTest {
             events,
             { now.get() },
             hidden = hidden,
+            maxRunning = maxRunning,
         )
+
+        /** An alive of [udn] from its own address 192.168.50.[host], its LOCATION on the same host. */
+        suspend fun aliveAt(udn: String, host: Int) =
+            alive(udn, "http://192.168.50.$host:1400/xml/device_description.xml", "192.168.50.$host")
 
         suspend fun alive(
             udn: String = "Kitchen",
@@ -554,6 +560,69 @@ class RendererRegistryTest {
         assertEquals(listOf(0L, 5L, 300L, 600L), searchTimes.toList())
         assertEquals(10, renderer.staleChecks.get())
         job.cancel()
+    }
+
+    // ---- Phase 11 plan 04: the running cap (NET-02, D-05) ----
+
+    @Test
+    @DisplayName("at the running cap a new speaker is refused before any port or receiver, none is evicted and the refusal is logged once per episode")
+    fun runningSpeakersStopAtTheCap() = runBlocking {
+        val h = Harness(maxRunning = 2)
+        h.aliveAt("a", 41)
+        h.aliveAt("b", 42)
+        h.aliveAt("c", 43)
+        h.aliveAt("d", 44)
+        assertEquals(2, h.registry.count.value)
+        assertEquals(listOf("a", "b"), h.created.map { it.udn }, "c and d never reach the factory")
+        assertEquals(setOf("a", "b"), h.ports.saved().keys, "no port was claimed or remembered for a refused speaker")
+        assertEquals(1, h.events.named("renderer-cap-refused").size, "one line for the episode, not one per speaker")
+
+        // a running speaker still refreshes at the cap and nobody was destroyed
+        h.aliveAt("a", 41)
+        assertEquals(1, h.created[0].refreshCalls.get())
+        assertTrue(h.created.all { it.destroyCalls.get() == 0 })
+
+        // room opens up: c is admitted, d is refused in a new episode
+        h.byebye("a", "192.168.50.41")
+        assertEquals(1, h.registry.count.value)
+        h.aliveAt("c", 43)
+        assertEquals(2, h.registry.count.value)
+        h.aliveAt("d", 44)
+        assertEquals(2, h.registry.count.value)
+        assertEquals(2, h.events.named("renderer-cap-refused").size, "a new episode writes a new line")
+    }
+
+    @Test
+    @DisplayName("speakers from one address are admitted up to the running cap; there is no per-address cap")
+    fun manySpeakersFromOneAddressAreAdmittedUpToTheCap() = runBlocking {
+        val h = Harness(maxRunning = 3)
+        for (udn in listOf("a", "b", "c")) h.aliveAt(udn, 41)
+        assertEquals(3, h.registry.count.value)
+        assertTrue(h.events.named("renderer-cap-refused").isEmpty())
+    }
+
+    @Test
+    @DisplayName("a failed setup is not retried past the running cap and stays queued")
+    fun aRetryIsRefusedAtTheCapToo() = runBlocking {
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val h = Harness(
+            maxRunning = 1,
+            initBehaviour = { udn -> if (udn == "b" && failures.incrementAndGet() == 1) throw java.io.IOException("boom") else true },
+        )
+        h.aliveAt("b", 42)
+        assertEquals(0, h.registry.count.value)
+        h.aliveAt("a", 41)
+        assertEquals(1, h.registry.count.value)
+        assertEquals(2, h.created.size)
+
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS)
+        assertEquals(0, h.registry.retryDue(), "no room: b waits")
+        assertEquals(2, h.created.size, "b is not created again")
+
+        h.byebye("a", "192.168.50.41")
+        assertEquals(1, h.registry.retryDue(), "room again: b is retried")
+        assertEquals(1, h.registry.count.value)
+        assertEquals(listOf("b"), h.registry.renderers().map { it.udn })
     }
 
     // ---- Plan 05-04 Task 1: the 5-minute retry of a failed setup (D-05) ----
