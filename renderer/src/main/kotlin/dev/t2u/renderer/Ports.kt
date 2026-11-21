@@ -6,6 +6,13 @@ package dev.t2u.renderer
 // Node file). YouTube apps cache a receiver's address, so if a speaker's port changes across restarts
 // (discovery order is a race), a cast to "Lamp" can land on whichever speaker now holds its old port.
 // A speaker gets its remembered port back; ports remembered for other speakers are never handed out.
+//
+// Entries are kept in last-seen order, oldest first (the order of the JSON object in the file): a setup, a refresh and a
+// removal move a speaker to the end; the order reaches the file with the next write and otherwise at most every
+// RECENCY_WRITE_MS. At most maxSaved entries are kept: past it the oldest whose port is not in use are dropped, an entry read
+// from the file and not yet seen in this run only after PRUNE_GRACE_MS. A dropped speaker that returns gets a free port that
+// no running speaker holds and no remembered speaker owns (accepted: identity lives in the per-speaker store, not in the
+// port). The Node file shape is unchanged, and a file written by an older version loads whole, whatever its size.
 
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
@@ -26,21 +33,51 @@ private const val MAX_PORT = 65535
 private val prettyJson = Json { prettyPrint = true }
 
 /**
- * [warn] receives one line per problem (unreadable file, wrong shape, dropped entry,
+ * [warn] receives one line per problem (unreadable file, wrong shape, dropped entries,
  * failed write). It is never used for control flow and nothing here throws on bad files.
+ *
+ * [maxSaved] bounds the remembered entries; [Int.MAX_VALUE] never drops one. [clock] is epoch ms (a test seam).
  */
 class PortRegistry(
     private val dataDir: File,
     private val basePort: Int = 3000,
+    private val maxSaved: Int = MAX_SAVED,
+    private val clock: () -> Long = System::currentTimeMillis,
     private val warn: (String) -> Unit = {},
 ) {
+    companion object {
+        /** ports.json keeps at most this many entries; past it the oldest-unseen entries whose port is not in use are dropped. */
+        const val MAX_SAVED = 256
+
+        /**
+         * An entry read from ports.json and not seen in this run is kept this long after the load, even past [MAX_SAVED]. Longer
+         * than the first retry of a failed setup (RendererRegistry.RETRY_FAILED_MS plus RETRY_CHECK_MS), so a live speaker that
+         * comes up after a start keeps its entry.
+         */
+        const val PRUNE_GRACE_MS = 6 * 60 * 1000L
+
+        /** The most often a [touch] writes a changed order to the file. */
+        const val RECENCY_WRITE_MS = 10 * 60 * 1000L
+    }
+
     private val file = File(dataDir, "ports.json")
     private val lock = Any()
     private val saved = LinkedHashMap<String, Int>()
     private val inUse = HashSet<Int>()
     private val writeMutex = Mutex()
 
-    /** Reads ports.json. A missing file is empty; anything unreadable or of the wrong shape is ignored with a warning. */
+    // All guarded by [lock].
+    private var loadedAt = clock()
+    private var lastWriteAt = clock()
+
+    /** The keys [load] read that no claim, remember or touch has marked seen yet. */
+    private val unseen = HashSet<String>()
+
+    /** The order in memory is not on disk yet. */
+    private var orderDirty = false
+    private var dropLogged = false
+
+    /** Reads ports.json. A missing file is empty; anything unreadable or of the wrong shape is ignored with a warning. Drops nothing, whatever the count. */
     fun load(): PortRegistry {
         val loaded = LinkedHashMap<String, Int>()
         try {
@@ -60,6 +97,11 @@ class PortRegistry(
         synchronized(lock) {
             saved.clear()
             saved.putAll(loaded)
+            unseen.clear()
+            unseen.addAll(loaded.keys)
+            orderDirty = false
+            loadedAt = clock()
+            lastWriteAt = loadedAt
         }
         return this
     }
@@ -67,6 +109,7 @@ class PortRegistry(
     /** Reserve a port for [udn]: its remembered one if free, else the lowest port nobody holds or remembers. */
     fun claim(udn: String): Int {
         synchronized(lock) {
+            unseen.remove(udn)
             val mine = saved[udn]
             if (mine != null && mine !in inUse) {
                 inUse.add(mine)
@@ -81,22 +124,84 @@ class PortRegistry(
         }
     }
 
-    /** Persist the port once the renderer is up, so devices that get filtered out do not reserve one. */
+    /** True while the start grace holds back the entries read from the file; a clock that moved backwards ends it. Call with [lock] held. */
+    private fun graceOn(): Boolean {
+        val d = clock() - loadedAt
+        return d >= 0 && d < PRUNE_GRACE_MS
+    }
+
+    /**
+     * Persist the port once the renderer is up, so devices that get filtered out do not reserve one. The speaker becomes the
+     * newest entry; while more than [maxSaved] are held, the oldest whose port is not in use go (an entry read from the file and
+     * not seen yet is kept through the start grace).
+     */
     suspend fun remember(udn: String, port: Int) {
+        var droppedNow = 0
+        var warnFirstDrop = false
         synchronized(lock) {
-            if (saved[udn] == port) return
-            saved[udn] = port
+            unseen.remove(udn)
+            val unchanged = saved[udn] == port && saved.keys.lastOrNull() == udn
+            if (!unchanged) {
+                saved.remove(udn)
+                saved[udn] = port
+            }
+            if (saved.size > maxSaved) {
+                val graceOn = graceOn()
+                val it = saved.entries.iterator()
+                while (saved.size > maxSaved && it.hasNext()) {
+                    val e = it.next()
+                    // a speaker mid-setup or finishing its destroy holds its port in inUse (and the new entry is never dropped)
+                    if (e.key == udn || e.value in inUse) continue
+                    if (graceOn && e.key in unseen) continue
+                    it.remove()
+                    droppedNow++
+                }
+                if (droppedNow > 0 && !dropLogged) {
+                    dropLogged = true
+                    warnFirstDrop = true
+                }
+            }
+            if (unchanged && droppedNow == 0) return
         }
+        if (warnFirstDrop) warn("Dropped $droppedNow oldest entries of $file beyond $maxSaved; later drops are not logged")
+        writeFile()
+    }
+
+    /**
+     * Marks [udn] as just seen: a saved entry moves to the end of the order. Never drops an entry. The order reaches the file
+     * only when it changed and [RECENCY_WRITE_MS] have passed since the last write (a kill loses at most that much recency; a
+     * bridge stop of an unchanged order writes nothing).
+     */
+    suspend fun touch(udn: String) {
+        val write = synchronized(lock) {
+            unseen.remove(udn)
+            if (udn in saved && saved.keys.lastOrNull() != udn) {
+                val port = saved.remove(udn)!!
+                saved[udn] = port
+                orderDirty = true
+            }
+            val sinceWrite = clock() - lastWriteAt
+            orderDirty && (sinceWrite < 0 || sinceWrite >= RECENCY_WRITE_MS)
+        }
+        if (write) writeFile()
+    }
+
+    private suspend fun writeFile() {
         // Several speakers come up at once; writes share one temp file, so run them one at a time.
         // The snapshot is taken inside the mutex, so the last writer always writes every entry.
         writeMutex.withLock {
-            val snapshot = synchronized(lock) { LinkedHashMap(saved) }
+            val snapshot = synchronized(lock) {
+                lastWriteAt = clock()
+                orderDirty = false
+                LinkedHashMap(saved)
+            }
             try {
                 withContext(Dispatchers.IO) {
                     val json = JsonObject(snapshot.mapValues { JsonPrimitive(it.value) })
                     writeTextAtomic(file, prettyJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
                 }
             } catch (e: IOException) {
+                synchronized(lock) { orderDirty = true }
                 warn("Could not save $file: ${e.message}")
             }
         }
