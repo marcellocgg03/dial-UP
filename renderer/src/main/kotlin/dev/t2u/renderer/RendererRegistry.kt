@@ -314,6 +314,8 @@ class RendererRegistry(
         if (existing != null) {
             if (existing.location == location) {
                 existing.refresh(age)
+                // a running speaker's ports.json entry follows its last alive, not its setup
+                ports.touch(udn)
                 return
             }
             // Same address, new description URL (rebooted, random port): rebuild. Another address while the entry is still
@@ -504,11 +506,13 @@ class RendererRegistry(
 
     /**
      * index.js removeRenderer: take it out of the list, destroy it (bounded by `destroyBudgetMs`, see [destroyBounded]),
-     * free its port (which stays remembered), log [event].
+     * free its port (which stays remembered, and the entry counts as just seen), log [event].
      */
     private suspend fun removeRenderer(udn: String, event: String = "removed", reason: String? = null) {
         val r = lock.withLock { running.remove(udn)?.also { publish() } } ?: return
         destroyBounded(r)
+        // a speaker that ran for weeks must not be older than a flood entry created after it; the (rare) write is not cut by a cancel
+        withContext(NonCancellable) { ports.touch(udn) }
         log(event, udn, r.name, r.location, r.port, reason)
     }
 
