@@ -31,6 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.IOException
 import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -873,7 +874,13 @@ class MediaServer(
                 }
                 if (!currentCoroutineContext().isActive) return null
                 withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
-                val proc = l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
+                val proc = try {
+                    l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IOException) {
+                    return null // ffmpeg cannot be started: the live path that follows records it (ffmpegStartFailure) and answers
+                }
                 try {
                     val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
                     while (true) {
@@ -935,7 +942,14 @@ class MediaServer(
                 if (!currentCoroutineContext().isActive) return
                 var proc: Process? = null
                 try {
-                    val p = l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
+                    val p = try {
+                        l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: IOException) {
+                        failures += failureLine(attempt.name, ffmpegStartFailure(e), attempts.size > 1)
+                        continue
+                    }
                     proc = p
                     val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
                     if (!done) {
