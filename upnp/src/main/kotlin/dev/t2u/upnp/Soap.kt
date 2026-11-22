@@ -10,6 +10,7 @@ package dev.t2u.upnp
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -193,6 +194,9 @@ internal suspend fun executeForText(call: Call, maxBytes: Long): Pair<Int, Strin
         },
     )
 }
+
+/** STUB (RED): the real rule follows in the GREEN commit. */
+internal fun speakerTargetProblem(url: HttpUrl, allowLoopback: Boolean): String? = null
 
 /** True for `localhost`, 127/8, `::1` and the IPv4-mapped forms of them; never resolves a name. */
 internal fun isLoopbackHost(host: String): Boolean {

@@ -49,6 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -92,6 +93,7 @@ class RendererTest {
         locationOverride: String? = null,
         private val artist: String = "Band",
         private val album: String = "",
+        allowLoopback: Boolean = true,
     ) : AutoCloseable {
         val dataDir: File = Files.createTempDirectory("renderer-").toFile().also { it.deleteOnExit() }
         val registered = CopyOnWriteArrayList<VideoEntry>()
@@ -158,7 +160,7 @@ class RendererTest {
                 },
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
-                allowLoopbackSpeakers = true,
+                allowLoopbackSpeakers = allowLoopback,
             ),
         )
 
@@ -190,6 +192,16 @@ class RendererTest {
             assertEquals(3000, h.receiverOptions?.dialPort)
             assertEquals("running", h.receiver.status)
             assertEquals(true, h.receiver.autoplayOnConnect)
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker on this device's loopback is refused before its description is fetched")
+    fun loopbackSpeakerRefusedByProductionDefault() = withFake { fake ->
+        Harness(fake, allowLoopback = false).use { h ->
+            val e = assertFailsWith<java.io.IOException> { h.renderer.init() }
+            assertTrue(e.message.orEmpty().contains("on this device"), e.message)
+            assertEquals(0, fake.descriptionRequests.get())
         }
     }
 

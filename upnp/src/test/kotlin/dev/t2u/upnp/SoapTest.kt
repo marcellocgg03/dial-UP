@@ -11,12 +11,15 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.net.ServerSocket
 import kotlin.test.assertEquals
+import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -162,6 +165,32 @@ class SoapTest {
         // and the production default constructor is the strict one
         val viaDefault = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://127.0.0.1:9/ctl", "", "")
         assertTrue(assertFailsWith<UpnpError> { runBlocking { SoapClient().callAction(viaDefault, "Stop") } }.message!!.contains("on this device"))
+    }
+
+    @Test
+    fun `speakerTargetProblem allows a private LAN literal and refuses everything else`() {
+        for (u in listOf(
+            "http://192.168.1.10:1400/xml/device_description.xml", "https://10.0.0.5/x", "http://172.16.0.9:1400/",
+            "http://[fe80::1]:1400/", "http://[fd12:3456::1]/",
+        )) assertNull(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false), u)
+        for (u in listOf("http://127.0.0.1/", "https://127.5.5.5/", "http://[::1]/", "https://localhost/", "http://[::ffff:127.0.0.1]/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "on this device", message = u)
+        }
+        for (u in listOf("https://example.com/", "http://speaker.local/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "not an IP literal", message = u)
+        }
+        for (u in listOf("https://8.8.8.8/", "http://203.0.113.7/", "http://100.64.0.1/", "https://[2001:db8::1]/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "not a private LAN address", message = u)
+        }
+        assertNull(speakerTargetProblem("http://127.0.0.1:9/".toHttpUrl(), allowLoopback = true))
+    }
+
+    @Test
+    fun `https to a public host is refused as ENETWORK by a plain client`() {
+        val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "https://8.8.8.8/ctl", "", "")
+        val err = assertFailsWith<UpnpError> { runBlocking { SoapClient(OkHttpClient()).callAction(svc, "Stop", timeoutMs = 300) } }
+        assertEquals("ENETWORK", err.code)
+        assertContains(err.message.orEmpty(), "(refused)")
     }
 
     @Test

@@ -60,6 +60,16 @@ class UpnpTest {
     }
 
     @Test
+    fun `a description fetch refuses a public address or a name before any request`() {
+        for (location in listOf("https://8.8.8.8/d.xml", "https://example.com/d.xml")) {
+            val e = assertFailsWith<java.io.IOException>(location) {
+                runBlocking { fetchDescription(okhttp3.OkHttpClient(), location, timeoutMs = 300) }
+            }
+            assertTrue(e.message.orEmpty().endsWith("(refused)"), e.message)
+        }
+    }
+
+    @Test
     @DisplayName("DIDL escapes metadata")
     fun didlEscapes() {
         val x = buildDidl(
