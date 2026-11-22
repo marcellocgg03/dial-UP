@@ -69,6 +69,7 @@ internal class PipeTee(
     /**
      * Runs [args] and answers [call] from its stdout. Returns null when the answer was written (the call is done,
      * whether the speaker stayed to the end or hung up), else the failure detail of this attempt with nothing sent yet.
+     * An ffmpeg that cannot be started is a failed attempt like any other: the detail is [ffmpegStartFailure].
      */
     suspend fun serve(
         call: ApplicationCall,
@@ -79,7 +80,13 @@ internal class PipeTee(
         args: List<String>,
         onFirstByte: () -> Unit = {},
     ): String? {
-        val proc = launcher.startOwned(args)
+        val proc = try {
+            launcher.startOwned(args)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            return ffmpegStartFailure(e)
+        }
         try {
             val stdout = proc.inputStream
             val buf = ByteArray(PIPE_CHUNK)
