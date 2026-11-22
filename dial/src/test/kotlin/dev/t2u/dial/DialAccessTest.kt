@@ -72,7 +72,7 @@ class DialAccessTest {
     }
 
     @Test
-    fun lanModeAllowsEveryoneAndPhoneModeFollowsTheLiveMode() {
+    fun lanModeServesAPrivateHostAndPhoneModeFollowsTheLiveMode() {
         assertTrue(policy(DialAccessMode.LAN).allowsHttp("192.168.50.45"))
         var mode = DialAccessMode.PHONE
         val live = DialAccessPolicy({ mode }, { setOf(phoneIp) })
@@ -131,6 +131,44 @@ class DialAccessTest {
         }
         val phone = policy(DialAccessMode.PHONE)
         assertFalse(phone.allowsSsdp(InetAddress.getByName("8.8.8.8")))
+    }
+
+    @Test
+    fun lanModeHttpMakesTheSsdpDecision() {
+        val lan = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(phoneIp) }, { InetAddress.getByName(phoneIp) to 24 })
+        val served = listOf(
+            "192.168.50.45", "::ffff:192.168.50.45", "192.168.50.38", "127.0.0.1", "[::1]", "0:0:0:0:0:0:0:1", "fe80::1%wlan0", "fd12:3456::1",
+        )
+        val refused = listOf(
+            "192.168.51.45", "10.8.0.2", "172.16.0.9", "8.8.8.8", "203.0.113.7", "::ffff:8.8.8.8", "2001:db8::1", "100.64.0.1",
+            "", "localhost", "not-an-ip", "1127.0.0.1", "192.168.50.045",
+        )
+        for (ok in served) assertTrue(lan.allowsHttp(ok), "should serve '$ok'")
+        for (no in refused) assertFalse(lan.allowsHttp(no), "should refuse '$no'")
+        // one rule: the literals of both lists give the same answer on the address object
+        val notLiterals = setOf("", "localhost", "not-an-ip", "1127.0.0.1", "192.168.50.045")
+        for (text in (served + refused).filter { it !in notLiterals }) {
+            val bare = text.removePrefix("[").removeSuffix("]").substringBefore('%')
+            assertEquals(lan.allowsHttp(text), lan.allowsSsdp(InetAddress.getByName(bare)), "HTTP and SSDP agree on '$text'")
+        }
+        // subnet unknown: the private-source rule alone, by both gates
+        val unknown = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(phoneIp) })
+        assertTrue(unknown.allowsHttp("10.8.0.2"))
+        assertTrue(unknown.allowsSsdp(InetAddress.getByName("10.8.0.2")))
+        assertFalse(unknown.allowsHttp("8.8.8.8"))
+        assertFalse(unknown.allowsSsdp(InetAddress.getByName("8.8.8.8")))
+    }
+
+    @Test
+    fun theOwnPublicAddressIsServedByBothGates() {
+        val publicIp = "203.0.113.7"
+        val lan = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(publicIp) }, { InetAddress.getByName(publicIp) to 24 })
+        assertTrue(lan.allowsHttp(publicIp))
+        assertTrue(lan.allowsSsdp(InetAddress.getByName(publicIp)))
+        assertFalse(lan.allowsHttp("203.0.113.8"))
+        assertFalse(lan.allowsSsdp(InetAddress.getByName("203.0.113.8")))
+        assertTrue(lan.allowsHttp("127.0.0.1"))
+        assertTrue(lan.allowsSsdp(InetAddress.getByName("127.0.0.1")))
     }
 
     @Test
@@ -289,6 +327,32 @@ class DialAccessTest {
 
         val policy = DialAccessPolicy({ DialAccessMode.PHONE }, { emptySet() })
         val cfg = DialConfig("T2U real", uuid, "0.0.0.0", 0, accessPolicy = policy::allowsHttp)
+        val server = DialServer(cfg) {}
+        server.start()
+        try {
+            val port = server.resolvedPort()
+            val http = HttpClient.newHttpClient()
+            fun status(host: String): Int = http.send(
+                HttpRequest.newBuilder(URI.create("http://$host:$port/ytcr/ssdp/device-desc.xml")).GET().build(),
+                HttpResponse.BodyHandlers.discarding(),
+            ).statusCode()
+            assertEquals(200, status("127.0.0.1"))
+            assertEquals(403, status(hostIp!!.hostAddress))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun aLanModeServerRefusesAnOffSubnetHostAndStillAnswersLoopback() {
+        val hostIp = NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
+        Assumptions.assumeTrue(hostIp != null, "host has no non-loopback IPv4 address")
+
+        val policy = DialAccessPolicy({ DialAccessMode.LAN }, { emptySet() }, { InetAddress.getByName("192.0.2.1") to 32 })
+        val cfg = DialConfig("T2U real lan", uuid, "0.0.0.0", 0, accessPolicy = policy::allowsHttp)
         val server = DialServer(cfg) {}
         server.start()
         try {
