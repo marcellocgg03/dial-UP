@@ -11,12 +11,17 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.net.ServerSocket
 import kotlin.test.assertEquals
+import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -124,6 +129,26 @@ class SoapTest {
     }
 
     @Test
+    fun `an oversized fault description becomes a short clean UpnpError message`() {
+        val desc = "Bad\tthing\n" + "x".repeat(5000) + "\u0007"
+        withCannedServer(
+            500,
+            """<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail>""" +
+                """<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>714</errorCode>""" +
+                """<errorDescription>$desc</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>""",
+        ) { svc ->
+            val err = assertFailsWith<UpnpError> { runBlocking { soap.callAction(svc, "Play") } }
+            val message = err.message ?: ""
+            assertTrue(message.length <= 200, "message has ${message.length} characters")
+            assertTrue(message.none { Character.isISOControl(it) }, "no control character in the message")
+            assertTrue(message.startsWith("Play: Bad thing"), message)
+            assertTrue(message.endsWith("\u2026"), "a cut text ends with the ellipsis")
+            assertEquals("714", err.errorCode)
+            assertEquals("EUPNP", err.code)
+        }
+    }
+
+    @Test
     fun `errorCode 401 maps to ENOACTION`() {
         withCannedServer(
             500,
@@ -165,6 +190,32 @@ class SoapTest {
     }
 
     @Test
+    fun `speakerTargetProblem allows a private LAN literal and refuses everything else`() {
+        for (u in listOf(
+            "http://192.168.1.10:1400/xml/device_description.xml", "https://10.0.0.5/x", "http://172.16.0.9:1400/",
+            "http://[fe80::1]:1400/", "http://[fd12:3456::1]/",
+        )) assertNull(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false), u)
+        for (u in listOf("http://127.0.0.1/", "https://127.5.5.5/", "http://[::1]/", "https://localhost/", "http://[::ffff:127.0.0.1]/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "on this device", message = u)
+        }
+        for (u in listOf("https://example.com/", "http://speaker.local/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "not an IP literal", message = u)
+        }
+        for (u in listOf("https://8.8.8.8/", "http://203.0.113.7/", "http://100.64.0.1/", "https://[2001:db8::1]/")) {
+            assertContains(speakerTargetProblem(u.toHttpUrl(), allowLoopback = false).orEmpty(), "not a private LAN address", message = u)
+        }
+        assertNull(speakerTargetProblem("http://127.0.0.1:9/".toHttpUrl(), allowLoopback = true))
+    }
+
+    @Test
+    fun `https to a public host is refused as ENETWORK by a plain client`() {
+        val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "https://8.8.8.8/ctl", "", "")
+        val err = assertFailsWith<UpnpError> { runBlocking { SoapClient(OkHttpClient()).callAction(svc, "Stop", timeoutMs = 300) } }
+        assertEquals("ENETWORK", err.code)
+        assertContains(err.message.orEmpty(), "(refused)")
+    }
+
+    @Test
     fun `the default client refuses a public address as ENETWORK`() {
         val svc = UpnpService("urn:schemas-upnp-org:service:AVTransport:1", "http://8.8.8.8/ctl", "", "")
         val err = assertFailsWith<UpnpError> { runBlocking { SoapClient().callAction(svc, "Stop") } }
@@ -188,6 +239,23 @@ class SoapTest {
             val out = soap.callAction(renderingControl(fake), "GetVolume", listOf("InstanceID" to 0, "Channel" to "Master"))
             assertEquals("55", out["CurrentVolume"])
         }
+    }
+
+    @Test
+    fun `serviceType is escaped in the envelope and ordinary envelopes are unchanged`() {
+        val raw = "urn:a&b\"<c>'"
+        val envelope = buildEnvelope(raw, "Play", listOf("InstanceID" to 0))
+        assertContains(envelope, "xmlns:u=\"urn:a&amp;b&quot;&lt;c&gt;&apos;\"")
+        val play = Jsoup.parse(envelope, "", Parser.xmlParser()).getAllElements().single { it.tagName() == "u:Play" }
+        assertEquals(raw, play.attr("xmlns:u"))
+
+        assertEquals(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
+                "<s:Body><u:Play xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\"><InstanceID>0</InstanceID><Speed>1</Speed></u:Play></s:Body></s:Envelope>",
+            buildEnvelope("urn:schemas-upnp-org:service:AVTransport:1", "Play", listOf("InstanceID" to 0, "Speed" to "1")),
+        )
+        assertContains(buildEnvelope("urn:x:1", "Play", listOf("V" to "a&b")), "<V>a&amp;b</V>")
     }
 
     @Test

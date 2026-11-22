@@ -14,6 +14,7 @@ import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.NoEvents
 import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.maxAge
+import dev.t2u.upnp.speakerFailureText
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -406,7 +407,7 @@ class RendererRegistry(
                 if (port != null) ports.release(port)
                 lock.withLock { putSkip(udn, Skip(location, clock() + RETRY_FAILED_MS, src, age, retryAttempt ?: 0)) }
             }
-            val message = e.message ?: e.javaClass.simpleName
+            val message = speakerFailureText(e)
             log("failed", udn, renderer?.name, location, port, reason = message)
             if (retryAttempt != null) logRetry("failed", udn, renderer?.name, location, port, retryAttempt, "failed", message)
         } finally {
@@ -497,7 +498,7 @@ class RendererRegistry(
                 r.reviveIfDue(clock())
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                logRetry("terminated", r.udn, r.name, r.location, r.port, null, "failed", e.message ?: e.javaClass.simpleName)
+                logRetry("terminated", r.udn, r.name, r.location, r.port, null, "failed", speakerFailureText(e))
                 continue
             }
             if (outcome != null) logRetry("terminated", r.udn, r.name, r.location, r.port, null, if (outcome) "running" else "failed")
@@ -640,7 +641,7 @@ class RendererRegistry(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("stop-failed", udn, r.name, r.location, r.port, e.message ?: e.javaClass.simpleName)
+            log("stop-failed", udn, r.name, r.location, r.port, speakerFailureText(e))
         }
     }
 
@@ -654,7 +655,7 @@ class RendererRegistry(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("clear-failed", udn, r.name, r.location, r.port, e.message ?: e.javaClass.simpleName)
+            log("clear-failed", udn, r.name, r.location, r.port, speakerFailureText(e))
         }
     }
 
@@ -668,7 +669,7 @@ class RendererRegistry(
                 block()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                log("failed", "-", reason = "schedule: ${e.message ?: e.javaClass.simpleName}")
+                log("failed", "-", reason = "schedule: ${speakerFailureText(e)}")
             }
         }
         // every search the schedule starts counts as a fresh chance for the speakers to answer

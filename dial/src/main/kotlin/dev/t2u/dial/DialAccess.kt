@@ -1,8 +1,10 @@
 package dev.t2u.dial
 
 import dev.t2u.upnp.isPrivateLanAddress
+import dev.t2u.upnp.parseIpv4Literal
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URLDecoder
 
 /**
  * Who may reach a DIAL receiver. [PHONE] is the default: only the phone's own
@@ -19,8 +21,11 @@ enum class DialAccessMode(val wire: String) {
 }
 
 /**
- * The one access decision shared by the DIAL HTTP gate and the SSDP responder. [mode] and
- * [phoneAddresses] are read on every call, so a mode change applies to the next request.
+ * The one access decision shared by the DIAL HTTP gate and the SSDP responder: [allowsHttp] and [allowsSsdp] both end in the
+ * same private decision on an address, so they accept and refuse the same hosts. Loopback and the phone's own addresses are
+ * served first, in both modes, also when the Wi-Fi gives the phone a public address. In [DialAccessMode.PHONE] nothing else is
+ * served; in [DialAccessMode.LAN] a private LAN address on the known Wi-Fi subnet is. The refusal answer is DialServer's 403.
+ * [mode] and [phoneAddresses] are read on every call, so a mode change applies to the next request.
  */
 class DialAccessPolicy(
     private val mode: () -> DialAccessMode,
@@ -31,13 +36,13 @@ class DialAccessPolicy(
      */
     private val lanSubnet: () -> Pair<InetAddress, Int>? = { null },
 ) {
-    /** True when a request from [remote] (an address string as the HTTP engine reports it) may be served. */
+    /**
+     * True when a request from [remote] (an address string as the HTTP engine reports it) may be served: the same decision
+     * as [allowsSsdp]. A [remote] that is not an IP literal is refused, and no name lookup is ever made.
+     */
     fun allowsHttp(remote: String): Boolean {
-        if (mode() == DialAccessMode.LAN) return true
-        val addr = normalise(remote)
-        if (addr.isEmpty()) return false
-        if (LOOPBACK_V4.matches(addr) || addr == "::1" || addr == "0:0:0:0:0:0:0:1") return true
-        return addr in phoneAddresses().map(::normalise)
+        val address = parseRemote(normalise(remote)) ?: return false
+        return decide(address)
     }
 
     /**
@@ -53,20 +58,35 @@ class DialAccessPolicy(
     }
 
     /**
-     * True when an SSDP datagram from [address] may be answered. Unlike HTTP (bound to the Wi-Fi address only) the SSDP socket
-     * listens on every interface, so in [DialAccessMode.LAN] the source must also be a private LAN address; a global or
-     * mapped-public source is never answered. When the Wi-Fi subnet is known ([lanSubnet]) an IPv4 source must also be on it,
-     * so another private network that reaches the phone (a VPN, a tether) is not answered either; loopback, the phone's own
-     * addresses and IPv6 sources are judged as before.
+     * True when an SSDP datagram from [address] may be answered: the same decision as [allowsHttp]. Unlike HTTP (bound to the
+     * Wi-Fi address only) the SSDP socket listens on every interface, so in [DialAccessMode.LAN] the source must be a private
+     * LAN address, and when the Wi-Fi subnet is known ([lanSubnet]) an IPv4 source must be on it, so another private network
+     * that reaches the phone (a VPN, a tether) is not answered either. Loopback and the phone's own addresses come first.
      */
-    fun allowsSsdp(address: InetAddress): Boolean {
-        if (!allowsHttp(address.hostAddress.orEmpty())) return false
-        if (mode() != DialAccessMode.LAN) return true
+    fun allowsSsdp(address: InetAddress): Boolean = decide(address)
+
+    private fun decide(address: InetAddress): Boolean {
+        if (address.isLoopbackAddress) return true
+        if (phoneAddresses().any { parseRemote(normalise(it)) == address }) return true
+        if (mode() != DialAccessMode.LAN) return false
         if (!isPrivateLanAddress(address)) return false
         val subnet = lanSubnet() ?: return true
-        if (address !is Inet4Address || address.isLoopbackAddress) return true
-        if (address.hostAddress in phoneAddresses().map(::normalise)) return true
+        if (address !is Inet4Address) return true
         return sameSubnet(address, subnet.first, subnet.second)
+    }
+
+    /**
+     * An IPv4 dotted quad or an IPv6 literal, never a name: [InetAddress.getByName] is only reached for text holding a colon,
+     * which cannot be a host name, so no lookup can happen. Null for anything else.
+     */
+    private fun parseRemote(text: String): InetAddress? {
+        if (text.isEmpty()) return null
+        if (!text.contains(':')) return parseIpv4Literal(text)
+        return try {
+            InetAddress.getByName(text)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun sameSubnet(a: InetAddress, b: InetAddress, prefix: Int): Boolean {
@@ -100,10 +120,44 @@ class DialAccessPolicy(
     }
 }
 
-/** Replaces the value of a `pairingCode` form field with `<redacted len N>`; other fields are untouched. */
-fun redactLaunchBody(body: String?): String? {
-    if (body == null) return null
-    return body.split('&').joinToString("&") { field ->
-        if (field.startsWith("pairingCode=")) "pairingCode=<redacted len ${field.length - "pairingCode=".length}>" else field
+private val REDACTION_MARKER = Regex("^<redacted len \\d+>$")
+
+/**
+ * [field] (one `name=value` pair of a form body) with the value of a `pairingCode` field replaced by `<redacted len N>`, where N
+ * is the length of the value as sent. The name is percent-decoded before the comparison, the way the receiver decodes it
+ * (`YouTubeApp.parseForm`, a malformed escape keeps the raw name), so a spelling the receiver accepts cannot slip through. The raw
+ * name is kept in the output. A value that is already a marker is left alone, which makes the redaction idempotent. Any other
+ * field, and a field without '=', is returned byte-identical.
+ */
+private fun redactField(field: String): String {
+    val eq = field.indexOf('=')
+    if (eq < 0) return field
+    val rawName = field.substring(0, eq)
+    val value = field.substring(eq + 1)
+    val name = try {
+        URLDecoder.decode(rawName, "UTF-8")
+    } catch (_: IllegalArgumentException) {
+        rawName
     }
+    if (name != "pairingCode" || REDACTION_MARKER.matches(value)) return field
+    return "$rawName=<redacted len ${value.length}>"
+}
+
+private fun redactForm(form: String): String = form.split('&').joinToString("&") { redactField(it) }
+
+/**
+ * Replaces the value of a `pairingCode` form field with `<redacted len N>`; other fields are untouched. Field names are decoded
+ * like the receiver decodes them, and running it on its own output changes nothing, so a second pass cannot change the logged
+ * length (N is the length of the code as sent).
+ */
+fun redactLaunchBody(body: String?): String? = body?.let { redactForm(it) }
+
+/**
+ * [uri] with the value of a `pairingCode` field in its query string replaced by `<redacted len N>`, by the same rules as
+ * [redactLaunchBody]. The part before the first '?' is a path and is kept as is; a uri without '?' is returned unchanged.
+ */
+fun redactLaunchUri(uri: String): String {
+    val q = uri.indexOf('?')
+    if (q < 0) return uri
+    return uri.substring(0, q + 1) + redactForm(uri.substring(q + 1))
 }

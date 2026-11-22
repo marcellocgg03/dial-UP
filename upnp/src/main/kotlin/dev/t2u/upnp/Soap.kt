@@ -10,6 +10,7 @@ package dev.t2u.upnp
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,14 +26,15 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * [code] is "ENETWORK" (no answer), "ENOACTION" (UPnP error 401) or "EUPNP" (any other fault);
- * [statusCode] is the HTTP status and [errorCode] the UPnP errorCode text ("" when none).
+ * [statusCode] is the HTTP status and [errorCode] the UPnP errorCode text ("" when none). The message is passed through
+ * [cleanSpeakerText]: it can carry a speaker's fault text, so it is at most 200 characters with no control character.
  */
 class UpnpError(
     message: String,
     val code: String?,
     val statusCode: Int? = null,
     val errorCode: String? = null,
-) : Exception(message)
+) : Exception(cleanSpeakerText(message))
 
 data class UpnpService(
     val serviceType: String,
@@ -86,7 +88,7 @@ fun buildEnvelope(serviceType: String, action: String, params: List<Pair<String,
     val args = params.joinToString("") { (k, v) -> "<$k>${soapEscape(v)}</$k>" }
     return "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
-        "<s:Body><u:$action xmlns:u=\"$serviceType\">$args</u:$action></s:Body></s:Envelope>"
+        "<s:Body><u:$action xmlns:u=\"${soapEscape(serviceType)}\">$args</u:$action></s:Body></s:Envelope>"
 }
 
 private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
@@ -119,10 +121,11 @@ class SoapClient(private val http: OkHttpClient, private val allowLoopback: Bool
         } catch (e: IllegalArgumentException) {
             throw UpnpError("$action: bad control URL (${e.message})", "ENETWORK")
         }
-        // A speaker is another device: a control URL on this device's own loopback is a description aiming the call at the
-        // phone itself. The LAN guard allows 127/8 (tests run against loopback fakes), so this is refused here unless [allowLoopback].
-        if (!allowLoopback && isLoopbackHost(request.url.host)) {
-            throw UpnpError("$action: control URL is on this device (refused)", "ENETWORK")
+        // A speaker is another device on the LAN: a control URL on this device's own loopback, a name, a public address or
+        // https off the LAN is a description aiming the call elsewhere. The shared LAN guard allows 127/8 and every https
+        // host, so the speaker rule is applied here, before the call is made.
+        speakerTargetProblem(request.url, allowLoopback)?.let { problem ->
+            throw UpnpError("$action: control URL $problem (refused)", "ENETWORK")
         }
         val call = http.newCall(request)
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -192,6 +195,26 @@ internal suspend fun executeForText(call: Call, maxBytes: Long): Pair<Int, Strin
             }
         },
     )
+}
+
+/**
+ * The one rule for a call to a speaker (the description fetch and SOAP): returns null when [url] may be called, else a
+ * short phrase for the refusal. The host must be a private LAN IP literal (see [isPrivateLanAddress]), for http and https
+ * alike; this device's loopback is refused unless [allowLoopback] (the test seam for the JVM fakes on 127/8), and a name
+ * is refused without being resolved.
+ *
+ * Only calls to a speaker use it. The shared [PrivateLanGuard] stays as it is because the YouTube lounge, InnerTube,
+ * the googlevideo fetch, the update check and thumbnails need https to public hosts.
+ */
+internal fun speakerTargetProblem(url: HttpUrl, allowLoopback: Boolean): String? {
+    val host = url.host
+    if (!allowLoopback && isLoopbackHost(host)) return "is on this device"
+    // A name cannot contain ':', so getByName on a host with one parses an IPv6 literal and never does a lookup.
+    val literal = when {
+        host.contains(':') -> try { java.net.InetAddress.getByName(host) } catch (_: Exception) { null }
+        else -> parseIpv4Literal(host)
+    } ?: return "is not an IP literal"
+    return if (isPrivateLanAddress(literal)) null else "is not a private LAN address"
 }
 
 /** True for `localhost`, 127/8, `::1` and the IPv4-mapped forms of them; never resolves a name. */

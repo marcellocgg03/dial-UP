@@ -36,11 +36,36 @@ class UpnpTest {
     fun embeddedRenderer() = runBlocking {
         FakeRenderer().use { fake ->
             fake.start()
-            val d = fetchDescription(lanHttpClient(), fake.location)
+            val d = fetchDescription(lanHttpClient(), fake.location, allowLoopback = true)
             assertEquals("Living Room Speaker", d.friendlyName)
             val avTransport = assertNotNull(d.services["urn:upnp-org:serviceId:AVTransport"])
             assertTrue(Regex("""^http://127\.0\.0\.1:\d+/ctl/AVTransport$""").matches(avTransport.controlURL), avTransport.controlURL)
             assertEquals("urn:schemas-upnp-org:service:AVTransport:1", avTransport.serviceType)
+        }
+    }
+
+    @Test
+    fun `a description on this device's loopback is refused unless the test seam allows it`() {
+        FakeRenderer().use { fake ->
+            fake.start()
+            val e = assertFailsWith<java.io.IOException> {
+                runBlocking { fetchDescription(lanHttpClient(), fake.location) }
+            }
+            assertContains(e.message.orEmpty(), "on this device")
+            assertContains(e.message.orEmpty(), "(refused)")
+            assertEquals(0, fake.descriptionRequests.get())
+            val d = runBlocking { fetchDescription(lanHttpClient(), fake.location, allowLoopback = true) }
+            assertEquals("Living Room Speaker", d.friendlyName)
+        }
+    }
+
+    @Test
+    fun `a description fetch refuses a public address or a name before any request`() {
+        for (location in listOf("https://8.8.8.8/d.xml", "https://example.com/d.xml")) {
+            val e = assertFailsWith<java.io.IOException>(location) {
+                runBlocking { fetchDescription(okhttp3.OkHttpClient(), location, timeoutMs = 300) }
+            }
+            assertTrue(e.message.orEmpty().endsWith("(refused)"), e.message)
         }
     }
 
@@ -144,6 +169,41 @@ class UpnpTest {
     }
 
     @Test
+    fun `an SCPD or event URL on another host or port is blanked and the service kept`() {
+        val location = "http://10.0.0.5:1400/xml/desc.xml"
+        val off = listOf(
+            "http://10.0.0.9:1400/scpd", "http://10.0.0.5:8080/scpd", "http://127.0.0.1:1400/scpd",
+            "http://[::1]:1400/scpd", "http://10.0.0.5/scpd",
+        )
+        fun descriptionWith(scpd: String, event: String) = root(
+            device(
+                mr, "Speaker",
+                services = "<service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>" +
+                    "<serviceId>urn:upnp-org:serviceId:AVTransport</serviceId><SCPDURL>$scpd</SCPDURL>" +
+                    "<controlURL>/ctl/AVTransport</controlURL><eventSubURL>$event</eventSubURL></service>",
+            ),
+        )
+        for (url in off) {
+            val d = parseDescription(descriptionWith(url, "/evt/AVTransport"), location)
+            val svc = assertNotNull(d.services["urn:upnp-org:serviceId:AVTransport"], url)
+            assertEquals("", svc.scpdURL, url)
+            assertEquals("http://10.0.0.5:1400/ctl/AVTransport", svc.controlURL, url)
+            assertEquals("http://10.0.0.5:1400/evt/AVTransport", svc.eventSubURL, url)
+
+            val e = parseDescription(descriptionWith("/scpd/AVTransport.xml", url), location)
+            val evSvc = assertNotNull(e.services["urn:upnp-org:serviceId:AVTransport"], url)
+            assertEquals("", evSvc.eventSubURL, url)
+            assertEquals("http://10.0.0.5:1400/scpd/AVTransport.xml", evSvc.scpdURL, url)
+            assertEquals("http://10.0.0.5:1400/ctl/AVTransport", evSvc.controlURL, url)
+        }
+        // the Sonos shape (relative) and an absolute URL on the LOCATION authority keep their resolved values
+        val kept = parseDescription(descriptionWith("http://10.0.0.5:1400/scpd/x.xml", "/evt/AVTransport"), location)
+        val svc = assertNotNull(kept.services["urn:upnp-org:serviceId:AVTransport"])
+        assertEquals("http://10.0.0.5:1400/scpd/x.xml", svc.scpdURL)
+        assertEquals("http://10.0.0.5:1400/evt/AVTransport", svc.eventSubURL)
+    }
+
+    @Test
     fun `urls resolve against the description location without URLBase`() {
         val rel = service("urn:upnp-org:serviceId:AVTransport", "AVTransport").replace("/ctl/AVTransport", "ctl/AVTransport")
         val s = parseDescription(root(device(mr, "R", services = rel)), "http://10.0.0.5:1400/xml/desc.xml")
@@ -158,6 +218,35 @@ class UpnpTest {
         for (svc in listOf(a, b)) {
             val d = parseDescription(root(device(mr, "R", services = svc)), "http://10.0.0.2/d.xml")
             assertEquals(setOf("urn:upnp-org:serviceId:AVTransport"), d.services.keys)
+        }
+    }
+
+    @Test
+    fun `a long friendlyName with control characters is cleaned and clipped`() {
+        fun nameOf(raw: String) =
+            parseDescription(root(device(mr, raw, services = avt)), "http://10.0.0.2/d.xml").friendlyName
+
+        val long = nameOf("Kitchen\u0007" + "z".repeat(5000))
+        assertTrue(long.length <= 200, "name has ${long.length} characters")
+        assertTrue(long.none { Character.isISOControl(it) }, "no control character in the name")
+        assertTrue(long.startsWith("Kitchen "), long)
+        assertTrue(long.endsWith("\u2026"), "a cut name ends with the ellipsis")
+        assertEquals("Unknown renderer", nameOf("\u0001\u0007"))
+        assertEquals("Living Room", nameOf("Living Room"))
+    }
+
+    @Test
+    fun `a failed description fetch names the LOCATION in at most 200 characters`() = runBlocking {
+        FakeRenderer().use { fake ->
+            fake.start()
+            val location = fake.location.replace("/desc.xml", "/" + "p".repeat(3000))
+            val e = assertFailsWith<java.io.IOException> {
+                fetchDescription(lanHttpClient(), location, allowLoopback = true)
+            }
+            val message = e.message ?: ""
+            assertTrue(message.length <= 200, "message has ${message.length} characters")
+            assertTrue(message.startsWith("HTTP 404 fetching http://127.0.0.1"), message)
+            assertTrue(message.endsWith("\u2026"), "a cut message ends with the ellipsis")
         }
     }
 

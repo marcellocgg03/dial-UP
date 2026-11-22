@@ -5,6 +5,7 @@ package dev.t2u.renderer
 import dev.t2u.upnp.DeviceDescription
 import dev.t2u.upnp.SoapClient
 import dev.t2u.upnp.UpnpError
+import dev.t2u.upnp.speakerFailureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
@@ -41,7 +42,7 @@ internal class SoapTransport(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            note("warn", "$action failed: ${e.message}")
+            note("warn", "$action failed: ${speakerFailureText(e)}")
             false
         }
 
@@ -52,7 +53,7 @@ internal class SoapTransport(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            note("debug", "$action failed (ignored): ${e.message}")
+            note("debug", "$action failed (ignored): ${speakerFailureText(e)}")
             null
         }
 

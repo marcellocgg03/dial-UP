@@ -655,6 +655,24 @@ class FormatChainTest {
     }
 
     @Test
+    @DisplayName("an oversized failure text leaves a short clean lastError")
+    fun oversizedFailureTextLeavesShortCleanLastError() = withFake { fake ->
+        RendererHarness(
+            fake,
+            config = { Config(dataDir = it, pollIntervalMs = 50, startTimeoutMs = 200, outputFormat = "direct") },
+            prepareFailure = { IllegalStateException("download failed\n" + "y".repeat(5000)) },
+        ).use { h ->
+            h.renderer.init()
+            assertFalse(h.renderer.doPlay(Video(DQW), 0.0))
+            val error = h.renderer.lastError ?: ""
+            assertTrue(error.length <= 200, "lastError has ${error.length} characters")
+            assertTrue(error.none { Character.isISOControl(it) }, "no control character in lastError")
+            assertTrue(error.startsWith("download failed "), error)
+            assertTrue(error.endsWith("\u2026"), "a cut text ends with the ellipsis")
+        }
+    }
+
+    @Test
     @DisplayName("the start clock begins at Play, not at the start of a slow prepare")
     fun theClockStartsAtPlay() = withFake { fake ->
         RendererHarness(fake, config = ::auto, prepareDelayMs = 500).use { h ->

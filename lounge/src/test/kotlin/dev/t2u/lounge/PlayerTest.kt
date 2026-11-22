@@ -43,9 +43,13 @@ class FakePlayer : Player() {
 
     override fun seekHoldActive(): Boolean = seekHold
 
+    /** When set, doPlay throws this after recording the call. */
+    var playFailure: Throwable? = null
+
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
+        playFailure?.let { throw it }
         return playResult
     }
 
@@ -107,9 +111,13 @@ class ScriptedHandler(private val answers: Map<String, PreviousNextVideos?>) : P
     @Volatile
     var failOn: String? = null
 
+    /** The message of the exception thrown for [failOn]. */
+    @Volatile
+    var failMessage: String = "handler boom"
+
     override suspend fun getPreviousNextVideos(target: Video, playlist: Playlist): PreviousNextVideos? {
         asked += target.id
-        if (target.id == failOn) throw IllegalStateException("handler boom")
+        if (target.id == failOn) throw IllegalStateException(failMessage)
         return answers[target.id]
     }
 }
@@ -403,6 +411,32 @@ class PlayerTest {
     }
 
     @Test
+    fun applyVolumeClampsTheLevelBeforeTheSpeakerIsAsked() = runBlocking {
+        val player = FakePlayer()
+        val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+
+        player.applyVolume(Volume(250, false))
+        assertEquals(Volume(100, false), player.lastVolumeSet)
+        player.applyVolume(Volume(-7, false))
+        assertEquals(Volume(0, false), player.lastVolumeSet)
+        player.applyVolume(Volume(40, false))
+        assertEquals(Volume(40, false), player.lastVolumeSet)
+
+        player.setZeroVolumeLevelOnMute(true)
+        player.applyVolume(Volume(250, true))
+        assertEquals(Volume(0, true), player.lastVolumeSet)
+        player.setZeroVolumeLevelOnMute(false)
+
+        assertTrue(player.setVolume(Volume(101, false)))
+        assertEquals(Volume(100, false), player.lastVolumeSet)
+
+        val levels = logged.filter { it["type"] == "setVolume" }.map { it["level"] }
+        assertTrue(levels.take(3) == listOf(100, 0, 40), "the setVolume log carries the clamped level: $levels")
+        assertTrue(player.calls.none { it == "volume:250:false" || it == "volume:-7:false" || it == "volume:101:false" })
+    }
+
+    @Test
     fun withTheNoOpHandlerThereIsNothingPreviousOrNext() = runBlocking {
         val (player, events) = playing()
         assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
@@ -462,7 +496,9 @@ class PlayerTest {
         assertTrue(player.play(player.queue.current!!, 0.0))
         assertEquals(PlayerStatus.PLAYING, player.status)
         assertEquals(2, good.size)
-        assertTrue(reported.any { it.first == "player" && it.second["error"].toString().contains("listener boom") })
+        // the log names the failing step and the exception class, never the exception's text (D-14)
+        assertTrue(reported.any { it.first == "player" && it.second["type"] == "listenerError" && it.second["error"] == "IllegalStateException" })
+        assertTrue(reported.none { e -> e.second.values.any { it.toString().contains("listener boom") } })
     }
 
     @Test
@@ -648,6 +684,87 @@ class PlayerTest {
         assertEquals(PlayerStatus.IDLE, player.status)
         assertNull(player.queue.current)
         assertTrue(reported.any { it["type"] == "clearFailed" })
+    }
+
+    /** T-12-14: exception text can carry a signed URL, so no player event may hold it; the class name is logged instead. */
+    @Test
+    fun noPlayerLogCarriesExceptionText() = runBlocking {
+        val secret = "http://h/p?sig=SECRET"
+        fun boom() = IllegalStateException(secret)
+
+        // every site is checked before the test fails, so one run names all the sites that leak
+        val problems = mutableListOf<String>()
+
+        fun assertClassOnly(logged: List<Map<String, Any?>>, type: String) {
+            val mine = logged.filter { it["type"] == type }
+            if (mine.isEmpty()) problems += "no $type event was logged: $logged"
+            if (!mine.all { it["error"] == "IllegalStateException" }) problems += "$type must log the class name only: $mine"
+            if (logged.any { e -> e.values.any { it.toString().contains("SECRET") } }) problems += "$type: exception text reached the log: $logged"
+        }
+
+        // playFailed: doPlay throws
+        run {
+            val (player, _) = queued()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            player.playFailure = boom()
+            assertFalse(player.play(player.queue.current!!, 0.0))
+            assertClassOnly(logged, "playFailed")
+        }
+
+        // hopRefreshFailed: the handler throws while the refresh after a hop runs
+        run {
+            val (player, handler, _) = chain(AutoplayMode.ENABLED)
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            assertTrue(player.play(player.queue.current!!, 0.0))
+            handler.failOn = "B"
+            handler.failMessage = secret
+            assertTrue(player.next())
+            assertClassOnly(logged, "hopRefreshFailed")
+        }
+
+        // clearFailed: doClear throws
+        run {
+            val (player, _) = playing()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            player.clearFailure = boom()
+            player.reset()
+            assertClassOnly(logged, "clearFailed")
+        }
+
+        // resetEmitFailed: the final IDLE emit of reset throws (the position read fails only once the player is IDLE)
+        run {
+            val (player, _) = playing()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            player.beforeGetPosition = { if (player.status == PlayerStatus.IDLE) throw boom() }
+            player.reset()
+            assertClassOnly(logged, "resetEmitFailed")
+        }
+
+        // listenerError from a failure listener
+        run {
+            val (player, _) = playing()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            player.addFailureListener { throw boom() }
+            player.reportPlaybackFailure("why")
+            assertClassOnly(logged, "listenerError")
+        }
+
+        // listenerError from a state listener
+        run {
+            val (player, _) = playing()
+            val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+            player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+            player.addStateListener { throw boom() }
+            player.notifyExternalStateChange(null)
+            assertClassOnly(logged, "listenerError")
+        }
+
+        assertTrue(problems.isEmpty(), problems.joinToString("\n"))
     }
 
     @Test

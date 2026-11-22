@@ -72,7 +72,7 @@ class DialAccessTest {
     }
 
     @Test
-    fun lanModeAllowsEveryoneAndPhoneModeFollowsTheLiveMode() {
+    fun lanModeServesAPrivateHostAndPhoneModeFollowsTheLiveMode() {
         assertTrue(policy(DialAccessMode.LAN).allowsHttp("192.168.50.45"))
         var mode = DialAccessMode.PHONE
         val live = DialAccessPolicy({ mode }, { setOf(phoneIp) })
@@ -134,6 +134,44 @@ class DialAccessTest {
     }
 
     @Test
+    fun lanModeHttpMakesTheSsdpDecision() {
+        val lan = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(phoneIp) }, { InetAddress.getByName(phoneIp) to 24 })
+        val served = listOf(
+            "192.168.50.45", "::ffff:192.168.50.45", "192.168.50.38", "127.0.0.1", "[::1]", "0:0:0:0:0:0:0:1", "fe80::1%wlan0", "fd12:3456::1",
+        )
+        val refused = listOf(
+            "192.168.51.45", "10.8.0.2", "172.16.0.9", "8.8.8.8", "203.0.113.7", "::ffff:8.8.8.8", "2001:db8::1", "100.64.0.1",
+            "", "localhost", "not-an-ip", "1127.0.0.1", "192.168.50.045",
+        )
+        for (ok in served) assertTrue(lan.allowsHttp(ok), "should serve '$ok'")
+        for (no in refused) assertFalse(lan.allowsHttp(no), "should refuse '$no'")
+        // one rule: the literals of both lists give the same answer on the address object
+        val notLiterals = setOf("", "localhost", "not-an-ip", "1127.0.0.1", "192.168.50.045")
+        for (text in (served + refused).filter { it !in notLiterals }) {
+            val bare = text.removePrefix("[").removeSuffix("]").substringBefore('%')
+            assertEquals(lan.allowsHttp(text), lan.allowsSsdp(InetAddress.getByName(bare)), "HTTP and SSDP agree on '$text'")
+        }
+        // subnet unknown: the private-source rule alone, by both gates
+        val unknown = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(phoneIp) })
+        assertTrue(unknown.allowsHttp("10.8.0.2"))
+        assertTrue(unknown.allowsSsdp(InetAddress.getByName("10.8.0.2")))
+        assertFalse(unknown.allowsHttp("8.8.8.8"))
+        assertFalse(unknown.allowsSsdp(InetAddress.getByName("8.8.8.8")))
+    }
+
+    @Test
+    fun theOwnPublicAddressIsServedByBothGates() {
+        val publicIp = "203.0.113.7"
+        val lan = DialAccessPolicy({ DialAccessMode.LAN }, { setOf(publicIp) }, { InetAddress.getByName(publicIp) to 24 })
+        assertTrue(lan.allowsHttp(publicIp))
+        assertTrue(lan.allowsSsdp(InetAddress.getByName(publicIp)))
+        assertFalse(lan.allowsHttp("203.0.113.8"))
+        assertFalse(lan.allowsSsdp(InetAddress.getByName("203.0.113.8")))
+        assertTrue(lan.allowsHttp("127.0.0.1"))
+        assertTrue(lan.allowsSsdp(InetAddress.getByName("127.0.0.1")))
+    }
+
+    @Test
     fun announceIsAllowedOnlyInLanMode() {
         assertFalse(policy(DialAccessMode.PHONE).announceAllowed())
         assertTrue(policy(DialAccessMode.LAN).announceAllowed())
@@ -149,6 +187,50 @@ class DialAccessTest {
         assertEquals("theme=cl&v=2", redactLaunchBody("theme=cl&v=2"))
         assertEquals("", redactLaunchBody(""))
         assertNull(redactLaunchBody(null))
+    }
+
+    @Test
+    fun percentEncodedPairingCodeNamesAreRedacted() {
+        // the receiver decodes field names before its lookup, so every spelling it accepts must be redacted
+        assertEquals("pairing%43ode=<redacted len 7>", redactLaunchBody("pairing%43ode=SECRET9"))
+        assertEquals("%70%61iringCode=<redacted len 7>", redactLaunchBody("%70%61iringCode=SECRET9"))
+        assertEquals("%70airingCode=<redacted len 11>&theme=cl", redactLaunchBody("%70airingCode=SECRETCODE1&theme=cl"))
+        // not the receiver's field: a plus decodes to a space, and the name is case-sensitive
+        assertEquals("pairing+Code=x", redactLaunchBody("pairing+Code=x"))
+        assertEquals("pairingcode=x", redactLaunchBody("pairingcode=x"))
+        // a malformed escape does not throw; the raw name is kept, like the receiver
+        assertEquals("%zz=1&pairingCode=<redacted len 3>", redactLaunchBody("%zz=1&pairingCode=abc"))
+        // every pairingCode field is redacted, a field without '=' is left alone
+        assertEquals(
+            "pairingCode=<redacted len 1>&x&%70airingCode=<redacted len 2>",
+            redactLaunchBody("pairingCode=a&x&%70airingCode=bc"),
+        )
+    }
+
+    @Test
+    fun redactionIsIdempotent() {
+        assertEquals("pairingCode=<redacted len 9>", redactLaunchBody("pairingCode=<redacted len 9>"))
+        val once = redactLaunchBody("pairingCode=abcdefghijkl&theme=cl")
+        assertEquals("pairingCode=<redacted len 12>&theme=cl", once)
+        assertEquals(once, redactLaunchBody(once), "a second pass must not measure the marker text")
+        val encoded = redactLaunchBody("%70airingCode=SECRETCODE1&theme=cl")
+        assertEquals(encoded, redactLaunchBody(encoded))
+    }
+
+    @Test
+    fun queryStringPairingCodesAreRedacted() {
+        assertEquals(
+            "/ytcr/apps/YouTube?pairingCode=<redacted len 8>&x=1",
+            redactLaunchUri("/ytcr/apps/YouTube?pairingCode=QSECRET1&x=1"),
+        )
+        assertEquals("/ytcr/apps?%70airingCode=<redacted len 8>", redactLaunchUri("/ytcr/apps?%70airingCode=QSECRET1"))
+        assertEquals("/ytcr/apps/YouTube", redactLaunchUri("/ytcr/apps/YouTube"))
+        assertEquals("/ytcr/apps/YouTube?x=1&y", redactLaunchUri("/ytcr/apps/YouTube?x=1&y"))
+        // before the '?' is a path, not a form
+        assertEquals("/a/pairingCode=abc", redactLaunchUri("/a/pairingCode=abc"))
+        assertEquals("/a/pairingCode=abc?x=1", redactLaunchUri("/a/pairingCode=abc?x=1"))
+        val once = redactLaunchUri("/ytcr/apps?pairingCode=QSECRET1&x=1")
+        assertEquals(once, redactLaunchUri(once))
     }
 
     // ----- HTTP gate --------------------------------------------------------------------------
@@ -265,6 +347,35 @@ class DialAccessTest {
     }
 
     @Test
+    fun aPercentEncodedPairingCodeIsReportedRedactedWithItsRealLength() {
+        val seen = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ true }, seen) {
+            client.post("/ytcr/apps/YouTube") {
+                contentType(ContentType.Application.FormUrlEncoded)
+                setBody("%70airingCode=SECRETCODE1&theme=cl")
+            }
+        }
+        val body = seen.single { it.method == "POST" }.body
+        assertEquals("%70airingCode=<redacted len 11>&theme=cl", body)
+        assertFalse(body!!.contains("SECRETCODE1"))
+    }
+
+    @Test
+    fun aQueryStringCodeIsRedactedInServedAndRefusedReports() {
+        val served = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ true }, served) { client.get("/ytcr/apps?pairingCode=QSECRET1") }
+        val servedUri = served.single().uri
+        assertFalse(servedUri.contains("QSECRET1"), servedUri)
+        assertEquals("/ytcr/apps?pairingCode=<redacted len 8>", servedUri)
+
+        val refused = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ false }, refused) { client.get("/ytcr/ssdp/device-desc.xml?%70airingCode=QSECRET2") }
+        val refusedReport = refused.single()
+        assertEquals(403, refusedReport.status)
+        assertFalse(refusedReport.uri.contains("QSECRET2"), refusedReport.uri)
+    }
+
+    @Test
     fun aConfiguredPidIsUsedInTheRunLinkAndTheLocation() {
         testApplication {
             val cfg = DialConfig("T2U pid", uuid, "127.0.0.1", 3000, pid = "fixed-pid-7")
@@ -289,6 +400,32 @@ class DialAccessTest {
 
         val policy = DialAccessPolicy({ DialAccessMode.PHONE }, { emptySet() })
         val cfg = DialConfig("T2U real", uuid, "0.0.0.0", 0, accessPolicy = policy::allowsHttp)
+        val server = DialServer(cfg) {}
+        server.start()
+        try {
+            val port = server.resolvedPort()
+            val http = HttpClient.newHttpClient()
+            fun status(host: String): Int = http.send(
+                HttpRequest.newBuilder(URI.create("http://$host:$port/ytcr/ssdp/device-desc.xml")).GET().build(),
+                HttpResponse.BodyHandlers.discarding(),
+            ).statusCode()
+            assertEquals(200, status("127.0.0.1"))
+            assertEquals(403, status(hostIp!!.hostAddress))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun aLanModeServerRefusesAnOffSubnetHostAndStillAnswersLoopback() {
+        val hostIp = NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
+        Assumptions.assumeTrue(hostIp != null, "host has no non-loopback IPv4 address")
+
+        val policy = DialAccessPolicy({ DialAccessMode.LAN }, { emptySet() }, { InetAddress.getByName("192.0.2.1") to 32 })
+        val cfg = DialConfig("T2U real lan", uuid, "0.0.0.0", 0, accessPolicy = policy::allowsHttp)
         val server = DialServer(cfg) {}
         server.start()
         try {

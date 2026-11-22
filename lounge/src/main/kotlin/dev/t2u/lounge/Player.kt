@@ -177,7 +177,7 @@ abstract class Player {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("playFailed", "error" to (e.message ?: e::class.simpleName))
+            log("playFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             false
         }
         setStatusAndEmit(if (result) PlayerStatus.PLAYING else PlayerStatus.STOPPED, aid)
@@ -189,7 +189,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("hopRefreshFailed", "error" to (e.message ?: e::class.simpleName))
+                log("hopRefreshFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
             setStatusAndEmit(null, aid)
         }
@@ -307,9 +307,14 @@ abstract class Player {
     /**
      * Applies a volume without reading unrelated playback state or emitting a state event. The caller must report
      * the speaker's actual volume, including after a failure.
+     *
+     * The level a speaker is sent is always within 0..100: a sender can ask for any Int, so it is clamped here, once,
+     * at the single point both [setVolume] and the lounge app's setVolume handler reach (the read side,
+     * [getVolume], clamps too). Not in directVolume, which would log a false volumeDirectionConflict.
      */
     suspend fun applyVolume(volume: Volume): Boolean {
-        val v = if (zeroVolumeLevelOnMute && volume.muted && volume.level > 0) volume.copy(level = 0) else volume
+        val clamped = volume.copy(level = volume.level.coerceIn(0, 100))
+        val v = if (zeroVolumeLevelOnMute && clamped.muted && clamped.level > 0) clamped.copy(level = 0) else clamped
         log("setVolume", "level" to v.level, "muted" to v.muted)
         val result = doSetVolume(v)
         if (!result) log("setVolumeFailed", "level" to v.level, "muted" to v.muted)
@@ -331,7 +336,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("clearFailed", "error" to (e.message ?: e::class.simpleName))
+                log("clearFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
         previousState = null
@@ -340,7 +345,7 @@ abstract class Player {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("resetEmitFailed", "error" to (e.message ?: e::class.simpleName))
+            log("resetEmitFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
         }
     }
 
@@ -411,7 +416,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("listenerError", "error" to (e.message ?: e::class.simpleName))
+                log("listenerError", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
     }
@@ -450,11 +455,16 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("listenerError", "error" to (e.message ?: e::class.simpleName))
+                log("listenerError", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
     }
 
+    /**
+     * Writes one player event. Callers that log a caught exception pass its class name only, never its message:
+     * exception text can carry a signed URL or a token, and the log is shared by users (the same rule as
+     * [reportPlaybackFailure]'s reason). The [type] names the failing step.
+     */
     private fun log(type: String, vararg fields: Pair<String, Any?>) {
         try {
             events.event("player", mapOf<String, Any?>("type" to type) + fields)

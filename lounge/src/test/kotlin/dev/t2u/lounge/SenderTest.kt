@@ -2,6 +2,7 @@ package dev.t2u.lounge
 
 // Tests for Sender (port of yt-cast-receiver 2.1.0 lib/app/Sender.js, MIT, Copyright (c) Patrick Kan), GPL-3.0-only.
 
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -123,5 +124,40 @@ class SenderTest {
         assertFailsWith<SenderParseException> {
             Sender.parse(buildJsonObject { put("id", "sender-1"); put("name", "Pixel") })
         }
+    }
+
+    @Test
+    fun jsonNullFieldsAreAbsentNotTheStringNull() {
+        // a null name falls back to clientName
+        val named = Sender.parse(entry { put("name", JsonNull); put("clientName", "Phone") })
+        assertEquals("Phone", named.name)
+
+        // a null name without clientName is a missing name
+        assertFailsWith<SenderParseException> { Sender.parse(entry { put("name", JsonNull) }) }
+        // a null theme is a missing theme
+        assertFailsWith<SenderParseException> { Sender.parse(entry { put("theme", JsonNull) }) }
+
+        // every optional field reads as absent, never as "null"
+        val sender = Sender.parse(
+            entry {
+                put("user", JsonNull)
+                put("userAvatarUri", "https://example.invalid/a.png")
+                put("capabilities", JsonNull)
+                put("app", JsonNull)
+                put("obfuscatedGaiaId", JsonNull)
+                put("ownerObfuscatedGaiaId", JsonNull)
+            },
+        )
+        assertNull(sender.user)
+        assertTrue(sender.capabilities.isEmpty())
+        assertNull(sender.app)
+        assertNull(sender.obfuscatedGaiaId)
+        assertNull(sender.ownerObfuscatedGaiaId)
+        assertEquals("Pixel", sender.name)
+    }
+
+    @Test
+    fun aNullIdIsRejectedLikeAMissingOne() {
+        assertFailsWith<SenderParseException> { Sender.parse(entry { put("id", JsonNull) }) }
     }
 }

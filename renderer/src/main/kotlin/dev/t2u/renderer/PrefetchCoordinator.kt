@@ -4,6 +4,7 @@ package dev.t2u.renderer
 
 import dev.t2u.lounge.Video
 import dev.t2u.upnp.UpnpError
+import dev.t2u.upnp.speakerFailureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -97,7 +98,7 @@ internal class PrefetchCoordinator(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                note("debug", "Prefetch failed: ${e.message ?: e::class.java.simpleName}")
+                note("debug", "Prefetch failed: ${speakerFailureText(e)}")
             } finally {
                 prefetching.set(false)
             }
@@ -199,10 +200,10 @@ internal class PrefetchCoordinator(
                     note("info", "Renderer has no SetNextAVTransportURI - next tracks start right after the current one ends")
                 }
             } else {
-                note("debug", "SetNextAVTransportURI failed: ${e.message}")
+                note("debug", "SetNextAVTransportURI failed: ${speakerFailureText(e)}")
             }
         } catch (e: Exception) {
-            note("debug", "SetNextAVTransportURI failed: ${e.message ?: e::class.java.simpleName}")
+            note("debug", "SetNextAVTransportURI failed: ${speakerFailureText(e)}")
         }
         when (learned) {
             true -> {

@@ -223,6 +223,26 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun anOutOfRangeSenderVolumeReachesThePlayerClamped() = run {
+        startedApp()
+        connect()
+        player.volume = Volume(30, false)
+
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "250"); put("muted", "false") })
+        awaitUntil(what = "volume clamped to 100") { "volume:100:false" in player.calls }
+        awaitUntil(what = "clamped volume reported") { messages("cl").any { it.first == "onVolumeChanged" && it.second["volume"] == "100" } }
+
+        rpc("cl", "setVolume", buildJsonObject { put("volume", "-5"); put("muted", "false") })
+        awaitUntil(what = "volume clamped to 0") { "volume:0:false" in player.calls }
+
+        assertTrue(player.calls.none { it == "volume:250:false" || it == "volume:-5:false" }, "an unclamped level reached the speaker: ${player.calls}")
+        assertTrue(
+            events.none { (kind, f) -> kind == "lounge-app" && f["type"] == "volumeDirectionConflict" },
+            "the clamp must not log a false volumeDirectionConflict",
+        )
+    }
+
+    @Test
     fun getNowPlayingAnswersTheStateWhenActiveAndAnEmptyOneWhenNot() = run {
         startedApp()
         // nothing is active yet

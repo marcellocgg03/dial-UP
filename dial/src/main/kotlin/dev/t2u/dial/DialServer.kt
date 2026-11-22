@@ -4,6 +4,7 @@
 // fork by Patrick Kan; ported to Kotlin for Tube2U[PnP] and conveyed under GPL-3.0-only.
 package dev.t2u.dial
 
+import dev.t2u.upnp.parseIpv4Literal
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -16,7 +17,6 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.EngineConnectorBuilder
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.request.host
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.httpVersion
 import io.ktor.server.request.receiveChannel
@@ -37,6 +37,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.readByteArray
 import java.net.BindException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.UUID
@@ -62,7 +64,10 @@ data class DialConfig(
     val onCaller: (String) -> Unit = {},
 )
 
-/** One handled HTTP call, reported after the response was produced (404s included). */
+/**
+ * One handled HTTP call, reported after the response was produced (404s included). [uri] and [body] are already redacted (a
+ * pairing code is replaced by `<redacted len N>`): log them as they are, never redact them again.
+ */
 data class DialRequest(
     val method: String,
     val uri: String,
@@ -75,9 +80,38 @@ data class DialRequest(
 )
 
 /**
+ * The host written into every URL the DIAL server returns: the address the connection arrived on ([localAddress]), else the
+ * configured [bindHost], else 127.0.0.1. Only an IP literal that is not a wildcard (0.0.0.0, ::) qualifies; a name never does,
+ * and no lookup is made. An IPv6 address is written in brackets without its zone.
+ */
+internal fun dialUrlHost(localAddress: String, bindHost: String): String =
+    usableUrlHost(localAddress) ?: usableUrlHost(bindHost) ?: "127.0.0.1"
+
+private fun usableUrlHost(raw: String): String? {
+    var text = raw.trim()
+    if (text.startsWith("[") && text.endsWith("]")) text = text.substring(1, text.length - 1)
+    val zone = text.indexOf('%')
+    if (zone >= 0) text = text.substring(0, zone)
+    if (text.isEmpty()) return null
+    val address: InetAddress = if (text.contains(':')) {
+        // a name cannot contain ':', so getByName treats this as a literal and does no lookup
+        try {
+            InetAddress.getByName(text)
+        } catch (_: Exception) {
+            return null
+        }
+    } else {
+        parseIpv4Literal(text) ?: return null
+    }
+    if (address.isAnyLocalAddress) return null
+    return if (address is Inet4Address) address.hostAddress else "[$text]"
+}
+
+/**
  * DIAL receiver HTTP side, a port of the peer-dial routes under [DialConfig.prefix]. One Ktor CIO
- * server per instance. The host in Application-URL and LOCATION always comes from the request Host
- * header (peer-dial uses req.hostname). Content-Length is never set by hand.
+ * server per instance. Application-URL, URLBase and LOCATION carry the address the connection
+ * arrived on (the server binds the Wi-Fi address in production, loopback in tests); the Host header is never used, where
+ * peer-dial builds them from req.hostname. Content-Length is never set by hand.
  */
 class DialServer(
     private val config: DialConfig,
@@ -277,7 +311,7 @@ class DialServer(
     /** DIAL asks a receiver to refuse browsers: a request with an Origin is served only for an app origin (`package:...`). */
     private fun originAllowed(origin: String?): Boolean = origin == null || origin.startsWith("package:")
 
-    private fun baseUrl(call: ApplicationCall): String = "http://${call.request.host()}:$boundPort${config.prefix}"
+    private fun baseUrl(call: ApplicationCall): String = "http://${dialUrlHost(call.request.local.localAddress, config.bindHost)}:$boundPort${config.prefix}"
 
     /** peer-dial's rsp.sendStatus: the status description as a text/plain body. */
     private suspend fun sendStatus(call: ApplicationCall, status: HttpStatusCode) {
@@ -305,7 +339,7 @@ class DialServer(
             onRequest(
                 DialRequest(
                     method = req.httpMethod.value,
-                    uri = req.uri,
+                    uri = redactLaunchUri(req.uri),
                     httpVersion = req.httpVersion,
                     remoteHost = origin.remoteAddress,
                     remotePort = origin.remotePort,

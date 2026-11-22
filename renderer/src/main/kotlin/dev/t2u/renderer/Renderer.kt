@@ -25,8 +25,10 @@ import dev.t2u.upnp.DeviceDescription
 import dev.t2u.upnp.DidlItem
 import dev.t2u.upnp.UpnpError
 import dev.t2u.upnp.buildDidl
+import dev.t2u.upnp.cleanSpeakerText
 import dev.t2u.upnp.fetchDescription
 import dev.t2u.upnp.parseSink
+import dev.t2u.upnp.speakerFailureText
 import dev.t2u.upnp.summarizeDidl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -102,10 +104,11 @@ class Renderer(
             _nowPlaying.value = value
         }
 
+    /** The last failure the card shows; whatever it is set from, it is stored as at most 200 characters of clean text. */
     var lastError: String?
         get() = _lastError.value
         private set(value) {
-            _lastError.value = value
+            _lastError.value = value?.let(::cleanSpeakerText)
         }
 
     /** What the sender-facing player state says that no other flow carries: the nav buttons, the queue and the position. */
@@ -365,16 +368,16 @@ class Renderer(
 
     /** Fetch the description, verify AVTransport, start the cast receiver. Returns false to skip this device. */
     override suspend fun init(): Boolean {
-        val desc = fetchDescription(deps.http, location)
+        val desc = fetchDescription(deps.http, location, allowLoopback = deps.allowLoopbackSpeakers)
         description = desc
 
         if (!desc.services.containsKey(SERVICE_ID_PREFIX + AV_TRANSPORT)) {
-            note("warn", "\"${desc.friendlyName}\" has no AVTransport service - skipping")
+            note("warn", "\"${cleanSpeakerText(desc.friendlyName)}\" has no AVTransport service - skipping")
             return false
         }
 
         if (!config.nameFilter.accepts(desc.friendlyName)) {
-            note("info", "\"${desc.friendlyName}\" does not pass the name filter - skipping")
+            note("info", "\"${cleanSpeakerText(desc.friendlyName)}\" does not pass the name filter - skipping")
             return false
         }
 
@@ -757,7 +760,7 @@ class Renderer(
             throw e
         } catch (e: Exception) {
             if (startingSpeaker && !superseded(seq) && config.outputFormat == "streaming" && prepared?.format == "adts") {
-                note("warn", "Renderer rejected adts (${e.message}) - trying mp3")
+                note("warn", "Renderer rejected adts (${speakerFailureText(e)}) - trying mp3")
                 releaseStream(prepared.current)
                 prepared = null
                 return loadResult(video, position, "mp3", startPlaying, forceOffset, offsetOnly)
@@ -1230,7 +1233,7 @@ class Renderer(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            note("warn", "clear failed: ${e.message}")
+            note("warn", "clear failed: ${speakerFailureText(e)}")
         }
         // The clear has returned (it never waits for this); a URI that was still on its way at the speaker is looked for afterwards.
         if (run.slow && !destroyed) startSlowClearWatch()
@@ -1644,7 +1647,7 @@ class Renderer(
         mayRun = { !(destroyed || networkDown) },
         alive = { !destroyed },
         tick = { poll() },
-        onError = { e -> note("debug", "Poll failed: ${e.message}") },
+        onError = { e -> note("debug", "Poll failed: ${speakerFailureText(e)}") },
     )
 
     @Volatile private var polls = 0
@@ -2256,12 +2259,16 @@ class Renderer(
         }
     }
 
-    /** Reports through the evidence sink (kind "renderer"); never carries signed URLs, and never throws. */
+    /**
+     * Reports through the evidence sink (kind "renderer"); never carries signed URLs, and never throws. Notes embed only
+     * cleaned speaker text (a name, the text of a failed speaker call), each part at most 200 characters; a whole note is
+     * not clipped, the rest of it is the app's own wording.
+     */
     private fun note(level: String, message: String, vararg fields: Pair<String, Any?>) {
         try {
             deps.events.event(
                 "renderer",
-                mapOf<String, Any?>("level" to level, "speaker" to (description?.friendlyName ?: address), "message" to message) + fields,
+                mapOf<String, Any?>("level" to level, "speaker" to cleanSpeakerText(description?.friendlyName ?: address), "message" to message) + fields,
             )
         } catch (_: Exception) {
             // an event sink must not break playback

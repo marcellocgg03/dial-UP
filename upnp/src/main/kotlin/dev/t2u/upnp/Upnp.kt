@@ -51,7 +51,11 @@ private fun findRendererDevice(rootDevice: Element?): Element? {
     return null
 }
 
-/** Parses a device description XML into the shape the renderer needs; embedded Sonos renderers included. */
+/**
+ * Parses a device description XML into the shape the renderer needs; embedded Sonos renderers included.
+ * Every URL is resolved against URLBase or [location]. A control URL on another host or port than [location] fails the
+ * description ([IllegalArgumentException]); an SCPD or event URL on another one is blanked and the service kept.
+ */
 fun parseDescription(xml: String, location: String): DeviceDescription {
     val doc = Jsoup.parse(xml, "", Parser.xmlParser())
     val root = doc.children().firstOrNull() ?: throw IllegalArgumentException("No <device> element in description")
@@ -76,18 +80,21 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
             val control = abs(s.childText("controlURL"))
             // a description may not aim the phone's SOAP calls at another host or port than the one it was fetched from
             require(control.isEmpty() || sameAuthority(control, location)) { "controlURL is not on the LOCATION host" }
+            // nothing reads the SCPD or event URL, so one on another host or port is blanked and the service kept
+            val scpd = abs(s.childText("SCPDURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
+            val event = abs(s.childText("eventSubURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             services["urn:upnp-org:serviceId:$short"] = UpnpService(
                 serviceType = s.childText("serviceType"),
-                scpdURL = abs(s.childText("SCPDURL")),
+                scpdURL = scpd,
                 controlURL = control,
-                eventSubURL = abs(s.childText("eventSubURL")),
+                eventSubURL = event,
             )
         }
     }
 
     return DeviceDescription(
         deviceType = dev.childText("deviceType"),
-        friendlyName = dev.childText("friendlyName").ifEmpty { "Unknown renderer" },
+        friendlyName = cleanSpeakerText(dev.childText("friendlyName")).ifEmpty { "Unknown renderer" },
         manufacturer = dev.childText("manufacturer"),
         modelName = dev.childText("modelName"),
         modelNumber = dev.childText("modelNumber"),
@@ -109,12 +116,19 @@ private fun sameAuthority(url: String, location: String): Boolean {
     return a == authority(location)
 }
 
-/** GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>". */
-suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000): DeviceDescription {
-    val call = http.newCall(Request.Builder().url(location).build())
+/**
+ * GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>" (cleaned and capped, the LOCATION is the speaker's).
+ * Like [SoapClient], the fetch applies [speakerTargetProblem]: a URL on this device's own loopback (unless [allowLoopback],
+ * the test seam for the JVM fakes on 127/8), a name, a public address or https off the LAN throws [IOException] "... (refused)"
+ * and no request is sent.
+ */
+suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000, allowLoopback: Boolean = false): DeviceDescription {
+    val request = Request.Builder().url(location).build()
+    speakerTargetProblem(request.url, allowLoopback)?.let { throw IOException("description URL $it (refused)") }
+    val call = http.newCall(request)
     call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
     val (status, text) = executeForText(call, MAX_DESCRIPTION_BYTES)
-    if (status !in 200..299) throw IOException("HTTP $status fetching $location")
+    if (status !in 200..299) throw IOException(cleanSpeakerText("HTTP $status fetching $location"))
     return parseDescription(text, location)
 }
 

@@ -45,7 +45,7 @@ class BoundedReadTest {
         val server = endlessServer(head, ByteArray(64 * 1024) { 'a'.code.toByte() }) { closed.set(true) }
         server.use {
             val e = assertFailsWith<IOException> {
-                runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000) }
+                runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000, allowLoopback = true) }
             }
             assertTrue("larger than" in e.message.orEmpty(), e.message)
         }
@@ -73,7 +73,7 @@ class BoundedReadTest {
         ) { }
         server.use {
             assertFailsWith<IOException> {
-                runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000) }
+                runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000, allowLoopback = true) }
             }
         }
     }
@@ -98,7 +98,7 @@ class BoundedReadTest {
             }
         }
         server.use {
-            val d = runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000) }
+            val d = runBlocking { fetchDescription(lanHttpClient(), "http://127.0.0.1:${server.localPort}/desc.xml", timeoutMs = 10_000, allowLoopback = true) }
             assertEquals("Cap", d.friendlyName)
         }
     }
