@@ -26,14 +26,15 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * [code] is "ENETWORK" (no answer), "ENOACTION" (UPnP error 401) or "EUPNP" (any other fault);
- * [statusCode] is the HTTP status and [errorCode] the UPnP errorCode text ("" when none).
+ * [statusCode] is the HTTP status and [errorCode] the UPnP errorCode text ("" when none). The message is passed through
+ * [cleanSpeakerText]: it can carry a speaker's fault text, so it is at most 200 characters with no control character.
  */
 class UpnpError(
     message: String,
     val code: String?,
     val statusCode: Int? = null,
     val errorCode: String? = null,
-) : Exception(message)
+) : Exception(cleanSpeakerText(message))
 
 data class UpnpService(
     val serviceType: String,

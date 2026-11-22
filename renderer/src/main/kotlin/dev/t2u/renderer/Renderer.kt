@@ -25,6 +25,7 @@ import dev.t2u.upnp.DeviceDescription
 import dev.t2u.upnp.DidlItem
 import dev.t2u.upnp.UpnpError
 import dev.t2u.upnp.buildDidl
+import dev.t2u.upnp.cleanSpeakerText
 import dev.t2u.upnp.fetchDescription
 import dev.t2u.upnp.parseSink
 import dev.t2u.upnp.summarizeDidl
@@ -102,10 +103,11 @@ class Renderer(
             _nowPlaying.value = value
         }
 
+    /** The last failure the card shows; whatever it is set from, it is stored as at most 200 characters of clean text. */
     var lastError: String?
         get() = _lastError.value
         private set(value) {
-            _lastError.value = value
+            _lastError.value = value?.let(::cleanSpeakerText)
         }
 
     /** What the sender-facing player state says that no other flow carries: the nav buttons, the queue and the position. */
