@@ -224,6 +224,35 @@ internal class GaplessTest {
     }
 
     @Test
+    @DisplayName("a prepared next track is reused when the address it was built with comes back after a stop")
+    fun aPreparedTrackIsReusedWhenTheAddressComesBack() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                assertTrue(r.stop())
+
+                // A to B to A: the item was built for the first address, which is the current one again.
+                r.onNetworkChanged("127.0.0.2")
+                r.onNetworkChanged("127.0.0.1")
+                delay(300)
+                assertEquals(1, fake.count("SetAVTransportURI"), "a stopped player is not re-set")
+
+                assertTrue(r.play(Video(B), 0.0))
+                waitUntil { fake.count("SetAVTransportURI") == 2 }
+                val uri = fake.loadedUris()[1]
+                assertTrue(uri.startsWith("http://127.0.0.1:"), "the URL carries the original address: $uri")
+                assertEquals(1, h.prepared.count { it.videoId == B }, "B was not prepared again")
+                assertEquals(listOf(A, B), h.resolves.toList(), "B was resolved once")
+                assertTrue(h.notes("Using prepared track").isNotEmpty(), "the load says it used the prepared track")
+                assertTrue(h.notes("Prepared track was built for another address").isEmpty())
+            }
+        }
+    }
+
+    @Test
     @DisplayName("gapless: if the queue turns out to be over, the track the renderer played on into is stopped")
     fun ifTheQueueTurnsOutToBeOverThePlayedOnTrackIsStopped() {
         withFake { fake ->
