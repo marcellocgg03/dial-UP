@@ -667,6 +667,26 @@ class PlayerTest {
         assertTrue(reported.any { it["type"] == "hopRefreshFailed" })
     }
 
+    /** D-11: a phone that connects after a reset must not be offered the old cast's Previous or autoplay entry. */
+    @Test
+    fun aResetLeavesNoStaleQueueEntry() = runBlocking {
+        val (player, _, events) = chain(AutoplayMode.ENABLED)
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        assertTrue(player.next(), "setup: the hop makes B current and gives it a previous and an autoplay video")
+        assertEquals("C", player.queue.autoplay?.id)
+        assertTrue(player.getNavInfo().hasPrevious)
+        events.clear()
+
+        player.reset()
+
+        val idle = events.last()
+        assertEquals(PlayerStatus.IDLE, idle.current.status)
+        assertNull(idle.current.queue.previous)
+        assertNull(idle.current.queue.next)
+        assertNull(idle.current.queue.autoplay)
+        assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
+    }
+
     // ---- unconditional clear hook (plan 03-04, CAST-06)
 
     @Test

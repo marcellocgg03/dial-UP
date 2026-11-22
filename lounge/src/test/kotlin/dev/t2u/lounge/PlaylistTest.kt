@@ -393,4 +393,26 @@ class PlaylistTest {
         assertEquals(AutoplayMode.UNSUPPORTED, playlist.autoplayMode)
         assertEquals(1, handler.resets)
     }
+
+    @Test
+    fun resetForgetsTheNextAndAutoplayVideo() = runBlocking {
+        val playlist = Playlist()
+        val previous = Video("P", Client.YT, VideoContext("RDtest", 0))
+        val next = Video("N", Client.YT)
+        playlist.requestHandler = LambdaHandler { PreviousNextVideos(previous, next) }
+        playlist.updateByMessage("setPlaylist", setPayload(videoIds = "P,B", videoId = "B", currentIndex = "1"), Client.YT)
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        assertEquals(next, playlist.autoplay, "setup: the last video has an autoplay video")
+        assertTrue(playlist.hasPrevious)
+
+        playlist.reset()
+
+        val state = playlist.getState()
+        assertNull(state.previous)
+        assertNull(state.next)
+        assertNull(state.autoplay)
+        assertNull(playlist.autoplay)
+        assertFalse(playlist.hasPrevious)
+        assertFalse(playlist.hasNext)
+    }
 }

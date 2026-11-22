@@ -28,6 +28,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class YouTubeAppTest {
@@ -1212,6 +1213,40 @@ class YouTubeAppTest {
         player.notifyExternalStateChange(null)
         barrier("cl")
         assertEquals(before, navMessages().size, "the inactive branch did not touch the remembered availability")
+    }
+
+    /** D-11: after the app reset the player, the phone that connects next is told of no old autoplay video and no Previous or Next. */
+    @Test
+    fun aPhoneConnectingAfterAResetIsOfferedNoStaleQueue() = run {
+        installChain()
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "next")
+        awaitUntil(what = "hop to the autoplay video") { "play:VID00000002" in player.calls && player.status == PlayerStatus.PLAYING }
+        awaitUntil(what = "previous and autoplay of the hop") {
+            navMessages().any { it["hasPrevious"] == "true" } &&
+                messages("cl").any { it.first == "autoplayUpNext" && it.second["videoId"] == "VID00000003" }
+        }
+        assertEquals("VID00000003", player.queue.autoplay?.id, "setup: the cast has an autoplay video")
+
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "player reset") { player.status == PlayerStatus.IDLE && disconnects.isNotEmpty() }
+        barrier("cl")
+        assertNull(player.queue.autoplay, "the reset queue has no autoplay video")
+        val sentBefore = messages("cl").size
+
+        connect()
+        barrier("cl")
+
+        val after = messages("cl").drop(sentBefore)
+        assertTrue(
+            after.none { it.first == "autoplayUpNext" && it.second["videoId"] in setOf("VID00000002", "VID00000003") },
+            "no autoplayUpNext names an old cast video: $after",
+        )
+        val nav = after.last { it.first == "onHasPreviousNextChanged" }.second
+        assertEquals("false", nav["hasPrevious"])
+        assertEquals("false", nav["hasNext"])
     }
 
     // ---- clear on disconnect, second phone, session switch (plan 03-04, CAST-06)
