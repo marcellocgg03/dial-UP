@@ -1727,7 +1727,8 @@ class Renderer(
      * [RESYNC_READ_ATTEMPTS] times [Config.pollIntervalMs] apart, and acts on [resyncAction]:
      *  * KEEP: the speaker still plays our stream on the same address. Nothing is sent, polling resumes, and a watch of
      *    [RESYNC_WATCH_MS] re-sets a mid-track stop once (a speaker that only drains its buffer stops soon after).
-     *  * RESET_AT_SPEAKER: the address changed and the speaker plays or is paused on our stream: re-set at its own position.
+     *  * RESET_AT_SPEAKER: the address changed and the speaker plays or is paused on our stream: re-set at its own position;
+     *    when it cannot report one (an empty, NOT_IMPLEMENTED or unparsable RelTime) at the last polled position, with a note.
      *  * RESET_AT_LAST_POLLED: the speaker ran dry or cannot be read: re-set at the last polled position, never at its own
      *    0:00 and never an extrapolation over the outage.
      *  * RELEASE_FOREIGN: another source took the speaker: nothing is sent, the sender is told the player stopped.
@@ -1819,8 +1820,18 @@ class Renderer(
             ResyncAction.RELEASE_FOREIGN -> releaseTakenOverSpeaker(read.reading?.get("TrackURI"))
             ResyncAction.RESET_AT_SPEAKER -> {
                 val keep = c ?: return false
-                val at = read.reading?.get("RelTime")?.let { parseHms(it) + keep.startAt } ?: position?.rel ?: keep.startAt.toDouble()
-                resetLoaded(keep, at, "speaker")
+                // An empty, NOT_IMPLEMENTED or unparsable RelTime is an unknown position, not 0:00 (D-08).
+                val spoken = parseHmsOrNull(read.reading?.get("RelTime"))?.plus(keep.startAt)
+                if (spoken != null) {
+                    resetLoaded(keep, spoken, "speaker")
+                } else {
+                    note(
+                        "warn",
+                        "Speaker position unreadable after the address change - re-setting at the last polled position",
+                        "videoId" to keep.video.id,
+                    )
+                    resetLoaded(keep, position?.rel ?: keep.startAt.toDouble(), "last-polled")
+                }
             }
             ResyncAction.RESET_AT_LAST_POLLED -> {
                 val keep = c ?: return false
