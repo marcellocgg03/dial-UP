@@ -222,6 +222,35 @@ class UpnpTest {
     }
 
     @Test
+    fun `a long friendlyName with control characters is cleaned and clipped`() {
+        fun nameOf(raw: String) =
+            parseDescription(root(device(mr, raw, services = avt)), "http://10.0.0.2/d.xml").friendlyName
+
+        val long = nameOf("Kitchen\u0007" + "z".repeat(5000))
+        assertTrue(long.length <= 200, "name has ${long.length} characters")
+        assertTrue(long.none { Character.isISOControl(it) }, "no control character in the name")
+        assertTrue(long.startsWith("Kitchen "), long)
+        assertTrue(long.endsWith("\u2026"), "a cut name ends with the ellipsis")
+        assertEquals("Unknown renderer", nameOf("\u0001\u0007"))
+        assertEquals("Living Room", nameOf("Living Room"))
+    }
+
+    @Test
+    fun `a failed description fetch names the LOCATION in at most 200 characters`() = runBlocking {
+        FakeRenderer().use { fake ->
+            fake.start()
+            val location = fake.location.replace("/desc.xml", "/" + "p".repeat(3000))
+            val e = assertFailsWith<java.io.IOException> {
+                fetchDescription(lanHttpClient(), location, allowLoopback = true)
+            }
+            val message = e.message ?: ""
+            assertTrue(message.length <= 200, "message has ${message.length} characters")
+            assertTrue(message.startsWith("HTTP 404 fetching http://127.0.0.1"), message)
+            assertTrue(message.endsWith("\u2026"), "a cut message ends with the ellipsis")
+        }
+    }
+
+    @Test
     fun `friendlyName falls back to Unknown renderer`() {
         val xml = root("<device><deviceType>$mr</deviceType><UDN>uuid:x</UDN></device>")
         assertEquals("Unknown renderer", parseDescription(xml, "http://10.0.0.2/d.xml").friendlyName)

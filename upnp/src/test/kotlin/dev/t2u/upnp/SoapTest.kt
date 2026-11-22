@@ -13,6 +13,8 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.net.ServerSocket
@@ -237,6 +239,23 @@ class SoapTest {
             val out = soap.callAction(renderingControl(fake), "GetVolume", listOf("InstanceID" to 0, "Channel" to "Master"))
             assertEquals("55", out["CurrentVolume"])
         }
+    }
+
+    @Test
+    fun `serviceType is escaped in the envelope and ordinary envelopes are unchanged`() {
+        val raw = "urn:a&b\"<c>'"
+        val envelope = buildEnvelope(raw, "Play", listOf("InstanceID" to 0))
+        assertContains(envelope, "xmlns:u=\"urn:a&amp;b&quot;&lt;c&gt;&apos;\"")
+        val play = Jsoup.parse(envelope, "", Parser.xmlParser()).getAllElements().single { it.tagName() == "u:Play" }
+        assertEquals(raw, play.attr("xmlns:u"))
+
+        assertEquals(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
+                "<s:Body><u:Play xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\"><InstanceID>0</InstanceID><Speed>1</Speed></u:Play></s:Body></s:Envelope>",
+            buildEnvelope("urn:schemas-upnp-org:service:AVTransport:1", "Play", listOf("InstanceID" to 0, "Speed" to "1")),
+        )
+        assertContains(buildEnvelope("urn:x:1", "Play", listOf("V" to "a&b")), "<V>a&amp;b</V>")
     }
 
     @Test
