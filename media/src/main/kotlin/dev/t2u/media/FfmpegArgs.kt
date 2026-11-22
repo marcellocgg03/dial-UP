@@ -29,13 +29,25 @@ fun urlInputArgs(
 }
 
 /**
+ * ffmpeg's `-recv_buffer_size` for the [FeedRelay] socket, in bytes (the kernel doubles it to 32 KB). ffmpeg reads a forward
+ * seek through the open response instead of asking for a new Range when the distance is under its 32 KB buffer plus the
+ * socket's receive buffer, and on Android that buffer can be far larger. YouTube sends an open range of a file over 10 MiB
+ * at about 30 KB/s, so a resume at 40 s read the 650 KB before it for 21 s and the 20 s first-byte watchdog killed ffmpeg
+ * (device log, 2026-11-21). With this buffer a seek further than 64 KB is a new Range request. The feed is on the phone's
+ * own address, so the small window should cost no speed. (`-short_seek_size` would say it directly, but ffmpeg 4.4 lacks it.)
+ */
+internal const val FEED_RECV_BUFFER = "16384"
+
+/**
  * The input for a [FeedRelay] URL (this server, plain http on the phone's own address, no headers): the same reconnect and
- * timeout switches as [urlInputArgs], so a response the feed ends early is continued by a new Range request.
+ * timeout switches as [urlInputArgs], so a response the feed ends early is continued by a new Range request, and a small
+ * receive buffer ([FEED_RECV_BUFFER]) so `-ss` asks for its fragment by Range.
  */
 fun feedInputArgs(url: String, startAt: Int, logLevel: String = "error"): List<String> {
     val args = mutableListOf("-hide_banner", "-loglevel", logLevel, "-protocol_whitelist", "http,tcp")
     args += listOf("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5")
     args += listOf("-rw_timeout", RW_TIMEOUT_US)
+    args += listOf("-recv_buffer_size", FEED_RECV_BUFFER)
     if (startAt > 0) args += listOf("-ss", startAt.toString())
     args += listOf("-i", url, "-vn")
     return args
