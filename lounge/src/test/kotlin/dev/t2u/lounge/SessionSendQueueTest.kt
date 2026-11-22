@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
@@ -162,5 +163,141 @@ internal class SessionSendQueueTest {
         assertEquals(1, counts.posts.size, "no POST after the end")
         assertEquals(0, counts.refreshes.get())
         assertTrue(counts.ends.isEmpty())
+    }
+
+    // ---- coalescing (D-02)
+
+    private fun msg(name: String, tag: Int? = null, videoId: String? = null): OutgoingMessage {
+        val payload = LinkedHashMap<String, Any?>()
+        if (tag != null) payload["currentTime"] = tag
+        if (videoId != null) payload["videoId"] = videoId
+        return OutgoingMessage(null, name, payload)
+    }
+
+    /** "name" or "name:tag" of every message of one POST, in order. */
+    private fun labels(request: Request): List<String> {
+        val form = bodyOf(request).split('&').associate {
+            java.net.URLDecoder.decode(it.substringBefore('='), "UTF-8") to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8")
+        }
+        return (0 until form.getValue("count").toInt()).map { i ->
+            val tag = form["req${i}_currentTime"] ?: form["req${i}_videoId"]
+            form.getValue("req${i}__sc") + (tag?.let { ":$it" } ?: "")
+        }
+    }
+
+    @Test
+    fun stateMessagesQueuedBehindAWaitingSendAreCoalesced() = runTest {
+        val counts = Counts()
+        val network = AtomicBoolean(false)
+        val delivered = CopyOnWriteArrayList<List<String>>()
+        val queue = queue(counts) { request ->
+            if (!network.get()) throw IOException("network unreachable")
+            delivered.add(labels(request))
+            ok(request)
+        }
+        val waiting = async { queue.sendMessage(listOf(msg("onVolumeChanged", 12))) }
+        runCurrent()
+        assertEquals(1, sendWaits().size, "the first send waits")
+        val queued = listOf(
+            listOf(msg("onStateChange", 10)),
+            listOf(msg("onStateChange", 20), msg("nowPlaying", 1), msg("onHasPreviousNextChanged")),
+            listOf(msg("autoplayUpNext", videoId = "X")),
+            listOf(msg("nowPlaying", 2)),
+            listOf(msg("onStateChange", 30)),
+        ).map { async { queue.sendMessage(it) } }
+        runCurrent()
+        network.set(true)
+        testScheduler.advanceUntilIdle()
+        assertTrue(waiting.await())
+        assertEquals(
+            listOf(
+                listOf("onVolumeChanged:12"),
+                listOf("onHasPreviousNextChanged"),
+                listOf("autoplayUpNext:X"),
+                listOf("nowPlaying:2"),
+                listOf("onStateChange:30"),
+            ),
+            delivered.toList(),
+            "the waiting task unchanged first, then the newest state of each name, order kept",
+        )
+        assertEquals(listOf(false, true, true, true, true), queued.map { it.await() }, "a task left with no message answers false")
+        assertEquals(0, counts.refreshes.get())
+    }
+
+    @Test
+    fun deferredAndFarewellSendsAreNeverCoalesced() = runTest {
+        val counts = Counts()
+        val network = AtomicBoolean(false)
+        val delivered = CopyOnWriteArrayList<List<String>>()
+        val queue = queue(counts) { request ->
+            if (!network.get()) throw IOException("network unreachable")
+            delivered.add(labels(request))
+            ok(request)
+        }
+        val waiting = async { queue.sendMessage(listOf(msg("onVolumeChanged", 12))) }
+        runCurrent()
+        val keyed = async { queue.sendMessage(listOf(msg("onStateChange", 5)), deferKey = "volume", deferMs = 0) }
+        val newer = async { queue.sendMessage(listOf(msg("onStateChange", 6))) }
+        val farewell = async { queue.sendMessage(listOf(OutgoingMessage.loungeScreenDisconnected())) }
+        runCurrent()
+        network.set(true)
+        testScheduler.advanceUntilIdle()
+        assertTrue(waiting.await())
+        assertTrue(keyed.await(), "a keyed send keeps its message even with a newer onStateChange behind it")
+        assertTrue(newer.await())
+        assertTrue(farewell.await())
+        assertEquals(
+            listOf(
+                listOf("onVolumeChanged:12"),
+                listOf("onStateChange:5"),
+                listOf("onStateChange:6"),
+                listOf("loungeScreenDisconnected"),
+            ),
+            delivered.toList(),
+        )
+    }
+
+    @Test
+    fun aHealthyQueueIsNotCoalesced() = runTest {
+        val counts = Counts()
+        val delivered = CopyOnWriteArrayList<List<String>>()
+        val queue = queue(counts) { request ->
+            delivered.add(labels(request))
+            ok(request)
+        }
+        val first = async { queue.sendMessage(listOf(msg("onStateChange", 10))) }
+        val second = async { queue.sendMessage(listOf(msg("onStateChange", 20))) }
+        testScheduler.advanceUntilIdle()
+        assertTrue(first.await())
+        assertTrue(second.await())
+        assertEquals(listOf(listOf("onStateChange:10"), listOf("onStateChange:20")), delivered.toList())
+        assertTrue(sendWaits().isEmpty())
+    }
+
+    @Test
+    fun clearQueuedSendsAlsoFailsTheHeldBackTasks() = runTest {
+        val counts = Counts()
+        val queue = queue(counts) { throw IOException("network unreachable") }
+        val waiting = async { queue.sendMessage(listOf(msg("onVolumeChanged", 12))) }
+        runCurrent()
+        val behind = listOf(
+            async { queue.sendMessage(listOf(msg("autoplayUpNext", videoId = "X"))) },
+            async { queue.sendMessage(listOf(msg("onStateChange", 30))) },
+        )
+        runCurrent()
+        // the first wait ends, the queue behind it is drained, the retry fails and the next wait starts
+        testScheduler.advanceTimeBy(2_001)
+        runCurrent()
+        assertEquals(2, sendWaits().size)
+        val posts = counts.posts.size
+        // what Session.end does: the status leaves RUNNING, the queue is cleared
+        counts.canSend.set(false)
+        queue.clearQueuedSends()
+        runCurrent()
+        assertTrue(behind.all { it.isCompleted }, "the tasks held back answer at once, not when the consumer gets to them")
+        assertEquals(listOf(false, false), behind.map { it.await() })
+        testScheduler.advanceUntilIdle()
+        assertFalse(waiting.await())
+        assertEquals(posts, counts.posts.size, "nothing is posted after the end")
     }
 }
