@@ -883,47 +883,53 @@ class MediaServer(
         var handedOver = false
         try {
             for (attempt in attempts) {
-                val input = try {
-                    attempt.input()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    continue // the live path that follows a failed fill records the failure
-                }
-                if (!currentCoroutineContext().isActive) return null
-                withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
-                val proc = try {
-                    l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: IOException) {
-                    return null // ffmpeg cannot be started: the live path that follows records it (ffmpegStartFailure) and answers
-                }
+                // the attempt's feed token goes once its process has been killed and waited for (the inner finally), or at once
+                // when it never started one; not before: ffmpeg reconnects to the feed inside one process
                 try {
-                    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
-                    while (true) {
-                        val exited = withContext(Dispatchers.IO) { proc.waitFor(FILL_POLL_MS, TimeUnit.MILLISECONDS) }
-                        if (exited) break
+                    val input = try {
+                        attempt.input()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        continue // the live path that follows a failed fill records the failure
+                    }
+                    if (!currentCoroutineContext().isActive) return null
+                    withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
+                    val proc = try {
+                        l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: IOException) {
+                        return null // ffmpeg cannot be started: the live path that follows records it (ffmpegStartFailure) and answers
+                    }
+                    try {
+                        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
+                        while (true) {
+                            val exited = withContext(Dispatchers.IO) { proc.waitFor(FILL_POLL_MS, TimeUnit.MILLISECONDS) }
+                            if (exited) break
+                            if (part.length() > pipeRanges.maxBytesPerToken) {
+                                cache.markOversize(token)
+                                out.note = "range fill passed the size cap"
+                                return null
+                            }
+                            if (System.nanoTime() > deadline) {
+                                out.note = "range fill passed the ${pipeRanges.coldFillTimeoutMs} ms budget"
+                                return null
+                            }
+                        }
+                        if (proc.exitValue() != 0 || part.length() == 0L) continue
                         if (part.length() > pipeRanges.maxBytesPerToken) {
                             cache.markOversize(token)
-                            out.note = "range fill passed the size cap"
                             return null
                         }
-                        if (System.nanoTime() > deadline) {
-                            out.note = "range fill passed the ${pipeRanges.coldFillTimeoutMs} ms budget"
-                            return null
-                        }
+                    } finally {
+                        killAndWait(proc)
                     }
-                    if (proc.exitValue() != 0 || part.length() == 0L) continue
-                    if (part.length() > pipeRanges.maxBytesPerToken) {
-                        cache.markOversize(token)
-                        return null
-                    }
+                    handedOver = true
+                    return withContext(Dispatchers.IO) { cache.promote(token, part) }
                 } finally {
-                    killAndWait(proc)
+                    attempt.release()
                 }
-                handedOver = true
-                return withContext(Dispatchers.IO) { cache.promote(token, part) }
             }
             return null
         } finally {
@@ -949,17 +955,17 @@ class MediaServer(
         val failures = mutableListOf<String>()
         try {
             for (attempt in attempts) {
-                val input = try {
-                    attempt.input()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
-                    continue
-                }
-                if (!currentCoroutineContext().isActive) return
                 var proc: Process? = null
                 try {
+                    val input = try {
+                        attempt.input()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
+                        continue
+                    }
+                    if (!currentCoroutineContext().isActive) return
                     val p = try {
                         l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
                     } catch (e: CancellationException) {
@@ -982,7 +988,9 @@ class MediaServer(
                         continue
                     }
                 } finally {
+                    // the feed token goes with the process, never before: ffmpeg reconnects to the feed inside one process
                     proc?.let { killAndWait(it) }
+                    attempt.release()
                 }
                 permit.release()
                 serveFile(call, entry, tmp, false, out, "buffered")
