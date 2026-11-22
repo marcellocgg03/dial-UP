@@ -189,6 +189,34 @@ class DialAccessTest {
         assertNull(redactLaunchBody(null))
     }
 
+    @Test
+    fun percentEncodedPairingCodeNamesAreRedacted() {
+        // the receiver decodes field names before its lookup, so every spelling it accepts must be redacted
+        assertEquals("pairing%43ode=<redacted len 7>", redactLaunchBody("pairing%43ode=SECRET9"))
+        assertEquals("%70%61iringCode=<redacted len 7>", redactLaunchBody("%70%61iringCode=SECRET9"))
+        assertEquals("%70airingCode=<redacted len 11>&theme=cl", redactLaunchBody("%70airingCode=SECRETCODE1&theme=cl"))
+        // not the receiver's field: a plus decodes to a space, and the name is case-sensitive
+        assertEquals("pairing+Code=x", redactLaunchBody("pairing+Code=x"))
+        assertEquals("pairingcode=x", redactLaunchBody("pairingcode=x"))
+        // a malformed escape does not throw; the raw name is kept, like the receiver
+        assertEquals("%zz=1&pairingCode=<redacted len 3>", redactLaunchBody("%zz=1&pairingCode=abc"))
+        // every pairingCode field is redacted, a field without '=' is left alone
+        assertEquals(
+            "pairingCode=<redacted len 1>&x&%70airingCode=<redacted len 2>",
+            redactLaunchBody("pairingCode=a&x&%70airingCode=bc"),
+        )
+    }
+
+    @Test
+    fun redactionIsIdempotent() {
+        assertEquals("pairingCode=<redacted len 9>", redactLaunchBody("pairingCode=<redacted len 9>"))
+        val once = redactLaunchBody("pairingCode=abcdefghijkl&theme=cl")
+        assertEquals("pairingCode=<redacted len 12>&theme=cl", once)
+        assertEquals(once, redactLaunchBody(once), "a second pass must not measure the marker text")
+        val encoded = redactLaunchBody("%70airingCode=SECRETCODE1&theme=cl")
+        assertEquals(encoded, redactLaunchBody(encoded))
+    }
+
     // ----- HTTP gate --------------------------------------------------------------------------
 
     private fun gateTest(
@@ -300,6 +328,20 @@ class DialAccessTest {
             client.post("/ytcr/apps/YouTube") { setBody("pairingCode=abcdef&theme=cl") }
         }
         assertEquals("pairingCode=<redacted len 6>&theme=cl", seen.single { it.method == "POST" }.body)
+    }
+
+    @Test
+    fun aPercentEncodedPairingCodeIsReportedRedactedWithItsRealLength() {
+        val seen = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ true }, seen) {
+            client.post("/ytcr/apps/YouTube") {
+                contentType(ContentType.Application.FormUrlEncoded)
+                setBody("%70airingCode=SECRETCODE1&theme=cl")
+            }
+        }
+        val body = seen.single { it.method == "POST" }.body
+        assertEquals("%70airingCode=<redacted len 11>&theme=cl", body)
+        assertFalse(body!!.contains("SECRETCODE1"))
     }
 
     @Test
