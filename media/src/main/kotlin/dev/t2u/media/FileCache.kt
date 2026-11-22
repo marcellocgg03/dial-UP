@@ -443,8 +443,8 @@ class FileCache(
 }
 
 /** Moves finished files and removes obsolete range-cache data from a legacy media buffer. */
-fun migrateMediaBufferDir(from: File, to: File) {
-    migrateCacheDir(File(from, "files"), File(to, "files"))
+fun migrateMediaBufferDir(from: File, to: File, onEvent: (Map<String, Any?>) -> Unit = {}) {
+    migrateCacheDir(File(from, "files"), File(to, "files"), onEvent)
     val oldRanges = File(from, "range-cache")
     if (!oldRanges.exists()) return
     val files = oldRanges.listFiles() ?: throw IOException("Cannot list legacy range cache directory: $oldRanges")
@@ -454,7 +454,7 @@ fun migrateMediaBufferDir(from: File, to: File) {
 }
 
 /** Moves a legacy cache into [to], preserving existing destination files and the zero-limit manifest. */
-fun migrateCacheDir(from: File, to: File): Int {
+fun migrateCacheDir(from: File, to: File, onEvent: (Map<String, Any?>) -> Unit = {}): Int {
     if (!from.exists()) return 0
     val names = from.list() ?: throw IOException("Cannot list legacy cache directory: $from")
     if (!to.isDirectory && !to.mkdirs() && !to.isDirectory) throw IOException("Cannot create cache directory: $to")

@@ -474,4 +474,95 @@ class FileCacheTest {
         assertEquals(emptyList(), names(), "the restart did not adopt the file as a kept one")
         assertEquals(0, restarted.dropUncachedFiles())
     }
+
+    /** A manifest with three names that are not plain cache file names, a blank line and one good name. */
+    private fun badManifest(): File {
+        dir.mkdirs()
+        return File(dir, ".uncached").also { it.writeText("../victim.m4a\n/abs/x.m4a\na/b.m4a\n\ngood.m4a\n") }
+    }
+
+    private fun ignoredEvents(from: List<Map<String, Any?>> = events) = from.filter { it["event"] == "cache-manifest-name-ignored" }
+
+    @Test
+    fun aManifestNameOutsideTheCacheIsIgnoredAndNeverDeleted() {
+        val victim = File(root, "victim.m4a").also { it.writeBytes(ByteArray(10)) }
+        badManifest()
+        limit = 0 // the pin keeps good.m4a past the scan's own prune
+        val release = cache.pin(put("good.m4a", 10, 1_000))
+
+        cache.scan()
+        release()
+        val dropped = cache.dropUncachedFiles()
+
+        assertTrue(victim.isFile, "a file outside the cache directory must survive")
+        assertEquals(1, dropped, "the one good name is dropped as before")
+        assertFalse(File(dir, "good.m4a").exists(), "a good name is treated as uncached exactly as today")
+        val manifest = File(dir, ".uncached")
+        assertTrue(!manifest.exists() || manifest.readLines().none { "/" in it || ".." in it }, "no bad line is written back")
+    }
+
+    @Test
+    fun theIgnoredManifestNamesAreLoggedOnceAsACount() {
+        badManifest()
+        limit = 0
+        val release = cache.pin(put("good.m4a", 10, 1_000))
+
+        cache.scan()
+        release()
+        cache.dropUncachedFiles()
+
+        val logged = ignoredEvents()
+        assertEquals(1, logged.size, "one event for the scan, none for the drop: $events")
+        assertEquals("scan", logged.single()["where"])
+        assertEquals(3, logged.single()["count"])
+        val text = logged.single().values.joinToString(" ")
+        for (name in listOf("victim", "abs", "b.m4a", "good")) assertFalse(name in text, "no name in the event: $text")
+    }
+
+    @Test
+    fun migrationDropsManifestNamesThatAreNotPlainFileNames() {
+        val old = File(root, "old").also { it.mkdirs() }
+        val new = File(root, "new").also { it.mkdirs() }
+        val outside = File(root, "x.m4a").also { it.writeBytes(ByteArray(10)) }
+        File(old, ".uncached").writeText("../x.m4a\n/abs.m4a\ngood.m4a\n")
+        File(old, "good.m4a").writeBytes(ByteArray(10))
+
+        assertEquals(1, migrateCacheDir(old, new))
+
+        assertEquals(listOf("good.m4a"), File(new, ".uncached").readLines())
+        assertTrue(outside.isFile, "no file outside either directory is touched")
+    }
+
+    @Test
+    fun migrationCountsAndLogsTheIgnoredNamesOnce() {
+        val old = File(root, "old").also { it.mkdirs() }
+        val new = File(root, "new").also { it.mkdirs() }
+        File(old, ".uncached").writeText("../x.m4a\n/abs.m4a\ngood.m4a\n")
+        File(old, "good.m4a").writeBytes(ByteArray(10))
+        val collected = ArrayList<Map<String, Any?>>()
+
+        migrateCacheDir(old, new) { collected.add(it) }
+
+        val logged = ignoredEvents(collected)
+        assertEquals(1, logged.size, collected.toString())
+        assertEquals("migrate", logged.single()["where"])
+        assertEquals(2, logged.single()["count"])
+        val text = logged.single().values.joinToString(" ")
+        for (name in listOf("x.m4a", "abs", "good")) assertFalse(name in text, "no name in the event: $text")
+
+        // migrateMediaBufferDir passes the sink on to the migration of its files directory
+        val oldBuffer = File(root, "oldBuffer")
+        File(oldBuffer, "files").mkdirs()
+        File(oldBuffer, "files/.uncached").writeText("../x.m4a\n/abs.m4a\ngood.m4a\n")
+        val viaBuffer = ArrayList<Map<String, Any?>>()
+        migrateMediaBufferDir(oldBuffer, File(root, "newBuffer")) { viaBuffer.add(it) }
+        assertEquals(listOf("migrate" to 2), ignoredEvents(viaBuffer).map { it["where"] to it["count"] })
+
+        // without a sink the migration behaves the same and logs nothing
+        val old2 = File(root, "old2").also { it.mkdirs() }
+        val new2 = File(root, "new2").also { it.mkdirs() }
+        File(old2, ".uncached").writeText("../x.m4a\ngood.m4a\n")
+        migrateCacheDir(old2, new2)
+        assertEquals(listOf("good.m4a"), File(new2, ".uncached").readLines())
+    }
 }
