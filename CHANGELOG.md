@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A cast of a long track that starts partway in no longer fails with "Renderer fetched the stream but never started playing".** For a track larger than about 10 MiB, YouTube sends the audio slowly (about 30 KB/s) when it is asked for the whole file. A resume at 0:40 made ffmpeg read the first 650 KB through that slow response instead of asking YouTube for the part it needed, took about 21 s, and was ended by the 20 s start limit before the speaker got any audio. ffmpeg now asks for the position it needs directly. Tested with real ffmpeg against a deliberately slow server (the test fails without the change). On a Sonos One a seek to 0:43 of the failing track fetched the needed part in about 140 ms and played; a cast that starts at 0:40 was not run on the phone.
+
 ## 1.2.2
 
 ### Fixed
