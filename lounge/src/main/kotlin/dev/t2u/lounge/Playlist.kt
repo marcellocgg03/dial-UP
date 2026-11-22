@@ -164,12 +164,18 @@ class Playlist {
         emitPlaylistEvent(name, payload["eventDetails"])
     }
 
-    /** Back to an empty queue with autoplay unsupported (Player.reset). */
+    /**
+     * Back to an empty queue with no previous, next or autoplay video, no refresh in flight and autoplay
+     * unsupported (Player.reset). yt-cast-receiver keeps the next video and the refresh, so a phone that
+     * connects next is offered the old cast's autoplay entry (PARITY P-12).
+     */
     fun reset() {
         id = null
         videoIds = emptyList()
         current = null
         previousVideo = null
+        nextVideo = null
+        abortRefresh()
         autoplayMode = AutoplayMode.UNSUPPORTED
         requestHandler.reset()
     }
