@@ -58,10 +58,10 @@ class Session(
     private val rpcRetryDelayMs: Long = 1000,
     /**
      * Adaptation 47: how long the RPC reconnect keeps retrying the same token after network errors (not HTTP statuses)
-     * before the token is refreshed. 0 turns the tolerance off.
+     * before the token is refreshed. The message sends use the same tolerance (a failed POST waits in place, same offset). 0 turns the tolerance off.
      */
     private val rpcOutageBudgetMs: Long = 120_000,
-    /** Waits between those retries; the last value repeats. */
+    /** Waits between those retries, of the RPC reconnect and of the message sends; the last value repeats. */
     private val rpcOutageWaitsMs: List<Long> = listOf(2_000, 4_000, 8_000, 16_000, 30_000),
 ) {
     @Volatile
@@ -325,6 +325,9 @@ class Session(
         canSend = { status == SessionStatus.RUNNING || status == SessionStatus.REFRESHING },
         refreshToken = ::refreshLoungeToken,
         endSession = { end(it) },
+        outageBudgetMs = rpcOutageBudgetMs,
+        outageWaitsMs = rpcOutageWaitsMs,
+        nowMs = { System.nanoTime() / 1_000_000 },
     )
 
     /**
