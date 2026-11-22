@@ -387,6 +387,31 @@ class DirectReadAheadTest {
     }
 
     @Test
+    @DisplayName("a Range end that overflows is relayed like any large range, not cut from a read-ahead window")
+    fun aHugeRangeEndIsRelayedNotReadAhead() {
+        runBlocking {
+            val data = payload(1_048_576, salt = 41)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            scan(ms, path, data, 0)
+
+            val huge = "bytes=0-9223372036854775807"
+            repeat(2) {
+                val before = up.calls.size
+                val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to huge))
+                assertEquals(206, r.status, "a huge Range end is not a 500, reported: ${seen.lastOrNull()}")
+                assertEquals("bytes 0-${data.size - 1}/${data.size}", r.header("Content-Range"))
+                assertTrue(data.contentEquals(r.body), "the whole file, as upstream returns for that Range")
+                assertEquals(before + 1, up.calls.size, "one plain upstream call")
+                assertEquals(huge, up.calls.last().range, "upstream saw the client's Range, not a window Range")
+            }
+            val log = awaitSeen { l -> l.size >= 3 }
+            assertTrue(log.none { it.upstream.orEmpty().startsWith("window") }, "no window was fetched for the huge ranges: ${log.map { it.upstream }}")
+        }
+    }
+
+    @Test
     @DisplayName("a range that runs past the end of the file is cut to the file, as upstream does")
     fun aRangeRunningPastTheEndIsCutToTheFile() {
         runBlocking {
