@@ -729,7 +729,8 @@ class Renderer(
             is LoadResult.SpeakerFailed -> result.seq
             else -> null
         }
-        if (failedSeq != null && !superseded(failedSeq) && current === c && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
+        val holds = status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED
+        if (failedSeq != null && !superseded(failedSeq) && current === c && holds) {
             note("warn", "Load failed - polling the loaded track again", "videoId" to c.video.id)
             pollLoop.start()
         }
