@@ -3,8 +3,12 @@ package dev.t2u.lounge
 // Tests for Player (port of yt-cast-receiver 2.1.0 lib/Player.js, MIT, Copyright (c) Patrick Kan), GPL-3.0-only.
 
 import dev.t2u.upnp.EventSink
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -33,6 +37,7 @@ class FakePlayer : Player() {
     var lastVolumeSet: Volume? = null
     @Volatile var beforeGetVolume: suspend () -> Unit = {}
     @Volatile var beforeGetPosition: suspend () -> Unit = {}
+    @Volatile var beforePlay: suspend () -> Unit = {}
 
     /** The player's clock (epoch ms); a test moves it by hand. */
     var nowMs: Long = 1_700_000_000_000
@@ -53,6 +58,7 @@ class FakePlayer : Player() {
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
+        beforePlay()
         playFailure?.let { throw it }
         return playResult
     }
@@ -387,6 +393,103 @@ class PlayerTest {
         player.seekFailure = kotlinx.coroutines.CancellationException("cancelled")
         assertFailsWith<kotlinx.coroutines.CancellationException> { player.seek(10.0) }
         assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
+    }
+
+    /** Holds the first position read of [player] until [gate] opens; [entered] completes when it is held. */
+    private fun holdFirstGetState(player: FakePlayer, entered: CompletableDeferred<Unit>, gate: CompletableDeferred<Unit>) {
+        var first = true
+        player.beforeGetPosition = {
+            if (first) {
+                first = false
+                entered.complete(Unit)
+                gate.await()
+            }
+        }
+    }
+
+    /** D-09, LOUNGE WR-11: the second state change must not overtake the first one inside the emit. */
+    @Test
+    fun racingStateChangesReachTheSendersInOrder(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        holdFirstGetState(player, entered, gate)
+
+        val first = launch { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        entered.await()
+        val second = launch { player.notifyExternalStateChange(PlayerStatus.PLAYING) }
+        yield()
+        gate.complete(Unit)
+        joinAll(first, second)
+
+        assertEquals(listOf(PlayerStatus.PAUSED, PlayerStatus.PLAYING), events.map { it.current.status }, "emitted in the order taken")
+        assertEquals(PlayerStatus.PLAYING, events[0].previous?.status)
+        assertEquals(events[0].current, events[1].previous, "each event's previous state is the state emitted before it")
+        assertEquals(events.last().current.status, player.status, "the player's status is the last emitted one")
+    }
+
+    @Test
+    fun aPositionCorrectionDoesNotInterleaveWithAStatusChange(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        holdFirstGetState(player, entered, gate)
+
+        val change = launch { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        entered.await()
+        val correction = launch { player.notifyPositionCorrection() }
+        yield()
+        gate.complete(Unit)
+        joinAll(change, correction)
+
+        assertEquals(2, events.size)
+        assertEquals(PlayerStatus.PLAYING, events[0].previous?.status, "the status change came first")
+        assertEquals(PlayerStatus.PAUSED, events[0].current.status)
+        assertEquals(-1.0, events[1].previous?.position, "then the correction, which never equals a real position")
+        assertEquals(events[0].current.status, events[1].previous?.status, "the correction follows the state emitted before it")
+        assertEquals(PlayerStatus.PAUSED, events[1].current.status)
+    }
+
+    @Test
+    fun aListenerThatReadsTheStateDoesNotDeadlock(): Unit = runBlocking {
+        val player = FakePlayer()
+        var reads = 0
+        player.addStateListener {
+            player.getState()
+            player.getNavInfo()
+            reads++
+        }
+        withTimeout(5_000) {
+            player.notifyExternalStateChange(PlayerStatus.PLAYING)
+            player.notifyPositionCorrection()
+            player.notifyExternalStateChange(PlayerStatus.PAUSED)
+            player.reset()
+        }
+        assertEquals(5, reads, "four calls and the STOPPED event of reset's stop")
+    }
+
+    @Test
+    fun commandsAreNotSerialisedByTheEmitLock(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        player.beforePlay = {
+            entered.complete(Unit)
+            gate.await()
+        }
+
+        // a play on a PLAYING player stops it first, then waits inside doPlay
+        val play = launch { player.play(player.queue.current!!, 0.0) }
+        entered.await()
+        events.clear()
+
+        withTimeout(2_000) { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        assertEquals(listOf(PlayerStatus.PAUSED), events.map { it.current.status }, "an emit does not wait for the command in doPlay")
+
+        gate.complete(Unit)
+        play.join()
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(PlayerStatus.PLAYING, events.last().current.status)
     }
 
     @Test
