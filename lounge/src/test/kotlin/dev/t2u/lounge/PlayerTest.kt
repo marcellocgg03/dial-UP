@@ -496,7 +496,9 @@ class PlayerTest {
         assertTrue(player.play(player.queue.current!!, 0.0))
         assertEquals(PlayerStatus.PLAYING, player.status)
         assertEquals(2, good.size)
-        assertTrue(reported.any { it.first == "player" && it.second["error"].toString().contains("listener boom") })
+        // the log names the failing step and the exception class, never the exception's text (D-14)
+        assertTrue(reported.any { it.first == "player" && it.second["type"] == "listenerError" && it.second["error"] == "IllegalStateException" })
+        assertTrue(reported.none { e -> e.second.values.any { it.toString().contains("listener boom") } })
     }
 
     @Test

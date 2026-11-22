@@ -177,7 +177,7 @@ abstract class Player {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("playFailed", "error" to (e.message ?: e::class.simpleName))
+            log("playFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             false
         }
         setStatusAndEmit(if (result) PlayerStatus.PLAYING else PlayerStatus.STOPPED, aid)
@@ -189,7 +189,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("hopRefreshFailed", "error" to (e.message ?: e::class.simpleName))
+                log("hopRefreshFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
             setStatusAndEmit(null, aid)
         }
@@ -336,7 +336,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("clearFailed", "error" to (e.message ?: e::class.simpleName))
+                log("clearFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
         previousState = null
@@ -345,7 +345,7 @@ abstract class Player {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log("resetEmitFailed", "error" to (e.message ?: e::class.simpleName))
+            log("resetEmitFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
         }
     }
 
@@ -416,7 +416,7 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("listenerError", "error" to (e.message ?: e::class.simpleName))
+                log("listenerError", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
     }
@@ -455,11 +455,16 @@ abstract class Player {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log("listenerError", "error" to (e.message ?: e::class.simpleName))
+                log("listenerError", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
     }
 
+    /**
+     * Writes one player event. Callers that log a caught exception pass its class name only, never its message:
+     * exception text can carry a signed URL or a token, and the log is shared by users (the same rule as
+     * [reportPlaybackFailure]'s reason). The [type] names the failing step.
+     */
     private fun log(type: String, vararg fields: Pair<String, Any?>) {
         try {
             events.event("player", mapOf<String, Any?>("type" to type) + fields)
