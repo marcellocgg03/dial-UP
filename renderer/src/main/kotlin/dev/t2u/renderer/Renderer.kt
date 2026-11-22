@@ -813,9 +813,16 @@ class Renderer(
         forceOffset: Boolean,
         offsetOnly: Boolean,
     ): PreparedItem {
-        if (taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id) {
-            note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
-            return taken.item
+        val plainStart = taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id
+        if (taken != null && plainStart) {
+            // The item's URL names the address it was built with; after a network change in which no re-set ran (a stopped
+            // player) that address may be gone, or belong to another host. Equality with the current address, not "changed
+            // since", so an item is valid again when the address comes back.
+            if (taken.item.address == ip) {
+                note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
+                return taken.item
+            }
+            note("info", "Prepared track was built for another address - preparing it again", "videoId" to video.id)
         }
         releaseStream(taken?.item?.current)
         return prepareItem(video, position, format, forceOffset, offsetOnly)
@@ -1016,7 +1023,7 @@ class Renderer(
                 isVideo = mime.startsWith("video/"),
             ),
         )
-        return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata)
+        return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata, address)
     }
 
     /**

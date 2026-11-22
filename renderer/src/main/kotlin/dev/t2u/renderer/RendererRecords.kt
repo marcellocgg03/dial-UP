@@ -97,6 +97,8 @@ internal class PreparedItem(
     val mime: String,
     val url: String,
     val metadata: String,
+    /** The phone address [url] was built with; the item is reused only while the renderer still serves from it. */
+    val address: String,
 )
 
 /** The next track, prepared ahead of its turn (renderer.js `#queued`): the video it was prepared for and the ready item. */
