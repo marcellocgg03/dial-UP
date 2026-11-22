@@ -160,12 +160,16 @@ internal class DirectRelay(
     }
 
 
-    /** A bounded `bytes=a-b` of at most [READ_AHEAD_SCAN_MAX_BYTES] bytes, else null. */
+    /**
+     * A bounded `bytes=a-b` of at most [READ_AHEAD_SCAN_MAX_BYTES] bytes, else null (the request is relayed as it is). The
+     * length test is written so a huge end cannot wrap: with `b >= a >= 0`, `b - a` cannot overflow, while `b - a + 1` does
+     * for `b` = [Long.MAX_VALUE].
+     */
     private fun scanSpan(range: String): LongRange? {
         val m = BOUNDED_RANGE.matchEntire(range) ?: return null
         val a = m.groupValues[1].toLongOrNull() ?: return null
         val b = m.groupValues[2].toLongOrNull() ?: return null
-        if (b < a || b - a + 1 > READ_AHEAD_SCAN_MAX_BYTES) return null
+        if (b < a || b - a >= READ_AHEAD_SCAN_MAX_BYTES) return null
         return a..b
     }
 
