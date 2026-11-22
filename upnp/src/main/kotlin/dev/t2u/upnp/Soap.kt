@@ -120,10 +120,11 @@ class SoapClient(private val http: OkHttpClient, private val allowLoopback: Bool
         } catch (e: IllegalArgumentException) {
             throw UpnpError("$action: bad control URL (${e.message})", "ENETWORK")
         }
-        // A speaker is another device: a control URL on this device's own loopback is a description aiming the call at the
-        // phone itself. The LAN guard allows 127/8 (tests run against loopback fakes), so this is refused here unless [allowLoopback].
-        if (!allowLoopback && isLoopbackHost(request.url.host)) {
-            throw UpnpError("$action: control URL is on this device (refused)", "ENETWORK")
+        // A speaker is another device on the LAN: a control URL on this device's own loopback, a name, a public address or
+        // https off the LAN is a description aiming the call elsewhere. The shared LAN guard allows 127/8 and every https
+        // host, so the speaker rule is applied here, before the call is made.
+        speakerTargetProblem(request.url, allowLoopback)?.let { problem ->
+            throw UpnpError("$action: control URL $problem (refused)", "ENETWORK")
         }
         val call = http.newCall(request)
         call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -195,8 +196,25 @@ internal suspend fun executeForText(call: Call, maxBytes: Long): Pair<Int, Strin
     )
 }
 
-/** STUB (RED): the real rule follows in the GREEN commit. */
-internal fun speakerTargetProblem(url: HttpUrl, allowLoopback: Boolean): String? = null
+/**
+ * The one rule for a call to a speaker (the description fetch and SOAP): returns null when [url] may be called, else a
+ * short phrase for the refusal. The host must be a private LAN IP literal (see [isPrivateLanAddress]), for http and https
+ * alike; this device's loopback is refused unless [allowLoopback] (the test seam for the JVM fakes on 127/8), and a name
+ * is refused without being resolved.
+ *
+ * Only calls to a speaker use it. The shared [PrivateLanGuard] stays as it is because the YouTube lounge, InnerTube,
+ * the googlevideo fetch, the update check and thumbnails need https to public hosts.
+ */
+internal fun speakerTargetProblem(url: HttpUrl, allowLoopback: Boolean): String? {
+    val host = url.host
+    if (!allowLoopback && isLoopbackHost(host)) return "is on this device"
+    // A name cannot contain ':', so getByName on a host with one parses an IPv6 literal and never does a lookup.
+    val literal = when {
+        host.contains(':') -> try { java.net.InetAddress.getByName(host) } catch (_: Exception) { null }
+        else -> parseIpv4Literal(host)
+    } ?: return "is not an IP literal"
+    return if (isPrivateLanAddress(literal)) null else "is not a private LAN address"
+}
 
 /** True for `localhost`, 127/8, `::1` and the IPv4-mapped forms of them; never resolves a name. */
 internal fun isLoopbackHost(host: String): Boolean {

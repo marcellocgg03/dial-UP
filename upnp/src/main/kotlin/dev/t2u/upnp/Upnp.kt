@@ -111,12 +111,13 @@ private fun sameAuthority(url: String, location: String): Boolean {
 
 /**
  * GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>".
- * Like [SoapClient], the fetch refuses a URL on this device's own loopback ([IOException] "... (refused)", no request
- * sent) unless [allowLoopback], the test seam for the JVM fakes on 127/8.
+ * Like [SoapClient], the fetch applies [speakerTargetProblem]: a URL on this device's own loopback (unless [allowLoopback],
+ * the test seam for the JVM fakes on 127/8), a name, a public address or https off the LAN throws [IOException] "... (refused)"
+ * and no request is sent.
  */
 suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000, allowLoopback: Boolean = false): DeviceDescription {
     val request = Request.Builder().url(location).build()
-    if (!allowLoopback && isLoopbackHost(request.url.host)) throw IOException("description URL is on this device (refused)")
+    speakerTargetProblem(request.url, allowLoopback)?.let { throw IOException("description URL $it (refused)") }
     val call = http.newCall(request)
     call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
     val (status, text) = executeForText(call, MAX_DESCRIPTION_BYTES)
