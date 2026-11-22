@@ -403,6 +403,32 @@ class PlayerTest {
     }
 
     @Test
+    fun applyVolumeClampsTheLevelBeforeTheSpeakerIsAsked() = runBlocking {
+        val player = FakePlayer()
+        val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+
+        player.applyVolume(Volume(250, false))
+        assertEquals(Volume(100, false), player.lastVolumeSet)
+        player.applyVolume(Volume(-7, false))
+        assertEquals(Volume(0, false), player.lastVolumeSet)
+        player.applyVolume(Volume(40, false))
+        assertEquals(Volume(40, false), player.lastVolumeSet)
+
+        player.setZeroVolumeLevelOnMute(true)
+        player.applyVolume(Volume(250, true))
+        assertEquals(Volume(0, true), player.lastVolumeSet)
+        player.setZeroVolumeLevelOnMute(false)
+
+        assertTrue(player.setVolume(Volume(101, false)))
+        assertEquals(Volume(100, false), player.lastVolumeSet)
+
+        val levels = logged.filter { it["type"] == "setVolume" }.map { it["level"] }
+        assertTrue(levels.take(3) == listOf(100, 0, 40), "the setVolume log carries the clamped level: $levels")
+        assertTrue(player.calls.none { it == "volume:250:false" || it == "volume:-7:false" || it == "volume:101:false" })
+    }
+
+    @Test
     fun withTheNoOpHandlerThereIsNothingPreviousOrNext() = runBlocking {
         val (player, events) = playing()
         assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
