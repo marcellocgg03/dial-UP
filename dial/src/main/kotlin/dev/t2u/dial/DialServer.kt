@@ -74,6 +74,9 @@ data class DialRequest(
     val body: String?,
 )
 
+/** Stub for the RED run. */
+internal fun dialUrlHost(localAddress: String, bindHost: String): String = bindHost
+
 /**
  * DIAL receiver HTTP side, a port of the peer-dial routes under [DialConfig.prefix]. One Ktor CIO
  * server per instance. The host in Application-URL and LOCATION always comes from the request Host

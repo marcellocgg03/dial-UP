@@ -50,7 +50,7 @@ class DialServerTest {
     fun deviceDescriptionCarriesApplicationUrlAndMatchesGolden() = dialTest {
         val r = get("/ytcr/ssdp/device-desc.xml")
         assertEquals(HttpStatusCode.OK, r.status)
-        assertEquals("http://192.168.50.239:3000/ytcr/apps", r.headers["Application-URL"])
+        assertEquals("http://127.0.0.1:3000/ytcr/apps", r.headers["Application-URL"])
         assertTrue(r.headers[HttpHeaders.ContentType]!!.startsWith("application/xml"), r.headers[HttpHeaders.ContentType])
         assertEquals(norm(golden("device-desc.xml")), norm(r.bodyAsText()))
     }
@@ -87,10 +87,60 @@ class DialServerTest {
     }
 
     @Test
-    fun applicationUrlFollowsTheRequestHostHeader() = dialTest {
-        val r = get("/ytcr/ssdp/device-desc.xml", host = "10.1.2.3")
-        assertEquals("http://10.1.2.3:3000/ytcr/apps", r.headers["Application-URL"])
-        assertTrue(r.bodyAsText().contains("<URLBase>http://10.1.2.3:3000/ytcr</URLBase>"))
+    fun aForgedHostHeaderDoesNotChangeTheReturnedUrls() {
+        val server = DialServer(config, { }, { _, _ -> "pid-9" })
+        testApplication {
+            application { server.configure(this) }
+            for (forged in listOf("10.1.2.3", "evil.example:80")) {
+                val r = get("/ytcr/ssdp/device-desc.xml", host = forged)
+                assertEquals("http://127.0.0.1:3000/ytcr/apps", r.headers["Application-URL"], forged)
+                assertTrue(r.bodyAsText().contains("<URLBase>http://127.0.0.1:3000/ytcr</URLBase>"), forged)
+                val launch = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, forged); setBody("x=1") }
+                assertEquals("http://127.0.0.1:3000/ytcr/apps/YouTube/pid-9", launch.headers["LOCATION"], forged)
+            }
+        }
+    }
+
+    @Test
+    fun dialUrlHostUsesTheLocalAddressAndFallsBackToTheBindAddress() {
+        val table = listOf(
+            Triple("192.168.1.5", "192.168.1.5", "192.168.1.5"),
+            Triple("localhost", "127.0.0.1", "127.0.0.1"),
+            Triple("0.0.0.0", "10.0.0.2", "10.0.0.2"),
+            Triple("::", "127.0.0.1", "127.0.0.1"),
+            Triple("10.0.0.7", "0.0.0.0", "10.0.0.7"),
+            Triple("localhost", "0.0.0.0", "127.0.0.1"),
+            Triple("evil.example", "127.0.0.1", "127.0.0.1"),
+            Triple("::1", "10.0.0.2", "[::1]"),
+            Triple("[::1]", "10.0.0.2", "[::1]"),
+            Triple("fe80::1%wlan0", "10.0.0.2", "[fe80::1]"),
+        )
+        for ((local, bind, want) in table) {
+            assertEquals(want, dialUrlHost(local, bind), "local '$local' bind '$bind'")
+        }
+    }
+
+    @Test
+    fun aForgedHostHeaderOnARealSocketStillGivesTheLocalAddress() {
+        val server = DialServer(DialConfig("T2U real", uuid, "127.0.0.1", 0), { }, { _, _ -> "pid-5" })
+        server.start()
+        try {
+            val port = server.resolvedPort()
+            fun raw(request: String): String = java.net.Socket("127.0.0.1", port).use { sock ->
+                sock.soTimeout = 5000
+                sock.getOutputStream().apply { write(request.toByteArray(Charsets.ISO_8859_1)); flush() }
+                sock.getInputStream().readBytes().toString(Charsets.ISO_8859_1)
+            }
+            val desc = raw("GET /ytcr/ssdp/device-desc.xml HTTP/1.1\r\nHost: rebind.example:80\r\nConnection: close\r\n\r\n")
+            assertTrue(desc.contains("Application-URL: http://127.0.0.1:$port/ytcr/apps"), desc)
+            assertTrue(desc.contains("<URLBase>http://127.0.0.1:$port/ytcr</URLBase>"), desc)
+            assertTrue(!desc.contains("rebind.example"), desc)
+            val launch = raw("POST /ytcr/apps/YouTube HTTP/1.1\r\nHost: rebind.example:80\r\nContent-Length: 3\r\nConnection: close\r\n\r\nx=1")
+            assertTrue(launch.contains("LOCATION: http://127.0.0.1:$port/ytcr/apps/YouTube/pid-5"), launch)
+            assertTrue(!launch.contains("rebind.example"), launch)
+        } finally {
+            server.stop()
+        }
     }
 
     @Test
@@ -141,7 +191,7 @@ class DialServerTest {
             assertEquals(HttpStatusCode.OK, r.status)
             val loc = r.headers["LOCATION"]
             assertNotNull(loc)
-            assertTrue(loc.startsWith("http://192.168.50.239:3000/ytcr/apps/YouTube/"), loc)
+            assertTrue(loc.startsWith("http://127.0.0.1:3000/ytcr/apps/YouTube/"), loc)
         }
         val post = seen.single { it.method == "POST" }
         assertEquals("pairingCode=<redacted len 3>&theme=cl", post.body)
@@ -291,7 +341,7 @@ class DialServerTest {
             assertEquals(HttpStatusCode.OK, client.get("/ytcr/ssdp/device-desc.xml").status)
             val r = client.post("/ytcr/apps/YouTube") { header(HttpHeaders.Host, "192.168.50.239:3000"); setBody("x=1") }
             assertEquals(HttpStatusCode.OK, r.status)
-            assertEquals("http://192.168.50.239:3000/ytcr/apps/YouTube/pid-1", r.headers["LOCATION"])
+            assertEquals("http://127.0.0.1:3000/ytcr/apps/YouTube/pid-1", r.headers["LOCATION"])
         }
         assertEquals(2, callers.size, "one report per request, reads and launches alike")
         assertEquals(listOf("x=1"), launches.toList(), "the launch callback still runs for a cast from the phone")
