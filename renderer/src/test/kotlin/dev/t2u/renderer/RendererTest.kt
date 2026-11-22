@@ -205,6 +205,47 @@ class RendererTest {
         }
     }
 
+    /** Every renderer event is clean: the speaker field and the message hold no control character, the speaker at most 200 characters. */
+    private fun assertNotesClean(h: Harness, fixedWording: Int) {
+        val renderer = h.events.filter { it.first == "renderer" }.map { it.second }
+        assertTrue(renderer.isNotEmpty(), "the renderer reported nothing")
+        for (fields in renderer) {
+            val speaker = fields["speaker"] as String
+            val message = fields["message"] as String
+            assertTrue(speaker.length <= 200, "speaker has ${speaker.length} characters")
+            assertTrue(speaker.none { Character.isISOControl(it) }, "control character in the speaker field")
+            assertTrue(message.none { Character.isISOControl(it) }, "control character in: $message")
+            assertTrue(message.length <= 200 + fixedWording, "message has ${message.length} characters: $message")
+        }
+    }
+
+    @Test
+    @DisplayName("a long speaker name and failure text reach the notes clean")
+    fun longSpeakerNameAndFailureTextReachTheNotesClean() {
+        val name = "Kitchen\t" + "y".repeat(3000)
+        // the name in the "does not pass the name filter" note
+        withFake(FakeRenderer(friendlyName = name)) { fake ->
+            Harness(
+                fake,
+                config = { Config(dataDir = it, outputFormat = "adts", pollIntervalMs = 50, startTimeoutMs = 200, nameFilter = NameFilter(exclude = listOf("Kitchen"))) },
+            ).use { h ->
+                assertFalse(h.renderer.init())
+                assertTrue(h.notes("\"Kitchen").isNotEmpty(), "the name filter note was not written")
+                assertNotesClean(h, fixedWording = 60)
+            }
+        }
+        // the failed speaker call: a bare fault on Play, the speaker field on every note
+        withFake(FakeRenderer(friendlyName = name, bareFaultOn = setOf("Play"))) { fake ->
+            Harness(fake).use { h ->
+                assertTrue(h.renderer.init())
+                assertFalse(h.renderer.doPlay(Video(DQW), 0.0))
+                assertTrue(h.notes("Play ").isNotEmpty(), "the failed play note was not written")
+                assertNotesClean(h, fixedWording = 100)
+                assertTrue((h.renderer.lastError ?: "").length <= 200)
+            }
+        }
+    }
+
     @Test
     @DisplayName("pairingCodes: none before init, the receiver's codes after, none when the receiver throws")
     fun pairingCodesPassThrough() = withFake { fake ->
