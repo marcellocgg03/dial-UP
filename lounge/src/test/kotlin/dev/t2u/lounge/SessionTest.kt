@@ -25,8 +25,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
+import okio.BufferedSource
+import okio.Source
+import okio.Timeout
+import okio.buffer
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -66,6 +71,7 @@ class SessionTest {
         client: Client = Client.YT,
         http: OkHttpClient = lanHttpClient(),
         outage: Pair<Long, List<Long>>? = null,
+        sink: EventSink = this.sink,
     ): Session {
         val s = Session(
             client = client,
@@ -380,6 +386,151 @@ class SessionTest {
         val dropped = sessionEvents("send-dropped")
         assertEquals(1, dropped.size, "one line for a stretch of refusals")
         assertEquals(listOf("onVolumeChanged"), dropped.single().second["messages"])
+    }
+
+    // ---- a dying reader (D-04)
+
+    /** A response body whose source fails on the first read: the reader is killed by an unexpected Throwable, not an IOException. */
+    private class DyingBody(private val real: ResponseBody) : ResponseBody() {
+        override fun contentType() = real.contentType()
+
+        override fun contentLength() = -1L
+
+        override fun source(): BufferedSource = object : Source {
+            override fun read(sink: Buffer, byteCount: Long): Long = throw IllegalStateException("reader killed by the test")
+
+            override fun timeout() = Timeout.NONE
+
+            override fun close() = real.close()
+        }.buffer()
+    }
+
+    /** A client that wraps the body of each successful RPC GET (up to [limit] of them) in a [DyingBody] while [armed] is set. */
+    private class DyingReaderNet(armed: Boolean, private val limit: Int = Int.MAX_VALUE) {
+        val armed = AtomicBoolean(armed)
+        val wrapped = AtomicInteger()
+        val http: OkHttpClient = lanHttpClient().newBuilder().addInterceptor { chain ->
+            val req = chain.request()
+            val resp = chain.proceed(req)
+            val isRpc = req.method == "GET" && req.url.queryParameter("RID") == "rpc"
+            if (isRpc && resp.isSuccessful && this.armed.get() && wrapped.getAndIncrement() < limit) {
+                resp.newBuilder().body(DyingBody(resp.body)).build()
+            } else {
+                resp
+            }
+        }.build()
+    }
+
+    /** A store whose first write waits (bounded) until [readerOpen] turns false: the reader gave up while the session is still STARTING. */
+    private class ReaderGoneStore(private val readerOpen: () -> Boolean) : DataStore {
+        override suspend fun get(key: String): JsonElement? = null
+
+        override suspend fun set(key: String, value: JsonElement?) {
+            kotlinx.coroutines.withTimeoutOrNull(5000) { while (readerOpen()) delay(15) }
+        }
+    }
+
+    private fun rpcGets() = fake.requests.count { it.method == "GET" && it.query["RID"] == "rpc" }
+
+    @Test
+    fun aListenerErrorDoesNotKillTheReader() = run<Unit> {
+        val s = session()
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        val thrown = AtomicBoolean(false)
+        s.onMessages = { m, _ ->
+            if (m.any { it.name == "pause" } && thrown.compareAndSet(false, true)) throw StackOverflowError()
+            received.addAll(m)
+        }
+        s.begin()
+        fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
+        assertTrue(holdsWithin(3000) { thrown.get() }, "the listener was called with the first batch")
+        fake.enqueueRpc("cl", "[[41,[\"play\"]]]")
+        assertTrue(holdsWithin(3000) { received.any { it.name == "play" } }, "a later batch on the same stream is delivered")
+        val problems = events.filter { it.first == "lounge-error" && it.second["where"] == "deliver" }
+        assertEquals(1, problems.size, "one problem line names the delivery")
+        assertFalse(flatten(problems.single().second).any { "pause" in it }, "the payload is not logged")
+        assertTrue(sessionEvents("rpc-reconnect").isEmpty(), "no reconnect was needed")
+        assertEquals(1, rpcGets())
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun aLogSinkErrorDoesNotKillTheReader() = run<Unit> {
+        val armed = AtomicBoolean(false)
+        val throwingSink = EventSink { kind, fields ->
+            if (kind == "lounge-raw" && armed.compareAndSet(true, false)) throw StackOverflowError()
+            events.add(kind to fields)
+        }
+        val s = session(sink = throwingSink)
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        s.begin()
+        armed.set(true)
+        fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
+        assertTrue(holdsWithin(3000) { !armed.get() }, "the sink threw for the raw event")
+        fake.enqueueRpc("cl", "[[41,[\"play\"]]]")
+        assertTrue(holdsWithin(3000) { received.any { it.name == "play" } }, "a later message is delivered")
+        assertTrue(sessionEvents("rpc-reader-died").isEmpty(), "the reader did not die")
+        val problems = events.filter { it.first == "lounge-error" && it.second["where"] == "raw" }
+        assertEquals(1, problems.size, "one problem line says the payload was not logged")
+        assertFalse(flatten(problems.single().second).any { "pause" in it }, "the payload is not logged in clear")
+        assertEquals(1, rpcGets())
+    }
+
+    @Test
+    fun aReaderKilledByAnUnexpectedThrowableIsReopened() = run<Unit> {
+        val net = DyingReaderNet(armed = false, limit = 1)
+        val s = session(http = net.http)
+        val received = CopyOnWriteArrayList<IncomingMessage>()
+        s.onMessages = { m, _ -> received.addAll(m) }
+        s.begin()
+        net.armed.set(true)
+        fake.closeRpc("cl")
+        assertTrue(holdsWithin(3000) { sessionEvents("rpc-reader-died").isNotEmpty() }, "the death is logged")
+        val died = sessionEvents("rpc-reader-died").first().second
+        assertEquals("IllegalStateException", died["error"], "the class only, never the text")
+        assertTrue(holdsWithin(3000) { fake.rpcOpen("cl") == 1 && rpcGets() >= 3 }, "the stream is reopened")
+        assertTrue(sessionEvents("rpc-reconnect").isNotEmpty())
+        fake.enqueueRpc("cl", "[[40,[\"pause\"]]]")
+        assertTrue(holdsWithin(3000) { received.any { it.name == "pause" } }, "a message on the new stream is delivered")
+        assertEquals(SessionStatus.RUNNING, s.status)
+        assertEquals(1, count("get_lounge_token_batch"), "one death needs no refresh")
+    }
+
+    @Test
+    fun aReaderThatKeepsDyingEndsTheSessionVisibly() = run<Unit> {
+        val net = DyingReaderNet(armed = false)
+        val s = session(http = net.http)
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        s.onTerminate = { terminated.add(it) }
+        s.begin()
+        val tokens = count("get_lounge_token_batch")
+        net.armed.set(true)
+        fake.closeRpc("cl")
+        assertTrue(holdsWithin(8000) { s.status == SessionStatus.STOPPED && terminated.isNotEmpty() }, "the session ended")
+        assertEquals(1, terminated.size, "onTerminate exactly once")
+        assertTrue(terminated.single() is SessionException, terminated.single().toString())
+        assertEquals(tokens + 1, count("get_lounge_token_batch"), "one refresh after the cap, none after the second")
+        assertTrue(sessionEvents("rpc-reader-died").size >= 6, "every death is logged")
+        assertTrue(holdsWithin(3000) { !s.rpcOpen() })
+    }
+
+    @Test
+    fun aReaderThatGivesUpWhileStartingFailsTheStart() = run<Unit> {
+        val net = DyingReaderNet(armed = true)
+        lateinit var s: Session
+        s = session(store = ReaderGoneStore { s.rpcOpen() }, http = net.http)
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        s.onTerminate = { terminated.add(it) }
+        assertFailsWith<SessionException> { s.begin() }
+        val failed = sessionEvents("failed-while-starting")
+        assertEquals(1, failed.size)
+        assertEquals("reader", failed.single().second["from"])
+        assertEquals(1, count("get_lounge_token_batch"), "no token refresh is attempted while starting")
+        assertEquals(SessionStatus.STOPPED, s.status)
+        assertFalse(s.rpcOpen())
+        assertEquals(0, fake.rpcOpen("cl"))
+        assertTrue(terminated.isEmpty(), "a failed start is reported by begin, not by onTerminate")
     }
 
     // ---- lifecycle
