@@ -307,9 +307,14 @@ abstract class Player {
     /**
      * Applies a volume without reading unrelated playback state or emitting a state event. The caller must report
      * the speaker's actual volume, including after a failure.
+     *
+     * The level a speaker is sent is always within 0..100: a sender can ask for any Int, so it is clamped here, once,
+     * at the single point both [setVolume] and the lounge app's setVolume handler reach (the read side,
+     * [getVolume], clamps too). Not in directVolume, which would log a false volumeDirectionConflict.
      */
     suspend fun applyVolume(volume: Volume): Boolean {
-        val v = if (zeroVolumeLevelOnMute && volume.muted && volume.level > 0) volume.copy(level = 0) else volume
+        val clamped = volume.copy(level = volume.level.coerceIn(0, 100))
+        val v = if (zeroVolumeLevelOnMute && clamped.muted && clamped.level > 0) clamped.copy(level = 0) else clamped
         log("setVolume", "level" to v.level, "muted" to v.muted)
         val result = doSetVolume(v)
         if (!result) log("setVolumeFailed", "level" to v.level, "muted" to v.muted)
