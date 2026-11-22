@@ -12,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -48,6 +49,13 @@ internal suspend fun PipeLauncher.startOwned(args: List<String>): Process {
     }
     return checkNotNull(holder.get()) { "the launcher returned no process" }
 }
+
+/**
+ * The failure detail of an attempt whose ffmpeg could not be started. Fixed text and the exception's class only: the
+ * message of the IOException ProcessBuilder throws holds the binary's path (PARITY adaptation 77), and the text must not
+ * match [isUpstreamRefusal], so a launch failure never ends the cast as a refusal.
+ */
+internal fun ffmpegStartFailure(e: IOException): String = "ffmpeg could not be started (${e.javaClass.simpleName})"
 
 /**
  * One attempt's process for a live GET: starts it, waits for the first byte under a watchdog, then pumps stdout to
