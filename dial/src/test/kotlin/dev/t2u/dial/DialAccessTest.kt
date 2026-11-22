@@ -217,6 +217,22 @@ class DialAccessTest {
         assertEquals(encoded, redactLaunchBody(encoded))
     }
 
+    @Test
+    fun queryStringPairingCodesAreRedacted() {
+        assertEquals(
+            "/ytcr/apps/YouTube?pairingCode=<redacted len 8>&x=1",
+            redactLaunchUri("/ytcr/apps/YouTube?pairingCode=QSECRET1&x=1"),
+        )
+        assertEquals("/ytcr/apps?%70airingCode=<redacted len 8>", redactLaunchUri("/ytcr/apps?%70airingCode=QSECRET1"))
+        assertEquals("/ytcr/apps/YouTube", redactLaunchUri("/ytcr/apps/YouTube"))
+        assertEquals("/ytcr/apps/YouTube?x=1&y", redactLaunchUri("/ytcr/apps/YouTube?x=1&y"))
+        // before the '?' is a path, not a form
+        assertEquals("/a/pairingCode=abc", redactLaunchUri("/a/pairingCode=abc"))
+        assertEquals("/a/pairingCode=abc?x=1", redactLaunchUri("/a/pairingCode=abc?x=1"))
+        val once = redactLaunchUri("/ytcr/apps?pairingCode=QSECRET1&x=1")
+        assertEquals(once, redactLaunchUri(once))
+    }
+
     // ----- HTTP gate --------------------------------------------------------------------------
 
     private fun gateTest(
@@ -342,6 +358,21 @@ class DialAccessTest {
         val body = seen.single { it.method == "POST" }.body
         assertEquals("%70airingCode=<redacted len 11>&theme=cl", body)
         assertFalse(body!!.contains("SECRETCODE1"))
+    }
+
+    @Test
+    fun aQueryStringCodeIsRedactedInServedAndRefusedReports() {
+        val served = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ true }, served) { client.get("/ytcr/apps?pairingCode=QSECRET1") }
+        val servedUri = served.single().uri
+        assertFalse(servedUri.contains("QSECRET1"), servedUri)
+        assertEquals("/ytcr/apps?pairingCode=<redacted len 8>", servedUri)
+
+        val refused = CopyOnWriteArrayList<DialRequest>()
+        gateTest({ false }, refused) { client.get("/ytcr/ssdp/device-desc.xml?%70airingCode=QSECRET2") }
+        val refusedReport = refused.single()
+        assertEquals(403, refusedReport.status)
+        assertFalse(refusedReport.uri.contains("QSECRET2"), refusedReport.uri)
     }
 
     @Test

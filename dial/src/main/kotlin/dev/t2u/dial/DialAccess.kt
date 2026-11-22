@@ -151,3 +151,6 @@ private fun redactForm(form: String): String = form.split('&').joinToString("&")
  * length (N is the length of the code as sent).
  */
 fun redactLaunchBody(body: String?): String? = body?.let { redactForm(it) }
+
+/** Stub (RED): the real redaction follows in the next commit. */
+fun redactLaunchUri(uri: String): String = uri
