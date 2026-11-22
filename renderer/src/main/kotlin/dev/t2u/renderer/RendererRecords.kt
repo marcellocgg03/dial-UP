@@ -76,11 +76,14 @@ internal sealed interface LoadResult {
     /** A newer play, a stop or removal overtook the load. */
     data object Superseded : LoadResult
 
-    /** Taking or preparing the item failed (the lookup, the format chain, the registration): a problem with the track. */
-    class PrepareFailed(val error: Exception) : LoadResult
+    /**
+     * Taking or preparing the item failed (the lookup, the format chain, the registration): a problem with the track.
+     * [seq] is the load sequence number of the attempt that failed (the last one when the adts attempt was retried as mp3).
+     */
+    class PrepareFailed(val error: Exception, val seq: Int) : LoadResult
 
-    /** A call to the speaker failed. */
-    class SpeakerFailed(val error: Exception) : LoadResult
+    /** A call to the speaker failed. [seq] is the load sequence number of the attempt that failed. */
+    class SpeakerFailed(val error: Exception, val seq: Int) : LoadResult
 }
 
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */

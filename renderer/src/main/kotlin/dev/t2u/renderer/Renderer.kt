@@ -707,6 +707,36 @@ class Renderer(
     ): Boolean = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly) is LoadResult.Started
 
     /**
+     * [load] for a seek or a resume of the track [c] that is already loaded. [loadResult] stops the poll at its start and only a
+     * successful load starts it again, so a load that failed would leave the track unpolled: it would never advance at its end
+     * and a stop made on the speaker would never reach the phone. When the load failed on its own last attempt (the mp3 retry
+     * of an adts load has its own sequence number), is not overtaken by a newer load, a stop or destroy(), and [c] is still the
+     * loaded track of a playing or paused player, the poll is started again, as [resetLoaded] does. [pending] and [expectStop]
+     * are left as the failed load left them.
+     */
+    private suspend fun loadKeepingPoll(
+        c: Current,
+        video: Video,
+        position: Double,
+        format: String? = null,
+        startPlaying: Boolean = true,
+        forceOffset: Boolean = false,
+        offsetOnly: Boolean = false,
+    ): Boolean {
+        val result = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly)
+        val failedSeq = when (result) {
+            is LoadResult.PrepareFailed -> result.seq
+            is LoadResult.SpeakerFailed -> result.seq
+            else -> null
+        }
+        if (failedSeq != null && !superseded(failedSeq) && current === c && (status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED)) {
+            note("warn", "Load failed - polling the loaded track again", "videoId" to c.video.id)
+            pollLoop.start()
+        }
+        return result is LoadResult.Started
+    }
+
+    /**
      * [load] with the reason it did not start: [LoadResult.PrepareFailed] when taking or preparing the item
      * failed (the lookup, the format chain, the registration), which the sender's own plays retry and skip past;
      * [LoadResult.SpeakerFailed] when a call to the speaker failed; [LoadResult.Superseded] when a newer play, a stop or
@@ -866,9 +896,9 @@ class Renderer(
         note("error", "Play ${video.id} failed: $lastError")
         expectStop = false
         return when {
-            !preparing -> LoadResult.SpeakerFailed(e)
+            !preparing -> LoadResult.SpeakerFailed(e, seq)
             superseded(seq) -> LoadResult.Superseded
-            else -> LoadResult.PrepareFailed(e)
+            else -> LoadResult.PrepareFailed(e, seq)
         }
     }
 
@@ -1119,7 +1149,7 @@ class Renderer(
             }
             if (superseded(seq) || current !== c || status != PlayerStatus.PAUSED) return false
             note("info", "Resuming ${c.format} by restarting the stream at ${Math.floor(at).toInt()}s")
-            return load(c.video, at, c.format, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, at, c.format, offsetOnly = c.offsetOnly)
         }
         if (c != null && !sawPlaying) {
             c.loadedAt = deps.clock()
@@ -1422,7 +1452,7 @@ class Renderer(
         val paused = status == PlayerStatus.PAUSED
         if (c.format == "direct" && startsMidTrack(position)) {
             // prepareItem swaps direct for a format that can start at the position
-            return load(c.video, position, "direct", startPlaying = !paused, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, position, "direct", startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
@@ -1432,7 +1462,7 @@ class Renderer(
                 "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream" +
                     if (paused) ", Play deferred until resume" else "",
             )
-            return load(c.video, position, c.format, startPlaying = !paused, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, position, c.format, startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         val base = c.startAt
         val before = position < base
@@ -1457,7 +1487,7 @@ class Renderer(
         val at = Math.floor(position).toInt()
         val why = if (before) "Seek to ${at}s is before the start of the ${c.format} file (${base}s)" else "Renderer rejected Seek"
         note("info", "$why - restarting ${c.format} at ${at}s" + if (paused) ", Play deferred until resume" else "")
-        return load(c.video, position, c.format, startPlaying = !paused, forceOffset = true, offsetOnly = c.offsetOnly)
+        return loadKeepingPoll(c, c.video, position, c.format, startPlaying = !paused, forceOffset = true, offsetOnly = c.offsetOnly)
     }
 
     /**
