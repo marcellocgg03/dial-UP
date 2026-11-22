@@ -948,6 +948,60 @@ class YouTubeAppTest {
         assertNotNull(store.text(StoreKeys.APP_PID))
     }
 
+    // ---- a stop runs once per start (D-05)
+
+    private fun stopAgainNotes() = events.count { it.first == "lounge-app" && it.second["type"] == "stopAgain" }
+
+    @Test
+    fun aSecondStopWithAnErrorIsANoOp() = run<Unit> {
+        val a = startedApp()
+        connect()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        a.stop(IllegalStateException("first"))
+        a.stop(IllegalStateException("second"))
+        a.stop(IllegalStateException("third"))
+
+        assertEquals(1, terminated.size, "onTerminate exactly once")
+        assertEquals("first", terminated.single().message)
+        assertEquals(1, clearCount(), "the player is reset once")
+        assertEquals(1, disconnects.size, "the sender is reported disconnected once")
+        assertEquals(1, stopAgainNotes(), "the repeat is noted once")
+        assertEquals(AppState.STOPPED, a.state)
+    }
+
+    @Test
+    fun concurrentStopsWithAnErrorRunTheShutdownOnce() = run<Unit> {
+        val a = startedApp()
+        connect()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        coroutineScope {
+            List(4) { i -> async(Dispatchers.Default) { a.stop(IllegalStateException("stop $i")) } }.forEach { it.await() }
+        }
+
+        assertEquals(1, terminated.size, "onTerminate exactly once")
+        assertEquals(1, clearCount(), "the player is reset once")
+        assertEquals(1, stopAgainNotes(), "the repeats are noted once")
+    }
+
+    @Test
+    fun aStopAfterARestartWorksAgain() = run<Unit> {
+        val a = startedApp()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        a.stop(IllegalStateException("first run"))
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+        a.stop(IllegalStateException("second run"))
+
+        assertEquals(listOf("first run", "second run"), terminated.map { it.message })
+        assertEquals(0, stopAgainNotes(), "a stop in a new run is not a repeat")
+    }
+
     // ---- playback failure ends the cast visibly (quick 261028-ago)
 
     @Test
