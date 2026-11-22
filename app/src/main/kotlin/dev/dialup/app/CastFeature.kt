@@ -9,7 +9,6 @@ import android.os.SystemClock
 import dev.dialup.app.model.BridgeStatus
 import dev.dialup.app.model.RestartFields
 import dev.t2u.dial.DialRequest
-import dev.t2u.dial.redactLaunchBody
 import dev.t2u.media.CacheInfo
 import dev.t2u.media.CachingResolver
 import dev.t2u.media.MediaRequest
@@ -637,23 +636,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             }
             return
         }
-        h.evidence.event(
-            "http-req",
-            mapOf(
-                "server" to "dial",
-                "method" to req.method,
-                "uri" to req.uri,
-                "httpVersion" to req.httpVersion,
-                "src" to "${req.remoteHost}:${req.remotePort}",
-                "status" to req.status,
-                "ua" to req.headers["User-Agent"],
-                "host" to req.headers["Host"],
-                "origin" to req.headers["Origin"],
-                "contentType" to req.headers["Content-Type"],
-                // the pairing code is a secret for the lifetime of the pairing
-                "body" to redactLaunchBody(req.body),
-            ),
-        )
+        h.evidence.event("http-req", dialHttpReqFields(req))
     }
 
     /** True when [key] has not been logged in the last minute; marks it logged. */

@@ -4,6 +4,7 @@ import dev.t2u.upnp.isPrivateLanAddress
 import dev.t2u.upnp.parseIpv4Literal
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URLDecoder
 
 /**
  * Who may reach a DIAL receiver. [PHONE] is the default: only the phone's own
@@ -119,10 +120,34 @@ class DialAccessPolicy(
     }
 }
 
-/** Replaces the value of a `pairingCode` form field with `<redacted len N>`; other fields are untouched. */
-fun redactLaunchBody(body: String?): String? {
-    if (body == null) return null
-    return body.split('&').joinToString("&") { field ->
-        if (field.startsWith("pairingCode=")) "pairingCode=<redacted len ${field.length - "pairingCode=".length}>" else field
+private val REDACTION_MARKER = Regex("^<redacted len \\d+>$")
+
+/**
+ * [field] (one `name=value` pair of a form body) with the value of a `pairingCode` field replaced by `<redacted len N>`, where N
+ * is the length of the value as sent. The name is percent-decoded before the comparison, the way the receiver decodes it
+ * (`YouTubeApp.parseForm`, a malformed escape keeps the raw name), so a spelling the receiver accepts cannot slip through. The raw
+ * name is kept in the output. A value that is already a marker is left alone, which makes the redaction idempotent. Any other
+ * field, and a field without '=', is returned byte-identical.
+ */
+private fun redactField(field: String): String {
+    val eq = field.indexOf('=')
+    if (eq < 0) return field
+    val rawName = field.substring(0, eq)
+    val value = field.substring(eq + 1)
+    val name = try {
+        URLDecoder.decode(rawName, "UTF-8")
+    } catch (_: IllegalArgumentException) {
+        rawName
     }
+    if (name != "pairingCode" || REDACTION_MARKER.matches(value)) return field
+    return "$rawName=<redacted len ${value.length}>"
 }
+
+private fun redactForm(form: String): String = form.split('&').joinToString("&") { redactField(it) }
+
+/**
+ * Replaces the value of a `pairingCode` form field with `<redacted len N>`; other fields are untouched. Field names are decoded
+ * like the receiver decodes them, and running it on its own output changes nothing, so a second pass cannot change the logged
+ * length (N is the length of the code as sent).
+ */
+fun redactLaunchBody(body: String?): String? = body?.let { redactForm(it) }
