@@ -974,6 +974,49 @@ class MediaServerLadderTest {
         assertFalse(isUpstreamRefusal(line))
     }
 
+    @Test
+    @DisplayName("a cold range fill whose ffmpeg cannot be started leaves no part file and the live path answers")
+    fun aColdFillThatCannotLaunchFallsBackToTheLivePath() {
+        // throw once: the fill's start fails, the live run that follows starts and serves
+        val once = ThrowingLauncher(launcher, failFirst = 1)
+        val ms = serve(TestResolver(okUrls()), using = once)
+        val r = get(ms, ms.registerVideo(VideoEntry("aaaaaaaaaa3", "adts")), mapOf("Range" to "bytes=5000-"))
+        assertEquals(200, r.status, "reported: $seen")
+        assertEquals("chunked", r.header("Transfer-Encoding")?.lowercase())
+        assertEquals(2, once.attempts.get(), "the failed fill and the live run")
+        assertTrue(cacheFiles().none { it.endsWith(".part") }, "no part file left: ${cacheFiles()}")
+        ms.stop()
+        // always throwing: the live path records the launch failure and answers 502, not 500
+        val always = ThrowingLauncher(launcher, failFirst = Int.MAX_VALUE)
+        val ms2 = serve(TestResolver(okUrls()), using = always)
+        val path2 = ms2.registerVideo(VideoEntry("aaaaaaaaaa4", "adts"))
+        assertEquals(502, get(ms2, path2, mapOf("Range" to "bytes=5000-")).status, "reported: $seen")
+        val note = awaitReport { it.uri == path2 }.note.orEmpty()
+        assertTrue(note.contains("ffmpeg could not be started (IOException)"), "note: $note")
+        assertTrue(cacheFiles().none { it.endsWith(".part") }, "no part file left: ${cacheFiles()}")
+    }
+
+    @Test
+    @DisplayName("an HTTP/1.0 request whose ffmpeg cannot be started tries the next attempt, then answers 502, and leaves no temp file")
+    fun aBufferedRequestWhoseLaunchFailsTriesTheNextAttempt() {
+        val bufferFiles = { File(dir, "buffer").listFiles { f -> f.name.startsWith("pipe-") }?.map { it.name }.orEmpty() }
+        val once = ThrowingLauncher(launcher, failFirst = 1)
+        val ms = serve(TestResolver(okUrls()), using = once)
+        val r = RawHttp.request(ms.resolvedPort(), "GET", ms.registerVideo(VideoEntry("aaaaaaaaaa5", "mp3")), version = "HTTP/1.0")
+        assertEquals(200, r.status, "reported: $seen")
+        assertEquals(2, once.attempts.get(), "the failed start and the next attempt")
+        assertEquals(emptyList(), bufferFiles())
+        ms.stop()
+        val always = ThrowingLauncher(launcher, failFirst = Int.MAX_VALUE)
+        val ms2 = serve(TestResolver(okUrls()), using = always)
+        val path2 = ms2.registerVideo(VideoEntry("aaaaaaaaaa6", "mp3"))
+        assertEquals(502, RawHttp.request(ms2.resolvedPort(), "GET", path2, version = "HTTP/1.0").status, "reported: $seen")
+        val note = awaitReport { it.uri == path2 }.note.orEmpty()
+        assertTrue(note.contains("ffmpeg could not be started (IOException)"), "note: $note")
+        assertTrue(!note.contains("/nowhere"), "note: $note")
+        assertEquals(emptyList(), bufferFiles())
+    }
+
     private fun awaitReport(predicate: (MediaRequest) -> Boolean): MediaRequest {
         val deadline = System.currentTimeMillis() + 5000
         while (System.currentTimeMillis() < deadline) {
