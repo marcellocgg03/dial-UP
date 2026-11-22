@@ -300,4 +300,69 @@ internal class SeekFallbackTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("a restart seek the speaker refuses keeps the track polled, so a stop on the speaker is mirrored")
+    fun aFailedRestartSeekKeepsPollingTheTrack() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                val r = h.renderer
+                r.init()
+                assertTrue(r.play(Video(A), 0.0))
+                delay(300) // the poll has seen the speaker play
+
+                fake.bareFaultOn = setOf("SetAVTransportURI")
+                assertFalse(r.seek(60.0), "the speaker refuses the restart")
+                assertEquals(PlayerStatus.PLAYING, r.status, "the failed seek alone does not change the status")
+                fake.state.transport = "STOPPED" // someone stops the speaker
+
+                waitUntil { r.status == PlayerStatus.STOPPED }
+                assertEquals(PlayerStatus.STOPPED, r.status, "the stop on the speaker is mirrored: the poll ran again")
+                assertTrue(h.notes("Track stopped on the speaker").isNotEmpty(), "the mirrored stop is noted")
+                assertEquals(1, h.notes("Load failed - polling the loaded track again").size, "the restart of the poll is noted once")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a mid-track direct seek in auto mode that the speaker refuses keeps the track polled")
+    fun aFailedAutoDirectSeekKeepsPollingTheTrack() {
+        withFake(FakeRenderer(sink = "http-get:*:audio/mp4:*,http-get:*:audio/aac:*,http-get:*:audio/mpeg:*")) { fake ->
+            RendererHarness(fake, config = pinned("auto"), duration = 1000.0).use { h ->
+                val r = h.renderer
+                r.init()
+                assertTrue(r.play(Video(A), 0.0))
+                delay(300)
+
+                fake.bareFaultOn = setOf("SetAVTransportURI")
+                assertFalse(r.seek(600.0))
+                fake.state.transport = "STOPPED"
+
+                waitUntil { r.status == PlayerStatus.STOPPED }
+                assertEquals(PlayerStatus.STOPPED, r.status, "the poll ran again")
+                assertEquals(1, h.notes("Load failed - polling the loaded track again").size)
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a file restart after a rejected Seek that the speaker also refuses keeps the track polled")
+    fun aFailedFileRestartFallbackKeepsPollingTheTrack() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("mp4")).use { h ->
+                val r = h.renderer
+                r.init()
+                assertTrue(r.play(Video(A), 0.0))
+                delay(300)
+
+                fake.bareFaultOn = setOf("Seek", "SetAVTransportURI")
+                assertFalse(r.seek(80.0))
+                fake.state.transport = "STOPPED"
+
+                waitUntil { r.status == PlayerStatus.STOPPED }
+                assertEquals(PlayerStatus.STOPPED, r.status, "the poll ran again")
+                assertEquals(1, h.notes("Load failed - polling the loaded track again").size)
+            }
+        }
+    }
 }
