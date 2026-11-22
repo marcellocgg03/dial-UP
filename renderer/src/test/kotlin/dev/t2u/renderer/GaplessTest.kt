@@ -188,6 +188,41 @@ internal class GaplessTest {
         }
     }
 
+    /** The CurrentURI of every SetAVTransportURI the speaker received, in order. */
+    private fun FakeRenderer.loadedUris(): List<String> =
+        calls.filter { it.action == "SetAVTransportURI" }
+            .map { Regex("<CurrentURI>([^<]*)</CurrentURI>").find(it.body)?.groupValues?.get(1).orEmpty() }
+
+    @Test
+    @DisplayName("a prepared next track built for another address is prepared again, never sent with the old address")
+    fun aPreparedTrackBuiltForAnotherAddressIsPreparedAgain() {
+        withFake { fake ->
+            val handler = NextHandler()
+            harness(fake, handler).use { h ->
+                val r = queued(h, A, B)
+                assertTrue(r.play(r.queue.current!!, 0.0))
+                waitUntil { h.notes("Prepared next track").isNotEmpty() }
+                assertEquals(1, h.prepared.count { it.videoId == B }, "B was prepared once, for the first address")
+
+                // Stop keeps the prepared item (adaptation 34); the network changes while stopped, so no re-set runs.
+                assertTrue(r.stop())
+                r.onNetworkChanged("127.0.0.2")
+                delay(300)
+                assertEquals(1, fake.count("SetAVTransportURI"), "a stopped player is not re-set")
+
+                assertTrue(r.play(Video(B), 0.0))
+                waitUntil { fake.count("SetAVTransportURI") == 2 }
+                val uri = fake.loadedUris()[1]
+                assertTrue(uri.startsWith("http://127.0.0.2:"), "the URL names the new address: $uri")
+                assertTrue(!uri.contains("127.0.0.1"), "the URL does not name the old address: $uri")
+                assertEquals(2, h.prepared.count { it.videoId == B }, "B was prepared again for the new address")
+                assertTrue(h.released.contains(streamPath(2)), "the old item's stream was released: ${h.released}")
+                assertTrue(h.notes("Prepared track was built for another address").isNotEmpty(), "the note says why")
+                assertTrue(h.notes("Using prepared track").isEmpty(), "the old item was not used")
+            }
+        }
+    }
+
     @Test
     @DisplayName("gapless: if the queue turns out to be over, the track the renderer played on into is stopped")
     fun ifTheQueueTurnsOutToBeOverThePlayedOnTrackIsStopped() {
