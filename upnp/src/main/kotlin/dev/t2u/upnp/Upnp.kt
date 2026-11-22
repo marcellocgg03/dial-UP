@@ -51,7 +51,11 @@ private fun findRendererDevice(rootDevice: Element?): Element? {
     return null
 }
 
-/** Parses a device description XML into the shape the renderer needs; embedded Sonos renderers included. */
+/**
+ * Parses a device description XML into the shape the renderer needs; embedded Sonos renderers included.
+ * Every URL is resolved against URLBase or [location]. A control URL on another host or port than [location] fails the
+ * description ([IllegalArgumentException]); an SCPD or event URL on another one is blanked and the service kept.
+ */
 fun parseDescription(xml: String, location: String): DeviceDescription {
     val doc = Jsoup.parse(xml, "", Parser.xmlParser())
     val root = doc.children().firstOrNull() ?: throw IllegalArgumentException("No <device> element in description")
@@ -76,11 +80,14 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
             val control = abs(s.childText("controlURL"))
             // a description may not aim the phone's SOAP calls at another host or port than the one it was fetched from
             require(control.isEmpty() || sameAuthority(control, location)) { "controlURL is not on the LOCATION host" }
+            // nothing reads the SCPD or event URL, so one on another host or port is blanked and the service kept
+            val scpd = abs(s.childText("SCPDURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
+            val event = abs(s.childText("eventSubURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             services["urn:upnp-org:serviceId:$short"] = UpnpService(
                 serviceType = s.childText("serviceType"),
-                scpdURL = abs(s.childText("SCPDURL")),
+                scpdURL = scpd,
                 controlURL = control,
-                eventSubURL = abs(s.childText("eventSubURL")),
+                eventSubURL = event,
             )
         }
     }
