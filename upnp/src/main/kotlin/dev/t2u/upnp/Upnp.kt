@@ -94,7 +94,7 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
 
     return DeviceDescription(
         deviceType = dev.childText("deviceType"),
-        friendlyName = dev.childText("friendlyName").ifEmpty { "Unknown renderer" },
+        friendlyName = cleanSpeakerText(dev.childText("friendlyName")).ifEmpty { "Unknown renderer" },
         manufacturer = dev.childText("manufacturer"),
         modelName = dev.childText("modelName"),
         modelNumber = dev.childText("modelNumber"),
@@ -117,7 +117,7 @@ private fun sameAuthority(url: String, location: String): Boolean {
 }
 
 /**
- * GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>".
+ * GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>" (cleaned and capped, the LOCATION is the speaker's).
  * Like [SoapClient], the fetch applies [speakerTargetProblem]: a URL on this device's own loopback (unless [allowLoopback],
  * the test seam for the JVM fakes on 127/8), a name, a public address or https off the LAN throws [IOException] "... (refused)"
  * and no request is sent.
@@ -128,7 +128,7 @@ suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Lo
     val call = http.newCall(request)
     call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
     val (status, text) = executeForText(call, MAX_DESCRIPTION_BYTES)
-    if (status !in 200..299) throw IOException("HTTP $status fetching $location")
+    if (status !in 200..299) throw IOException(cleanSpeakerText("HTTP $status fetching $location"))
     return parseDescription(text, location)
 }
 

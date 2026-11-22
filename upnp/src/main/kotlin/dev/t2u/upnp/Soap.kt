@@ -88,7 +88,7 @@ fun buildEnvelope(serviceType: String, action: String, params: List<Pair<String,
     val args = params.joinToString("") { (k, v) -> "<$k>${soapEscape(v)}</$k>" }
     return "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
-        "<s:Body><u:$action xmlns:u=\"$serviceType\">$args</u:$action></s:Body></s:Envelope>"
+        "<s:Body><u:$action xmlns:u=\"${soapEscape(serviceType)}\">$args</u:$action></s:Body></s:Envelope>"
 }
 
 private val XML_MEDIA_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()
