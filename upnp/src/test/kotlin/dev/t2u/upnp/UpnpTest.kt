@@ -169,6 +169,41 @@ class UpnpTest {
     }
 
     @Test
+    fun `an SCPD or event URL on another host or port is blanked and the service kept`() {
+        val location = "http://10.0.0.5:1400/xml/desc.xml"
+        val off = listOf(
+            "http://10.0.0.9:1400/scpd", "http://10.0.0.5:8080/scpd", "http://127.0.0.1:1400/scpd",
+            "http://[::1]:1400/scpd", "http://10.0.0.5/scpd",
+        )
+        fun descriptionWith(scpd: String, event: String) = root(
+            device(
+                mr, "Speaker",
+                services = "<service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>" +
+                    "<serviceId>urn:upnp-org:serviceId:AVTransport</serviceId><SCPDURL>$scpd</SCPDURL>" +
+                    "<controlURL>/ctl/AVTransport</controlURL><eventSubURL>$event</eventSubURL></service>",
+            ),
+        )
+        for (url in off) {
+            val d = parseDescription(descriptionWith(url, "/evt/AVTransport"), location)
+            val svc = assertNotNull(d.services["urn:upnp-org:serviceId:AVTransport"], url)
+            assertEquals("", svc.scpdURL, url)
+            assertEquals("http://10.0.0.5:1400/ctl/AVTransport", svc.controlURL, url)
+            assertEquals("http://10.0.0.5:1400/evt/AVTransport", svc.eventSubURL, url)
+
+            val e = parseDescription(descriptionWith("/scpd/AVTransport.xml", url), location)
+            val evSvc = assertNotNull(e.services["urn:upnp-org:serviceId:AVTransport"], url)
+            assertEquals("", evSvc.eventSubURL, url)
+            assertEquals("http://10.0.0.5:1400/scpd/AVTransport.xml", evSvc.scpdURL, url)
+            assertEquals("http://10.0.0.5:1400/ctl/AVTransport", evSvc.controlURL, url)
+        }
+        // the Sonos shape (relative) and an absolute URL on the LOCATION authority keep their resolved values
+        val kept = parseDescription(descriptionWith("http://10.0.0.5:1400/scpd/x.xml", "/evt/AVTransport"), location)
+        val svc = assertNotNull(kept.services["urn:upnp-org:serviceId:AVTransport"])
+        assertEquals("http://10.0.0.5:1400/scpd/x.xml", svc.scpdURL)
+        assertEquals("http://10.0.0.5:1400/evt/AVTransport", svc.eventSubURL)
+    }
+
+    @Test
     fun `urls resolve against the description location without URLBase`() {
         val rel = service("urn:upnp-org:serviceId:AVTransport", "AVTransport").replace("/ctl/AVTransport", "ctl/AVTransport")
         val s = parseDescription(root(device(mr, "R", services = rel)), "http://10.0.0.5:1400/xml/desc.xml")
