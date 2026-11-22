@@ -337,6 +337,39 @@ class DirectReadAheadTest {
     }
 
     @Test
+    @DisplayName("a 206 window that ends before the requested span turns read-ahead off and the plain path answers with the right bytes")
+    fun aShortWindowTurnsReadAheadOffAndThePlainPathAnswers() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 43)
+            val up = CountingUpstream(
+                content = { _, _ -> data },
+                respond = { call, _ ->
+                    if (windowSized(call)) {
+                        // A clipped window: 1024 bytes from 0, honestly described, but shorter than the 6144-byte span.
+                        UpstreamResponse(
+                            206,
+                            mapOf("content-length" to "1024", "content-range" to "bytes 0-1023/${data.size}"),
+                            ByteArrayInputStream(data.copyOfRange(0, 1024)),
+                        )
+                    } else {
+                        null
+                    }
+                },
+            )
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            val starts = listOf(0, 0, 6144, 12288)
+            for (s in starts) scan(ms, path, data, s)
+
+            assertEquals(starts.size + 1, up.calls.size, "one refused window, then one call per range: ${up.calls.map { it.range }}")
+            assertEquals(1, up.calls.count { windowSized(it) }, "read-ahead is off: no further window request: ${up.calls.map { it.range }}")
+            val log = awaitSeen { l -> l.size >= starts.size && l.any { it.note.orEmpty().startsWith("read-ahead off") } }
+            assertTrue(log.any { it.note.orEmpty().startsWith("read-ahead off") }, "the log says so: ${log.map { it.note }}")
+            assertEquals(0L, ms.readAheadHeldBytes())
+        }
+    }
+
+    @Test
     @DisplayName("a failing window fetch is not an error for the speaker: the plain path answers it")
     fun aFailingWindowFetchFallsBackToThePlainPath() {
         runBlocking {
