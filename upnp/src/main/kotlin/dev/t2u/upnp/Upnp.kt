@@ -110,7 +110,7 @@ private fun sameAuthority(url: String, location: String): Boolean {
 }
 
 /** GETs and parses a description; a non-2xx answer throws [IOException] "HTTP <code> fetching <location>". */
-suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000): DeviceDescription {
+suspend fun fetchDescription(http: OkHttpClient, location: String, timeoutMs: Long = 5000, allowLoopback: Boolean = false): DeviceDescription {
     val call = http.newCall(Request.Builder().url(location).build())
     call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
     val (status, text) = executeForText(call, MAX_DESCRIPTION_BYTES)

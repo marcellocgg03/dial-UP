@@ -36,11 +36,26 @@ class UpnpTest {
     fun embeddedRenderer() = runBlocking {
         FakeRenderer().use { fake ->
             fake.start()
-            val d = fetchDescription(lanHttpClient(), fake.location)
+            val d = fetchDescription(lanHttpClient(), fake.location, allowLoopback = true)
             assertEquals("Living Room Speaker", d.friendlyName)
             val avTransport = assertNotNull(d.services["urn:upnp-org:serviceId:AVTransport"])
             assertTrue(Regex("""^http://127\.0\.0\.1:\d+/ctl/AVTransport$""").matches(avTransport.controlURL), avTransport.controlURL)
             assertEquals("urn:schemas-upnp-org:service:AVTransport:1", avTransport.serviceType)
+        }
+    }
+
+    @Test
+    fun `a description on this device's loopback is refused unless the test seam allows it`() {
+        FakeRenderer().use { fake ->
+            fake.start()
+            val e = assertFailsWith<java.io.IOException> {
+                runBlocking { fetchDescription(lanHttpClient(), fake.location) }
+            }
+            assertContains(e.message.orEmpty(), "on this device")
+            assertContains(e.message.orEmpty(), "(refused)")
+            assertEquals(0, fake.descriptionRequests.get())
+            val d = runBlocking { fetchDescription(lanHttpClient(), fake.location, allowLoopback = true) }
+            assertEquals("Living Room Speaker", d.friendlyName)
         }
     }
 
