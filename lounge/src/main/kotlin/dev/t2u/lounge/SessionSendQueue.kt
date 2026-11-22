@@ -17,6 +17,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The send queue of one [Session]: the channel and its consumer, the deferred (replaceable) sends and the POST of a
@@ -40,7 +41,7 @@ internal class SessionSendQueue(
     private val log: LoungeLog,
     private val formType: MediaType,
     private val execute: suspend (Request) -> Response,
-    /** True while the session may send (running or refreshing its token). */
+    /** True while the session may send (starting, running or refreshing its token). */
     private val canSend: () -> Boolean,
     private val refreshToken: suspend () -> Unit,
     private val endSession: suspend (Throwable) -> Unit,
@@ -69,6 +70,9 @@ internal class SessionSendQueue(
 
     @Volatile
     private var epoch = 0
+
+    /** True after a refused send was logged, until a send is accepted again: one line per stretch of refusals. */
+    private val dropLogged = AtomicBoolean(false)
 
     private var ofs = 0
 
@@ -102,7 +106,11 @@ internal class SessionSendQueue(
         deferKey: String? = null,
         deferMs: Long = LoungeConstants.VOLUME_DEFER_MS,
     ): Boolean {
-        if (!canSend()) return false
+        if (!canSend()) {
+            if (dropLogged.compareAndSet(false, true)) log.session("send-dropped", "messages" to messages.map { it.name })
+            return false
+        }
+        dropLogged.set(false)
         sendConsumer.isActive // starts the consumer
         val task = SendTask(messages, epoch, CompletableDeferred(), deferKey)
         if (deferKey == null) {
