@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
@@ -263,6 +264,122 @@ class SessionTest {
         fake.failNextSends.set(2)
         assertEquals(false, s.sendMessage(listOf(volume(12))))
         awaitUntil { s.status == SessionStatus.STOPPED && terminated.isNotEmpty() }
+    }
+
+    // ---- the start (STARTING): replies, a failing send, an end during begin, drops
+
+    private fun sessionEvents(what: String) = events.filter { it.first == "lounge-session" && it.second["what"] == what }
+
+    /** Waits up to [timeoutMs] for [cond] and returns whether it held; never throws, so a gate inside onMessages cannot hide the assertion that follows. */
+    private suspend fun holdsWithin(timeoutMs: Long, cond: () -> Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        while (!cond()) delay(15)
+        true
+    } ?: false
+
+    @Test
+    fun aReplyBuiltWhileStartingIsSent() = run<Unit> {
+        val s = session()
+        val reply = CompletableDeferred<Boolean>()
+        val launched = AtomicBoolean(false)
+        // fire-and-forget, as YouTubeApp.post does: awaiting the reply inside the init delivery would block establish
+        s.onMessages = { msgs, session ->
+            if (msgs.any { it.name == "loungeStatus" } && launched.compareAndSet(false, true)) {
+                scope.launch { reply.complete(session.sendMessage(listOf(volume(30)))) }
+            }
+        }
+        s.begin()
+        assertTrue(holdsWithin(3000) { reply.isCompleted }, "the reply was answered")
+        assertTrue(reply.await(), "a reply built while the session starts is sent")
+        val sent = fake.sent.getValue("cl")
+        assertEquals(1, sent.size)
+        assertEquals("30", sent[0]["req0_volume"])
+        assertEquals(SessionStatus.RUNNING, s.status)
+    }
+
+    @Test
+    fun aFailedSendWhileStartingDoesNotEndTheStartingSession() = run<Unit> {
+        val s = session()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        s.onTerminate = { terminated.add(it) }
+        val reply = CompletableDeferred<Boolean>()
+        val launched = AtomicBoolean(false)
+        fake.failNextSends.set(2)
+        s.onMessages = { msgs, session ->
+            if (msgs.any { it.name == "loungeStatus" } && launched.compareAndSet(false, true)) {
+                scope.launch { reply.complete(session.sendMessage(listOf(volume(30)))) }
+                // begin stays STARTING through both failures: the reply answered and the failure was logged
+                holdsWithin(3000) { reply.isCompleted }
+                holdsWithin(3000) { sessionEvents("failed-while-starting").isNotEmpty() }
+            }
+        }
+        s.begin()
+        assertTrue(reply.isCompleted && !reply.await(), "the reply that failed twice answers false")
+        val failed = sessionEvents("failed-while-starting")
+        assertEquals(1, failed.size, "the failure is logged, once")
+        assertEquals("send", failed.single().second["from"])
+        assertEquals(SessionStatus.RUNNING, s.status, "begin finishes the start")
+        assertTrue(terminated.isEmpty(), "the start was not ended by the failing send")
+        assertTrue(sessionEvents("end").isEmpty(), "the session was not ended")
+        awaitUntil { fake.rpcOpen("cl") == 1 }
+    }
+
+    @Test
+    fun anEndDuringBeginLeavesTheSessionStopped() = run<Unit> {
+        val s = session()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        s.onMessages = { msgs, _ ->
+            if (msgs.any { it.name == "loungeStatus" }) {
+                entered.complete(Unit)
+                gate.await()
+            }
+        }
+        val beginning = scope.async { s.begin() }
+        entered.await()
+        s.end()
+        gate.complete(Unit)
+        assertFailsWith<SessionException>("begin must not report a session that was ended meanwhile") { beginning.await() }
+        assertEquals(SessionStatus.STOPPED, s.status)
+        assertFalse(s.rpcOpen())
+        assertEquals(0, fake.rpcOpen("cl"), "no RPC stream is opened for a stopped session")
+        assertEquals(0, count("bc/bind", "GET"), "no RPC GET was made")
+    }
+
+    /** A store whose first write waits for [gate]: the session is still STARTING then, with its reader already open. */
+    private class GatedStore(val entered: CompletableDeferred<Unit>, val gate: CompletableDeferred<Unit>) : DataStore {
+        override suspend fun get(key: String): JsonElement? = null
+
+        override suspend fun set(key: String, value: JsonElement?) {
+            entered.complete(Unit)
+            gate.await()
+        }
+    }
+
+    @Test
+    fun anEndWhileTheStoreIsWrittenLeavesTheSessionStopped() = run<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val s = session(store = GatedStore(entered, gate))
+        val beginning = scope.async { s.begin() }
+        entered.await()
+        assertEquals(SessionStatus.STARTING, s.status)
+        s.end()
+        gate.complete(Unit)
+        assertFailsWith<SessionException>("begin must not write RUNNING over a session that was ended meanwhile") { beginning.await() }
+        assertEquals(SessionStatus.STOPPED, s.status)
+        awaitUntil { !s.rpcOpen() }
+    }
+
+    @Test
+    fun aDroppedSendIsLoggedOnce() = run<Unit> {
+        val s = session()
+        s.begin()
+        s.end()
+        assertFalse(s.sendMessage(listOf(volume(5))))
+        assertFalse(s.sendMessage(listOf(volume(6))))
+        val dropped = sessionEvents("send-dropped")
+        assertEquals(1, dropped.size, "one line for a stretch of refusals")
+        assertEquals(listOf("onVolumeChanged"), dropped.single().second["messages"])
     }
 
     // ---- lifecycle
