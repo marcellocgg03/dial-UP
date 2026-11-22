@@ -46,6 +46,9 @@ class FakePlayer : Player() {
     /** When set, doPlay throws this after recording the call. */
     var playFailure: Throwable? = null
 
+    /** When set, doSeek throws this after recording the call. */
+    var seekFailure: Throwable? = null
+
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
@@ -70,6 +73,7 @@ class FakePlayer : Player() {
 
     override suspend fun doSeek(position: Double): Boolean {
         calls += "seek:$position"
+        seekFailure?.let { throw it }
         return seekResult
     }
 
@@ -347,12 +351,41 @@ class PlayerTest {
     }
 
     @Test
-    fun seekFailureEmitsNoPlayingState() = runBlocking {
+    fun aRefusedSeekReEmitsTheRealState(): Unit = runBlocking {
         val (player, events) = playing()
+        val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+        player.position = 30.0
         player.seekResult = false
         assertFalse(player.seek(10.0))
-        assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PLAYING), events.map { it.current.status })
+        assertEquals(10.0, events[0].current.position)
+        assertEquals(PlayerStatus.LOADING, events[1].previous?.status, "the fake LOADING state is the previous state")
+        assertEquals(30.0, events[1].current.position, "the real position, not the refused target")
+        assertTrue(logged.any { it["type"] == "seekRefused" && it["position"] == 10.0 })
         assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun aRefusedSeekWhilePausedReEmitsPaused(): Unit = runBlocking {
+        val (player, events) = playing()
+        player.pause()
+        events.clear()
+        player.position = 30.0
+        player.seekResult = false
+        assertFalse(player.seek(10.0))
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PAUSED), events.map { it.current.status })
+        assertEquals(PlayerStatus.LOADING, events[1].previous?.status)
+        assertEquals(30.0, events[1].current.position)
+        assertEquals(PlayerStatus.PAUSED, player.status)
+    }
+
+    @Test
+    fun aCancelledSeekEmitsNothingMore(): Unit = runBlocking {
+        val (player, events) = playing()
+        player.seekFailure = kotlinx.coroutines.CancellationException("cancelled")
+        assertFailsWith<kotlinx.coroutines.CancellationException> { player.seek(10.0) }
+        assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
     }
 
     @Test

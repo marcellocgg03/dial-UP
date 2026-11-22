@@ -202,6 +202,40 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun aRefusedSeekToLeavesLoadingAtOnce() = run<Unit> {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        player.position = 30.0
+        player.seekResult = false
+
+        rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
+        awaitUntil(what = "the real state after the refused seek") {
+            val states = messages("cl").filter { it.first == "onStateChange" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"] == "42.0" }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "1" && it.second["currentTime"] == "30.0" }
+        }
+    }
+
+    @Test
+    fun aRefusedSeekToWhilePausedLeavesLoadingAtOnce() = run<Unit> {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "pause")
+        awaitUntil(what = "pause") { "pause" in player.calls && player.status == PlayerStatus.PAUSED }
+        player.position = 30.0
+        player.seekResult = false
+
+        rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
+        awaitUntil(what = "the paused state after the refused seek") {
+            val states = messages("cl").filter { it.first == "onStateChange" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"] == "42.0" }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "2" && it.second["currentTime"] == "30.0" }
+        }
+    }
+
+    @Test
     fun setVolumeReachesThePlayerOnlyWhenItDiffersAndGetVolumeAnswers() = run {
         startedApp()
         connect()
