@@ -226,4 +226,53 @@ class MediaServerFeedTest {
         assertEquals(200, answer.get().status, "reported: $seen")
         assertEquals(404, feedStatusUntil(ms, feed, 404), "the token must be released once its ffmpeg has ended")
     }
+
+    @Test
+    @DisplayName("an HTTP/1.0 request (the buffered path) releases its feed token once its ffmpeg has ended")
+    fun aBufferedRequestReleasesItsFeedToken() {
+        val launcher = RecordingLauncher(JvmPipeLauncher(ffmpeg))
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher)
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        val r = RawHttp.request(ms.resolvedPort(), "GET", path, version = "HTTP/1.0")
+        assertEquals(200, r.status, "reported: $seen")
+        val feed = assertNotNull(feedPathOf(launcher.starts.first()), "the feed attempt comes first: ${launcher.starts}")
+        assertEquals(404, feedStatusUntil(ms, feed, 404), "the buffered path must release the token once its ffmpeg has ended")
+    }
+
+    @Test
+    @DisplayName("a cold range fill releases its feed token once its ffmpeg has ended")
+    fun aColdFillReleasesItsFeedToken() {
+        val launcher = RecordingLauncher(JvmPipeLauncher(ffmpeg))
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher, PipeRangeConfig(enabled = true, coldFillTimeoutMs = 60_000))
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to "bytes=100000-"))
+        assertEquals(206, r.status, "a bounded fill answers the range; reported: $seen")
+        assertEquals(1, launcher.starts.size, "one ffmpeg ran, the fill: ${launcher.starts}")
+        val feed = assertNotNull(feedPathOf(launcher.starts.first()), "the feed attempt comes first: ${launcher.starts}")
+        assertEquals(404, feedStatusUntil(ms, feed, 404), "the cold fill must release the token once its ffmpeg has ended")
+    }
+
+    /** Records the args of every start and then fails it the way ProcessBuilder does for a binary that cannot run. */
+    private class UnstartableLauncher : PipeLauncher {
+        val starts = CopyOnWriteArrayList<List<String>>()
+
+        override fun start(args: List<String>): Process {
+            starts += args
+            throw IOException("Cannot run program \"/nowhere/ffmpeg\": error=2")
+        }
+    }
+
+    @Test
+    @DisplayName("a feed attempt whose ffmpeg cannot be started leaves no token behind, on the buffered and the live path")
+    fun aFeedAttemptWhoseLaunchFailsLeavesNoTokenBehind() {
+        val launcher = UnstartableLauncher()
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher)
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        assertEquals(502, RawHttp.request(ms.resolvedPort(), "GET", path, version = "HTTP/1.0").status, "buffered; reported: $seen")
+        assertEquals(502, RawHttp.request(ms.resolvedPort(), "GET", path).status, "live; reported: $seen")
+        val feeds = launcher.starts.mapNotNull(::feedPathOf)
+        assertEquals(2, feeds.size, "each request tried the feed attempt first: ${launcher.starts}")
+        feeds.forEach { assertEquals(404, feedStatusUntil(ms, it, 404), "$it was left behind") }
+    }
 }
+
