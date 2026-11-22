@@ -30,6 +30,8 @@ import java.io.IOException
  * whose answer was lost is not counted twice: the offset moves on only after the lounge accepted the POST. An HTTP refusal, any other error, and a network error after the budget refresh the token
  * through [refreshToken] and retry once; a second failure ends the session through [endSession]. A budget of 0 turns the
  * tolerance off.
+ *
+ * While a send waits, the sends queued behind it are coalesced (see [coalesceWhileWaiting]).
  */
 internal class SessionSendQueue(
     private val scope: CoroutineScope,
@@ -62,6 +64,9 @@ internal class SessionSendQueue(
     private val sendLock = Mutex()
     private val deferred = HashMap<String, DeferredSend>()
 
+    /** Tasks taken off [sendChannel] while a send waited, in queue order; the consumer sends them before it reads the channel again. */
+    private val heldBack = ArrayDeque<SendTask>()
+
     @Volatile
     private var epoch = 0
 
@@ -69,7 +74,12 @@ internal class SessionSendQueue(
 
     private val sendConsumer: Job by lazy {
         scope.launch {
-            for (task in sendChannel) process(task)
+            while (true) {
+                val task = synchronized(heldBack) { heldBack.removeFirstOrNull() }
+                    ?: sendChannel.receiveCatching().getOrNull()
+                    ?: break
+                process(task)
+            }
         }
     }
 
@@ -164,6 +174,7 @@ internal class SessionSendQueue(
                             task.result.complete(false)
                             return
                         }
+                        coalesceWhileWaiting()
                         waits++
                         val waitMs = outageWaitsMs.getOrNull(waits - 1) ?: outageWaitsMs.lastOrNull() ?: 1000
                         log.session("send-wait", "attempt" to waits, "waitMs" to waitMs)
@@ -178,6 +189,7 @@ internal class SessionSendQueue(
                             task.result.complete(false)
                             return
                         }
+                        coalesceWhileWaiting()
                         continue
                     }
                 }
@@ -195,6 +207,34 @@ internal class SessionSendQueue(
                     task.result.complete(false)
                     if (r is CancellationException) throw r
                     return
+                }
+            }
+        }
+    }
+
+    /**
+     * Takes every send queued behind the waiting one off the channel and, for each of the names in [COALESCED_NAMES], keeps
+     * only the newest message of that name; the order of everything else is kept. A task left with no message answers false.
+     * Keyed (deferred) tasks are never touched, nor are other message names (loungeScreenDisconnected, volume, up next, ...):
+     * those keep their order and are bounded by the tolerance itself, because the wait ends within the budget and then the
+     * session refreshes or ends and clears the queue. Runs only while a send waits: a healthy queue is never coalesced. The
+     * waiting task itself is not in the deque, so its POST stays identical for the same-offset rule.
+     */
+    private fun coalesceWhileWaiting() {
+        synchronized(heldBack) {
+            while (true) heldBack.addLast(sendChannel.tryReceive().getOrNull() ?: break)
+            val seen = HashSet<String>()
+            for (index in heldBack.indices.reversed()) {
+                val task = heldBack[index]
+                if (task.deferKey != null) continue
+                val kept = task.messages.asReversed().filter { it.name !in COALESCED_NAMES || seen.add(it.name) }.asReversed()
+                when {
+                    kept.size == task.messages.size -> Unit
+                    kept.isEmpty() -> {
+                        heldBack.removeAt(index)
+                        task.result.complete(false)
+                    }
+                    else -> heldBack[index] = SendTask(kept, task.epoch, task.result, task.deferKey)
                 }
             }
         }
@@ -227,9 +267,16 @@ internal class SessionSendQueue(
             }
             deferred.clear()
         }
+        synchronized(heldBack) {
+            heldBack.forEach { it.result.complete(false) }
+            heldBack.clear()
+        }
         while (true) {
             val task = sendChannel.tryReceive().getOrNull() ?: break
             task.result.complete(false)
         }
     }
 }
+
+/** The state reports a newer one of the same name replaces while a send waits. */
+private val COALESCED_NAMES = setOf("onStateChange", "nowPlaying")
