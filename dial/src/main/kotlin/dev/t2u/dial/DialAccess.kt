@@ -152,5 +152,12 @@ private fun redactForm(form: String): String = form.split('&').joinToString("&")
  */
 fun redactLaunchBody(body: String?): String? = body?.let { redactForm(it) }
 
-/** Stub (RED): the real redaction follows in the next commit. */
-fun redactLaunchUri(uri: String): String = uri
+/**
+ * [uri] with the value of a `pairingCode` field in its query string replaced by `<redacted len N>`, by the same rules as
+ * [redactLaunchBody]. The part before the first '?' is a path and is kept as is; a uri without '?' is returned unchanged.
+ */
+fun redactLaunchUri(uri: String): String {
+    val q = uri.indexOf('?')
+    if (q < 0) return uri
+    return uri.substring(0, q + 1) + redactForm(uri.substring(q + 1))
+}

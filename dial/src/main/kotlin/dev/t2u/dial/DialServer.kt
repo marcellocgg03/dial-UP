@@ -64,7 +64,10 @@ data class DialConfig(
     val onCaller: (String) -> Unit = {},
 )
 
-/** One handled HTTP call, reported after the response was produced (404s included). */
+/**
+ * One handled HTTP call, reported after the response was produced (404s included). [uri] and [body] are already redacted (a
+ * pairing code is replaced by `<redacted len N>`): log them as they are, never redact them again.
+ */
 data class DialRequest(
     val method: String,
     val uri: String,
@@ -336,7 +339,7 @@ class DialServer(
             onRequest(
                 DialRequest(
                     method = req.httpMethod.value,
-                    uri = req.uri,
+                    uri = redactLaunchUri(req.uri),
                     httpVersion = req.httpVersion,
                     remoteHost = origin.remoteAddress,
                     remotePort = origin.remotePort,
