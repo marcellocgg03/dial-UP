@@ -4,6 +4,7 @@ package dev.t2u.lounge
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -60,9 +61,13 @@ data class Sender(
             )
         }
 
-        /** A non-empty string value, or null (JavaScript's `data.x || fallback`). */
+        /**
+         * A non-empty string value, or null (JavaScript's `data.x || fallback`). A JSON null counts as absent, like
+         * JavaScript's falsy null (and like the lounge app's own helper): its content is the text "null", which must
+         * never become a sender name, id or user.
+         */
         private fun JsonObject.text(key: String): String? =
-            (this[key] as? JsonPrimitive)?.content?.takeIf { it.isNotEmpty() }
+            (this[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content?.takeIf { it.isNotEmpty() }
 
         private fun parseDevice(value: JsonElement?): JsonObject {
             val text = (value as? JsonPrimitive)?.content?.takeIf { it.isNotEmpty() } ?: return JsonObject(emptyMap())
