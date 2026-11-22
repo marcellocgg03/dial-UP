@@ -31,6 +31,7 @@ import okhttp3.OkHttpClient
 import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val SAFE_PID = Regex("^[A-Za-z0-9-]{1,64}$")
 
@@ -89,6 +90,12 @@ class YouTubeApp(
     /** The previous/next availability last sent to the senders; null when nothing was sent since a start or a session switch. */
     @Volatile
     private var lastNav: NavInfo? = null
+
+    /** Set by the first [stop] of a run, cleared by [start]: a later stop of the same run does nothing. */
+    private val stopClaimed = AtomicBoolean(false)
+
+    /** Set when a repeated stop has been noted, so the note is written once per run. */
+    private val stopAgainNoted = AtomicBoolean(false)
 
     private val connected = CopyOnWriteArrayList<Sender>()
     private val implicitlyDisconnected = CopyOnWriteArrayList<Sender>()
@@ -160,6 +167,8 @@ class YouTubeApp(
     /** Restores or creates the pid, then begins both sessions at once. On failure both are ended and the error is rethrown. */
     suspend fun start() {
         if (state != AppState.STOPPED) return
+        stopClaimed.set(false)
+        stopAgainNoted.set(false)
         loadPid()
         note("starting")
         state = AppState.STARTING
@@ -256,9 +265,15 @@ class YouTubeApp(
     /**
      * Resets the player, ends both sessions (the senders are told) and reports the senders as disconnected.
      * With [error] the app stopped because of it and [onTerminate] is called.
+     * A stop runs once per [start]: another call during or after it does nothing but a note (yt-cast-receiver emits terminate
+     * on each call), so [onTerminate] fires once per run.
      */
     suspend fun stop(error: Throwable? = null) {
         if (state != AppState.RUNNING && error == null) return
+        if (!stopClaimed.compareAndSet(false, true)) {
+            if (stopAgainNoted.compareAndSet(false, true)) note("stopAgain", "error" to (error?.let { it::class.simpleName }))
+            return
+        }
         note("stopping")
         state = AppState.STOPPING
         val senders = connected.toList()
