@@ -236,6 +236,8 @@ abstract class Player {
      * Seeks while playing or paused: reports LOADING at the target first, then PLAYING. A paused player
      * stays paused (LOADING, then PAUSED at the new position, no resume): a deliberate deviation from
      * yt-cast-receiver 2.1.0, which resumes; the sender presses Play when it wants sound.
+     * A seek the speaker refuses reports LOADING and then the real position and state at once
+     * (yt-cast-receiver leaves the sender on LOADING).
      */
     suspend fun seek(position: Double, aid: Int? = null): Boolean {
         if (status != PlayerStatus.PLAYING && status != PlayerStatus.PAUSED) return false
@@ -251,6 +253,11 @@ abstract class Player {
                 return true
             }
             setStatusAndEmit(PlayerStatus.PLAYING, aid)
+        } else {
+            // The sender was told LOADING: give it the real position and state, compared with that LOADING state so it is sent.
+            log("seekRefused", "position" to position)
+            previousState = fakeState
+            setStatusAndEmit(null, aid)
         }
         return result
     }

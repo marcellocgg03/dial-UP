@@ -212,8 +212,8 @@ class YouTubeAppTest {
         rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
         awaitUntil(what = "the real state after the refused seek") {
             val states = messages("cl").filter { it.first == "onStateChange" }
-            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"] == "42.0" }
-            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "1" && it.second["currentTime"] == "30.0" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"]?.toDouble() == 42.0 }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "1" && it.second["currentTime"]?.toDouble() == 30.0 }
         }
     }
 
@@ -230,8 +230,8 @@ class YouTubeAppTest {
         rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
         awaitUntil(what = "the paused state after the refused seek") {
             val states = messages("cl").filter { it.first == "onStateChange" }
-            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"] == "42.0" }
-            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "2" && it.second["currentTime"] == "30.0" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"]?.toDouble() == 42.0 }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "2" && it.second["currentTime"]?.toDouble() == 30.0 }
         }
     }
 
