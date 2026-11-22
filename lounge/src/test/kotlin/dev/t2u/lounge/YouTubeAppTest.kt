@@ -461,6 +461,23 @@ class YouTubeAppTest {
     }
 
     @Test
+    fun aLaunchOfTheOtherThemeTheLoungeRefusesLeavesThePlayingCastAlone() = run<Unit> {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        fake.refusePairing = true
+
+        assertFailsWith<Exception> { a.launch("pairingCode=PAIR12&theme=m") }
+
+        barrier("cl")
+        assertEquals(Client.YT, a.activeClient)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(a.connectedSenders.isNotEmpty())
+        assertTrue(disconnects.isEmpty(), "$disconnects")
+        assertTrue("loungeScreenDisconnected" !in messages("cl").map { it.first })
+    }
+
+    @Test
     fun pairingCodesAskBothSessionsAndNeverLogTheCode() = run {
         val a = startedApp()
         val codes = a.pairingCodes()
@@ -490,6 +507,72 @@ class YouTubeAppTest {
         assertFailsWith<IllegalArgumentException> { a.launch("theme=cl") }
         assertFailsWith<IllegalArgumentException> { a.launch("pairingCode=ABC123&theme=x") }
         assertTrue(fake.requests.none { it.path.endsWith("register_pairing_code") })
+    }
+
+    @Test
+    fun launchCodeCharsNamesTheCharacterClasses() = run<Unit> {
+        assertEquals("none", launchCodeChars(null))
+        assertEquals("none", launchCodeChars(""))
+        assertEquals("digit", launchCodeChars("123456789012"))
+        assertEquals("digit+lower+dash", launchCodeChars("0f8f-ab"))
+        assertEquals("lower+upper+underscore", launchCodeChars("AB_cd"))
+        assertEquals("lower+other", launchCodeChars("ab/cd"))
+        assertEquals("digit+lower+upper+dash+underscore+other", launchCodeChars("Ab9-_x+"))
+        assertEquals("other", launchCodeChars("\u00E9"), "only ASCII letters count as lower or upper")
+    }
+
+    @Test
+    fun aMalformedPairingCodeIsRefusedBeforeAnythingChanges() = run<Unit> {
+        val a = startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        val bad = listOf(
+            "ABC12",
+            "A".repeat(41),
+            "abc%2Fdef12",
+            "abc+def12",
+            "abc%3Ddef12",
+            "%C3%A9abcdef",
+        )
+        for (code in bad) {
+            val e = assertFailsWith<IllegalArgumentException>(code) { a.launch("pairingCode=$code&theme=m") }
+            assertTrue("malformed" in e.message.orEmpty(), "${e.message}")
+            assertFalse(e.message.orEmpty().contains(code), "the message carries the code")
+        }
+        barrier("cl")
+        assertTrue(fake.requests.none { it.path.endsWith("register_pairing_code") })
+        assertEquals(Client.YT, a.activeClient)
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertTrue(a.connectedSenders.isNotEmpty())
+        assertTrue(disconnects.isEmpty(), "$disconnects")
+        assertTrue("loungeScreenDisconnected" !in messages("cl").map { it.first })
+    }
+
+    @Test
+    fun aPairingCodeOf6To40UrlSafeCharactersIsAccepted() = run<Unit> {
+        val a = startedApp()
+        val codes = listOf(
+            "PAIR12",
+            "0f8fad5b-d9cb-469f-a165-70867728950e",
+            "aB3-_".repeat(8),
+        )
+        assertEquals(40, codes.last().length)
+        for (code in codes) {
+            val pid = a.launch("pairingCode=$code&theme=cl")
+            assertEquals(store.text(StoreKeys.APP_PID), pid)
+        }
+        assertEquals(codes, fake.requests.filter { it.path.endsWith("register_pairing_code") }.map { it.form["pairing_code"] })
+    }
+
+    @Test
+    fun theLaunchEventRecordsTheCodeShapeAndNeverTheCode() = run<Unit> {
+        val a = startedApp()
+        val code = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        a.launch("pairingCode=$code&theme=cl")
+        val launch = events.single { (kind, f) -> kind == "lounge-app" && f["type"] == "launch" }.second
+        assertEquals(36, launch["codeLength"])
+        assertEquals("digit+lower+dash", launch["codeChars"])
+        assertTrue(events.none { e -> e.second.values.any { it.toString().contains(code) } }, "the code was logged")
     }
 
     @Test

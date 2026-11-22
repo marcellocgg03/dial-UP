@@ -58,6 +58,8 @@ class RendererRegistry(
     private val destroyBudgetMs: Long = DESTROY_BUDGET_MS,
     /** True for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
     private val hidden: (String) -> Boolean = { false },
+    /** The running-speaker bound: a test seam, production uses the default [MAX_RUNNING]. */
+    private val maxRunning: Int = MAX_RUNNING,
 ) {
     companion object {
         /**
@@ -75,6 +77,12 @@ class RendererRegistry(
 
         /** The skipped-speaker memory never holds more than this many entries; the earliest retry time goes first. */
         const val MAX_SKIPPED = 256
+
+        /**
+         * The running-speaker bound, the same number as [MAX_SKIPPED]. At the cap a new speaker is refused before any port is
+         * claimed or receiver built; a running speaker is never evicted to make room.
+         */
+        const val MAX_RUNNING = 256
 
         /** How many due setups [retryDue] runs at once. */
         internal const val RETRY_PARALLEL = 8
@@ -108,6 +116,9 @@ class RendererRegistry(
     private val skipped = HashMap<String, Skip>()
     private val pending = HashSet<String>()
     private val guardLogged = HashSet<String>()
+
+    /** True from the first refusal at the running cap until the next admission; guarded by [lock]. One event per episode. */
+    private var capRefusalLogged = false
 
     /** Epoch ms (of [clock]) of the last MediaRenderer search, from the schedule or from Bridge.housekeeping. */
     @Volatile private var lastSearchAt: Long = clock()
@@ -178,6 +189,31 @@ class RendererRegistry(
         skipped[udn] = skip
     }
 
+    /** What [admitNewSpeaker] decided. */
+    private enum class Admission { ADMITTED, REFUSED, REFUSED_FIRST }
+
+    /**
+     * Call with [lock] held, for a speaker that is not running and not pending. The one place the running cap lives: a new
+     * speaker is refused when the running and the pending speakers together are at [maxRunning]; nobody is evicted. The first
+     * refusal of an episode is told apart so the caller logs it once; an admission ends the episode.
+     */
+    private fun admitNewSpeaker(): Admission {
+        if (running.size + pending.size < maxRunning) {
+            capRefusalLogged = false
+            return Admission.ADMITTED
+        }
+        if (capRefusalLogged) return Admission.REFUSED
+        capRefusalLogged = true
+        return Admission.REFUSED_FIRST
+    }
+
+    private fun logCapRefused(udn: String, location: String?) {
+        log(
+            "renderer-cap-refused", udn, location = location,
+            reason = "$maxRunning speakers are running; a new speaker is refused until one leaves",
+        )
+    }
+
     /** One `skipped` event per UDN and reason, however many datagrams repeat it. */
     private suspend fun logGuardOnce(udn: String, reason: String, location: String) {
         val first = lock.withLock {
@@ -197,6 +233,24 @@ class RendererRegistry(
             log(
                 "renderer-moved-refused", udn, existing.name, location,
                 reason = "kept ${existing.address}, refused a move to $newAddress while the entry is fresh",
+            )
+        }
+    }
+
+    /**
+     * One `byebye-refused` event per UDN and sender, however many datagrams repeat it. The only trace of a refused byebye: no `removed`
+     * event, no destroy, no port release, and the datagram's headers are never logged. Shares the [guardLogged] memory, so after it
+     * is cleared at [MAX_REMEMBERED_GUARD_HITS] entries a sender is logged again.
+     */
+    private suspend fun logByebyeRefusedOnce(udn: String, existing: ManagedRenderer, sender: String) {
+        val first = lock.withLock {
+            if (guardLogged.size >= MAX_REMEMBERED_GUARD_HITS) guardLogged.clear()
+            guardLogged.add("$udn|byebye-refused|$sender")
+        }
+        if (first) {
+            log(
+                "byebye-refused", udn, existing.name, existing.location,
+                reason = "kept ${existing.address}, refused a byebye from $sender",
             )
         }
     }
@@ -260,6 +314,8 @@ class RendererRegistry(
         if (existing != null) {
             if (existing.location == location) {
                 existing.refresh(age)
+                // a running speaker's ports.json entry follows its last alive, not its setup
+                ports.touch(udn)
                 return
             }
             // Same address, new description URL (rebooted, random port): rebuild. Another address while the entry is still
@@ -273,12 +329,18 @@ class RendererRegistry(
             removeRenderer(udn, "moved", "now at $location")
         }
 
-        val go = lock.withLock {
+        val admission = lock.withLock {
             val skip = skipped[udn]
-            if (skip != null && skip.location == location && isWaiting(skip, clock())) return@withLock false
-            pending.add(udn)
+            if (skip != null && skip.location == location && isWaiting(skip, clock())) return@withLock null
+            // one init per UDN: a setup of it is already running
+            if (udn in pending) return@withLock null
+            admitNewSpeaker().also { if (it == Admission.ADMITTED) pending.add(udn) }
         }
-        if (!go) return
+        if (admission == null) return
+        if (admission != Admission.ADMITTED) {
+            if (admission == Admission.REFUSED_FIRST) logCapRefused(udn, location)
+            return
+        }
 
         setUp(udn, location, src, age, null)
     }
@@ -356,23 +418,36 @@ class RendererRegistry(
      * Sets up again every speaker whose setup threw and whose 5 minutes are over, without waiting for a new
      * alive, and asks every running speaker to revive a receiver that stopped itself ([ManagedRenderer.reviveIfDue]).
      * A device that was refused (not a usable renderer), one an alive is setting up right now and one that already
-     * runs are left alone. Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
+     * runs are left alone, and so are the ones that do not fit under [maxRunning] (they stay queued for a later pass). Called by the schedule every [RETRY_CHECK_MS] and by Bridge.housekeeping. Returns the
      * number of setup attempts made; receiver revivals are logged but not counted. A cancelled pass releases every
      * reservation it made, destroys any half-built renderer and does not change any skip entry, so the next pass
      * retries the same speakers at the same attempt number.
      */
     suspend fun retryDue(): Int {
+        var refusedFirst: Pair<String, String>? = null
         val due = lock.withLock {
             val now = clock()
-            val picked = skipped.entries
+            val candidates = skipped.entries
                 .filter { (udn, skip) ->
                     !isWaiting(skip, now) && skip.src != null &&
                         udn !in pending && udn !in running && !hidden(udn)
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
-            picked.forEach { pending.add(it.first) }
+            // Only as many as there is room for, in the order found; the rest stay in [skipped] for a later pass.
+            val picked = ArrayList<Triple<String, Skip, Int>>()
+            for (candidate in candidates) {
+                val admission = admitNewSpeaker()
+                if (admission == Admission.ADMITTED) {
+                    pending.add(candidate.first)
+                    picked.add(candidate)
+                } else {
+                    if (admission == Admission.REFUSED_FIRST) refusedFirst = candidate.first to candidate.second.location
+                    break
+                }
+            }
             picked
         }
+        refusedFirst?.let { (udn, location) -> logCapRefused(udn, location) }
         if (due.isNotEmpty()) {
             val gate = Semaphore(RETRY_PARALLEL)
             coroutineScope {
@@ -431,11 +506,13 @@ class RendererRegistry(
 
     /**
      * index.js removeRenderer: take it out of the list, destroy it (bounded by `destroyBudgetMs`, see [destroyBounded]),
-     * free its port (which stays remembered), log [event].
+     * free its port (which stays remembered, and the entry counts as just seen), log [event].
      */
     private suspend fun removeRenderer(udn: String, event: String = "removed", reason: String? = null) {
         val r = lock.withLock { running.remove(udn)?.also { publish() } } ?: return
         destroyBounded(r)
+        // a speaker that ran for weeks must not be older than a flood entry created after it; the (rare) write is not cut by a cancel
+        withContext(NonCancellable) { ports.touch(udn) }
         log(event, udn, r.name, r.location, r.port, reason)
     }
 
@@ -495,9 +572,21 @@ class RendererRegistry(
         return true
     }
 
-    /** index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. */
-    suspend fun onByebye(headers: Map<String, String>) {
+    /**
+     * index.js onByebye: a speaker that says goodbye is removed; an unknown UDN does nothing. index.js removes on a byebye from any
+     * host; here only a byebye sent from the speaker's recorded address ([ManagedRenderer.address], what [setUp] was given) removes it,
+     * so another device on the LAN cannot take a speaker out of the cast menu with one forged NOTIFY. There is no LOCATION-host
+     * fallback. A refused byebye leaves one `byebye-refused` discovery event per UDN and sender (bounded by the shared
+     * [MAX_REMEMBERED_GUARD_HITS]-entry memory; after a clear a sender is logged again) and touches nothing else. [src] has no default: a caller that drops the datagram source does not compile.
+     */
+    suspend fun onByebye(headers: Map<String, String>, src: InetSocketAddress) {
         val udn = udnFromUsn(headers["USN"]) ?: return
+        val existing = lock.withLock { running[udn] } ?: return
+        val sender = src.address?.hostAddress.orEmpty()
+        if (sender != existing.address) {
+            logByebyeRefusedOnce(udn, existing, sender)
+            return
+        }
         removeRenderer(udn)
     }
 

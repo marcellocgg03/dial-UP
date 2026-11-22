@@ -412,6 +412,32 @@ class YouTubeCastReceiverTest {
     }
 
     @Test
+    fun aLaunchWithAMalformedPairingCodeAnswers200WithoutLocation() = run {
+        receiver().start()
+        val port = dialPort()
+        for (code in listOf("AB", "A".repeat(41))) {
+            val response = launchPost(port, "pairingCode=$code&theme=cl")
+            assertEquals(200, response.statusCode(), code)
+            assertTrue(response.headers().firstValue("LOCATION").isEmpty, "no LOCATION for a code of ${code.length}")
+        }
+        assertTrue(pairingRegistrations().isEmpty())
+        val failures = events.filter { (kind, f) -> kind == "lounge-receiver" && f["type"] == "launchFailed" }
+        assertEquals(2, failures.size)
+        assertTrue(failures.all { it.second["message"].toString().contains("malformed") })
+    }
+
+    @Test
+    fun aLaunchWithA36CharacterCodeAnswersALocation() = run {
+        receiver().start()
+        val port = dialPort()
+        val code = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        val response = launchPost(port, "pairingCode=$code&theme=cl")
+        assertEquals(200, response.statusCode())
+        assertTrue(response.headers().firstValue("LOCATION").isPresent)
+        assertEquals(listOf(code), pairingRegistrations().map { it.form["pairing_code"] })
+    }
+
+    @Test
     fun aLaunchLogsWhichReceiverItReachedWithoutThePairingCode() = run {
         receiver().start()
         val port = dialPort()
