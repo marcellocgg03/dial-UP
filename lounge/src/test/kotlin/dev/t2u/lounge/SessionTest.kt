@@ -452,6 +452,73 @@ class SessionTest {
 
     private fun waitEvents() = events.filter { it.first == "lounge-session" && it.second["what"] == "rpc-wait" }
 
+    /**
+     * A client whose message POSTs (bind with a count above zero; never the init POST, the RPC GET or the token batch)
+     * fail with an IOException while [failing] is set. With [lostAnswer] the first failed POST still reaches the server
+     * (the fake records it) and only its answer is lost.
+     */
+    private class SendNet(
+        val failing: AtomicBoolean = AtomicBoolean(false),
+        val lostAnswer: Boolean = false,
+        val failedPosts: AtomicInteger = AtomicInteger(),
+    ) {
+        val http: OkHttpClient = lanHttpClient().newBuilder().addInterceptor { chain ->
+            val req = chain.request()
+            val isMessagePost = req.method == "POST" && req.url.encodedPath.endsWith("bc/bind") &&
+                req.body?.let { b -> Buffer().also { b.writeTo(it) }.readUtf8() }?.contains("count=0") == false
+            if (isMessagePost && failing.get()) {
+                // the first failed POST reaches the server when the answer is the lost part
+                if (lostAnswer && failedPosts.get() == 0) chain.proceed(req).close()
+                failedPosts.incrementAndGet()
+                throw IOException("network unreachable")
+            }
+            chain.proceed(req)
+        }.build()
+    }
+
+    private fun sendWaitEvents() = events.filter { it.first == "lounge-session" && it.second["what"] == "send-wait" }
+
+    @Test
+    fun anInternetOutageOnASendIsRiddenOutInPlace() = run<Unit> {
+        val net = SendNet()
+        val s = session(http = net.http, outage = 2_000L to listOf(60L, 120L))
+        s.begin()
+        val tokens = count("get_lounge_token_batch")
+        net.failing.set(true)
+        val send = scope.async { s.sendMessage(listOf(volume(12))) }
+        awaitUntil { net.failedPosts.get() >= 2 }
+        net.failing.set(false)
+        assertTrue(send.await(), "the send goes through once the network is back")
+        val sent = fake.sent.getValue("cl")
+        assertEquals(1, sent.size)
+        assertEquals("12", sent[0]["req0_volume"])
+        assertEquals("0", sent[0]["ofs"])
+        assertEquals(SessionStatus.RUNNING, s.status)
+        assertEquals(tokens, count("get_lounge_token_batch"), "no token refresh during an internet-only outage")
+        assertTrue(sendWaitEvents().isNotEmpty(), "send-wait events count the attempts")
+        assertEquals(1, sendWaitEvents().first().second["attempt"])
+    }
+
+    @Test
+    fun aLostAnswerIsSentAgainWithTheSameOffset() = run<Unit> {
+        val net = SendNet(lostAnswer = true)
+        val s = session(http = net.http, outage = 2_000L to listOf(60L, 120L))
+        s.begin()
+        val tokens = count("get_lounge_token_batch")
+        net.failing.set(true)
+        val send = scope.async { s.sendMessage(listOf(volume(12))) }
+        awaitUntil { net.failedPosts.get() >= 1 }
+        net.failing.set(false)
+        assertTrue(send.await())
+        val sent = fake.sent.getValue("cl")
+        assertEquals(2, sent.size, "the server saw the POST whose answer was lost, and its retry")
+        assertEquals(sent[0]["ofs"], sent[1]["ofs"], "the same offset twice, never a skipped one")
+        assertEquals(tokens, count("get_lounge_token_batch"), "no token refresh")
+        assertTrue(s.sendMessage(listOf(volume(13))))
+        val first = sent[0].getValue("ofs").toInt()
+        assertEquals((first + 1).toString(), fake.sent.getValue("cl").last()["ofs"], "the next message carries ofs plus the message count")
+    }
+
     @Test
     fun anOutageOfNetworkErrorsIsRiddenOutOnTheSameToken() = run {
         val net = OutageNet()
