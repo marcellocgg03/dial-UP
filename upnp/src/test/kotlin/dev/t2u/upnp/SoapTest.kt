@@ -127,6 +127,26 @@ class SoapTest {
     }
 
     @Test
+    fun `an oversized fault description becomes a short clean UpnpError message`() {
+        val desc = "Bad\tthing\n" + "x".repeat(5000) + "\u0007"
+        withCannedServer(
+            500,
+            """<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail>""" +
+                """<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>714</errorCode>""" +
+                """<errorDescription>$desc</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>""",
+        ) { svc ->
+            val err = assertFailsWith<UpnpError> { runBlocking { soap.callAction(svc, "Play") } }
+            val message = err.message ?: ""
+            assertTrue(message.length <= 200, "message has ${message.length} characters")
+            assertTrue(message.none { Character.isISOControl(it) }, "no control character in the message")
+            assertTrue(message.startsWith("Play: Bad thing"), message)
+            assertTrue(message.endsWith("\u2026"), "a cut text ends with the ellipsis")
+            assertEquals("714", err.errorCode)
+            assertEquals("EUPNP", err.code)
+        }
+    }
+
+    @Test
     fun `errorCode 401 maps to ENOACTION`() {
         withCannedServer(
             500,
