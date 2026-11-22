@@ -33,5 +33,18 @@ fun bindableLink(context: Context): Pair<Inet4Address?, String?> {
     return (InetAddress.getByName(tether.ipv4) as? Inet4Address) to tether.name
 }
 
+/** One Wi-Fi client network as bindableLink sees it: its first IPv4 address (null when it has none) and its interface name. */
+data class WifiLink(val ipv4: Inet4Address?, val ifName: String?)
+
+/** The choice rule, pure so the JVM can pin it. */
+fun pickBindable(
+    wifi: Sequence<WifiLink>,
+    tether: () -> Pair<Inet4Address?, String?>?,
+): Pair<Inet4Address?, String?> {
+    val first = wifi.firstOrNull()
+    if (first != null) return first.ipv4 to first.ifName
+    return tether() ?: (null to null)
+}
+
 /** True when the bridge can bind now: a Wi-Fi client IPv4 address or the phone's own hotspot. */
 fun hasBindableNetwork(context: Context): Boolean = bindableLink(context).first != null
