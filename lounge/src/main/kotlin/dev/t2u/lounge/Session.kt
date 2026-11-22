@@ -109,6 +109,11 @@ class Session(
             rpcLongPoll.close()
             throw SessionException("(${client.displayName}) Session ended while it started")
         }
+        if (!rpcLongPoll.isOpen()) {
+            // the reader gave up during the start (endUnlessStarting only logged it): a start with nobody listening has failed
+            end()
+            throw SessionException("(${client.displayName}) RPC reader stopped while the session started")
+        }
         status = SessionStatus.RUNNING
     }
 
@@ -448,6 +453,8 @@ class Session(
         http, endpoints, bind, log, scope, rpcRetryDelayMs, rpcOutageBudgetMs, rpcOutageWaitsMs,
         deliver = ::handleMessages,
         refreshToken = ::refreshLoungeToken,
+        endSession = { endUnlessStarting("reader", it) },
+        starting = { status == SessionStatus.STARTING },
     )
 
     /** True while the RPC stream is open or being reopened. */

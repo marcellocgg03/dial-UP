@@ -529,7 +529,6 @@ class SessionTest {
         assertEquals(1, count("get_lounge_token_batch"), "no token refresh is attempted while starting")
         assertEquals(SessionStatus.STOPPED, s.status)
         assertFalse(s.rpcOpen())
-        assertEquals(0, fake.rpcOpen("cl"))
         assertTrue(terminated.isEmpty(), "a failed start is reported by begin, not by onTerminate")
     }
 

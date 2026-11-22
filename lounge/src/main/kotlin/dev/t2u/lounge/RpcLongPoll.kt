@@ -20,11 +20,15 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The RPC long-poll of one [Session]. [deliver] gets each decoded batch (the session updates the bind parameters and
  * hands it to its listener, so secrets are registered with the log as before); when the stream cannot be reopened,
- * [refreshToken] refreshes the lounge token.
+ * [refreshToken] refreshes the lounge token. A reader that dies of any non-cancellation Throwable is logged and reopened
+ * like a stream that ended; after [MAX_QUICK_READER_DEATHS] quick deaths in a row it takes the refresh, and if it keeps
+ * dying after that refresh [endSession] ends the session (while [starting] is true there is no refresh to take, so the
+ * cap goes straight to [endSession]).
  */
 internal class RpcLongPoll(
     http: OkHttpClient,
@@ -43,6 +47,10 @@ internal class RpcLongPoll(
     private val rpcOutageWaitsMs: List<Long>,
     private val deliver: suspend (List<IncomingMessage>) -> Unit,
     private val refreshToken: suspend () -> Unit,
+    /** Ends the session because the reader cannot be kept; Session gives it the STARTING-aware callback. */
+    private val endSession: suspend (Throwable) -> Unit,
+    /** True while the session is still starting (the token refresh does nothing then). */
+    private val starting: () -> Boolean,
 ) {
     class RpcHandle(var job: Job? = null, @Volatile var call: Call? = null) {
         fun close() {
@@ -52,6 +60,13 @@ internal class RpcLongPoll(
     }
 
     private class Opened(val call: Call, val response: Response)
+
+    /** Consecutive quick reader deaths, across readers (a refresh starts a new reader); reset by a healthy or normally ended stream. */
+    private val quickDeaths = AtomicInteger(0)
+
+    /** True once the cap handed over to a token refresh and no healthy stream has been read since. */
+    @Volatile
+    private var refreshedForDeaths = false
 
     /** The reader that is current, or null; a reader whose handle is no longer this one stops. */
     @Volatile
@@ -143,11 +158,54 @@ internal class RpcLongPoll(
         while (true) {
             val started = System.nanoTime()
             handle.call = opened.call
-            readStream(opened.response, handle)
+            var death: Throwable? = null
+            try {
+                readStream(opened.response, handle)
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                death = e
+            }
             currentCoroutineContext().ensureActive()
+            val lived = (System.nanoTime() - started) / 1_000_000
+            if (death != null) {
+                // the class only, never the text: it may carry what the payload said
+                val name = death::class.simpleName ?: "Throwable"
+                log.session("rpc-reader-died", "error" to name)
+                if (current !== handle) return
+                if (lived < MIN_STREAM_MS) {
+                    if (quickDeaths.incrementAndGet() >= MAX_QUICK_READER_DEATHS) {
+                        if (starting()) {
+                            giveUp(SessionException("RPC reader failed while the session started ($name)"))
+                            return
+                        }
+                        if (refreshedForDeaths) {
+                            giveUp(SessionException("RPC reader keeps failing ($name)"))
+                            return
+                        }
+                        refreshedForDeaths = true
+                        quickDeaths.set(0)
+                        problem("rpc-reader", "reader keeps dying", death)
+                        scope.launch {
+                            try {
+                                refreshToken()
+                            } catch (r: Exception) {
+                                if (r is CancellationException) throw r
+                                // refreshLoungeToken already ended the session and called onTerminate
+                            }
+                        }
+                        return
+                    }
+                } else {
+                    quickDeaths.set(0)
+                    refreshedForDeaths = false
+                }
+            } else {
+                quickDeaths.set(0)
+                refreshedForDeaths = false
+            }
             if (current !== handle) return
             // a stream that dies at once must not turn into a busy loop
-            if ((System.nanoTime() - started) / 1_000_000 < MIN_STREAM_MS) delay(rpcRetryDelayMs)
+            if (lived < MIN_STREAM_MS) delay(rpcRetryDelayMs)
             log.session("rpc-reconnect")
             opened = try {
                 openRpcRidingOutOutage(handle)
@@ -168,7 +226,31 @@ internal class RpcLongPoll(
         }
     }
 
-    /** Reads one RPC response to its end, delivering each decoded batch before reading on. */
+    /** Ends the session in a separate coroutine: end closes the reader, so it must not run inside the reader's own job. */
+    private fun giveUp(error: Throwable) {
+        scope.launch {
+            try {
+                endSession(error)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                // the session already reports its own end
+            }
+        }
+    }
+
+    /** A problem line with the class of [e] only; logging never breaks the reader, so a failing log call is swallowed. */
+    private fun problem(where: String, what: String, e: Throwable) {
+        try {
+            log.problem(where, "$what (${e::class.simpleName ?: "Throwable"})")
+        } catch (_: Throwable) {
+            // logging must never break the session
+        }
+    }
+
+    /**
+     * Reads one RPC response to its end, delivering each decoded batch before reading on. A payload whose logging,
+     * decoding or delivery throws is reported and does not stop the reader; only a failure of the stream itself does.
+     */
     private suspend fun readStream(response: Response, handle: RpcHandle) {
         response.use { r ->
             val utf8 = Utf8StreamDecoder()
@@ -194,11 +276,21 @@ internal class RpcLongPoll(
                             if (n < 0) break
                             decoder.feed(utf8.decode(buf, 0, n))
                             for (payload in pending.toList()) {
-                                log.raw(payload)
-                                val batch = decoder.parseMessages(payload)
-                                if (batch.isNotEmpty()) {
-                                    log.rx(batch)
-                                    deliver(batch)
+                                try {
+                                    log.raw(payload)
+                                } catch (e: Throwable) {
+                                    if (e is CancellationException) throw e
+                                    problem("raw", "payload not logged", e)
+                                }
+                                try {
+                                    val batch = decoder.parseMessages(payload)
+                                    if (batch.isNotEmpty()) {
+                                        log.rx(batch)
+                                        deliver(batch)
+                                    }
+                                } catch (e: Throwable) {
+                                    if (e is CancellationException) throw e
+                                    problem("deliver", "payload dropped", e)
                                 }
                             }
                             pending.clear()
