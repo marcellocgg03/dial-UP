@@ -5,9 +5,11 @@ package dev.t2u.lounge
 import dev.t2u.upnp.EventSink
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -414,5 +416,86 @@ class PlaylistTest {
         assertNull(playlist.autoplay)
         assertFalse(playlist.hasPrevious)
         assertFalse(playlist.hasNext)
+    }
+
+    @Test
+    fun aRefreshAnsweringAfterAResetWritesNothing() = runBlocking {
+        val playlist = Playlist()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        // an answer that comes even though its request was cancelled: only the check at the write can keep it out
+        playlist.requestHandler = LambdaHandler { _ ->
+            entered.complete(Unit)
+            withContext(NonCancellable) { gate.await() }
+            PreviousNextVideos(Video("P", Client.YT, VideoContext("RDtest", 0)), Video("N", Client.YT))
+        }
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        val refresh = launch { playlist.updateByMessage("setPlaylist", setPayload(videoIds = "P,B", videoId = "B", currentIndex = "1"), Client.YT) }
+        entered.await()
+        assertTrue(playlist.isUpdating)
+
+        playlist.reset()
+        assertFalse(playlist.isUpdating, "a reset ends the refresh at once")
+        gate.complete(Unit)
+        refresh.join()
+
+        assertNull(playlist.current)
+        assertNull(playlist.getState().previous)
+        assertNull(playlist.getState().next)
+        assertNull(playlist.autoplay)
+        assertFalse(playlist.hasPrevious)
+        assertFalse(playlist.hasNext)
+    }
+
+    @Test
+    fun aRefreshForAnOlderVideoWritesNothing() = runBlocking {
+        val playlist = Playlist()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<PreviousNextVideos?>()
+        playlist.requestHandler = LambdaHandler { target ->
+            if (target.id == "A") {
+                entered.complete(Unit)
+                gate.await()
+            } else {
+                null
+            }
+        }
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        val refresh = launch { playlist.updateByMessage("setPlaylist", setPayload(videoIds = "A,B", videoId = "A", currentIndex = "0"), Client.YT) }
+        entered.await()
+
+        // a play of another video makes it current without asking the handler, so nothing aborts A's refresh
+        playlist.setAsCurrent(Video("X", Client.YT))
+        gate.complete(PreviousNextVideos(Video("P", Client.YT, VideoContext("RDtest", 0)), Video("N", Client.YT)))
+        refresh.join()
+
+        assertEquals("X", playlist.current?.id)
+        assertFalse(playlist.hasPrevious, "A's previous video is not X's")
+        assertNull(playlist.getState().previous)
+        assertNull(playlist.autoplay, "A's next video is not X's")
+    }
+
+    @Test
+    fun theAutoplayHopStillRefreshes() = runBlocking {
+        val playlist = Playlist()
+        val a = Video("A", Client.YT, VideoContext("RDtest", 0))
+        val b = Video("B", Client.YT)
+        val d = Video("D", Client.YT)
+        playlist.requestHandler = LambdaHandler { target ->
+            when (target.id) {
+                "A" -> PreviousNextVideos(null, b)
+                "B" -> PreviousNextVideos(a, d)
+                else -> null
+            }
+        }
+        playlist.updateByMessage("setPlaylist", setPayload(videoIds = "A", videoId = "A"), Client.YT)
+        playlist.setAutoplayMode(AutoplayMode.ENABLED)
+        assertTrue(playlist.setAsCurrent(b))
+
+        playlist.refreshAfterHop()
+
+        assertEquals(a, playlist.getState().previous)
+        assertEquals(d, playlist.autoplay)
+        assertFalse(playlist.isUpdating)
     }
 }

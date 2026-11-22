@@ -3,6 +3,7 @@ package dev.t2u.lounge
 // Tests for Player (port of yt-cast-receiver 2.1.0 lib/Player.js, MIT, Copyright (c) Patrick Kan), GPL-3.0-only.
 
 import dev.t2u.upnp.EventSink
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -685,6 +686,43 @@ class PlayerTest {
         assertNull(idle.current.queue.next)
         assertNull(idle.current.queue.autoplay)
         assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
+    }
+
+    /** D-11, research Pattern 10: a track end that races a reset finds an empty queue and plays nothing. */
+    @Test
+    fun aTrackEndAfterAResetStartsNothing() = runBlocking {
+        val player = FakePlayer()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        player.queue.requestHandler = object : PlaylistRequestHandler {
+            override suspend fun getPreviousNextVideos(target: Video, playlist: Playlist): PreviousNextVideos? {
+                entered.complete(Unit)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+                return PreviousNextVideos(vid("A", 0), vid("C", 2))
+            }
+        }
+        val refresh = launch {
+            player.queue.updateByMessage(
+                "setPlaylist",
+                payload(listId = "L", videoIds = "A,B,C", videoId = "B", currentIndex = "1"),
+                Client.YT,
+            )
+        }
+        entered.await()
+        assertTrue(player.queue.isUpdating)
+
+        player.reset()
+        assertFalse(player.queue.isUpdating, "the settle wait of the renderer must not see a refresh after a reset")
+        player.calls.clear()
+
+        assertFalse(player.next())
+        gate.complete(Unit)
+        refresh.join()
+        assertFalse(player.next())
+
+        assertTrue(player.calls.none { it.startsWith("play:") }, "nothing started: ${player.calls}")
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertNull(player.queue.current)
     }
 
     // ---- unconditional clear hook (plan 03-04, CAST-06)
