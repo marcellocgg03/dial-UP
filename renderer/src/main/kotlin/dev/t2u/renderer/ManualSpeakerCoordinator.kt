@@ -305,7 +305,7 @@ internal class ManualSpeakerCoordinator(private val host: ManualSpeakerHost, pri
             return null
         }
         val desc = try {
-            fetchDescription(deps.http, url, timeoutMs)
+            fetchDescription(deps.http, url, timeoutMs, allowLoopback = deps.allowLoopbackSpeakers)
         } catch (e: CancellationException) {
             throw e
         } catch (e: IllegalArgumentException) {
@@ -370,7 +370,7 @@ internal class ManualSpeakerCoordinator(private val host: ManualSpeakerHost, pri
             return false
         }
         val desc = try {
-            fetchDescription(deps.http, url, MANUAL_LIVENESS_FETCH_MS)
+            fetchDescription(deps.http, url, MANUAL_LIVENESS_FETCH_MS, allowLoopback = deps.allowLoopbackSpeakers)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {

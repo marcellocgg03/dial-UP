@@ -365,7 +365,7 @@ class Renderer(
 
     /** Fetch the description, verify AVTransport, start the cast receiver. Returns false to skip this device. */
     override suspend fun init(): Boolean {
-        val desc = fetchDescription(deps.http, location)
+        val desc = fetchDescription(deps.http, location, allowLoopback = deps.allowLoopbackSpeakers)
         description = desc
 
         if (!desc.services.containsKey(SERVICE_ID_PREFIX + AV_TRANSPORT)) {
