@@ -18,6 +18,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 /** The device type the app searches for (index.js RENDERER_ST). */
 const val RENDERER_ST = "urn:schemas-upnp-org:device:MediaRenderer:1"
 
+/** First back-off after a failed receive; doubles per failure of a run up to [MAX_RECEIVE_BACKOFF_MS]. */
+internal const val RECEIVE_BACKOFF_MS = 50L
+
+/** No sleep in the receive loop is longer than this, so stop()'s 3 s join always covers a back-off. */
+internal const val MAX_RECEIVE_BACKOFF_MS = 1000L
+
 private val UDN_RE = Regex("uuid:([^:]+)", RegexOption.IGNORE_CASE)
 private val MAX_AGE_RE = Regex("max-age\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
@@ -55,6 +61,10 @@ class Ssdp(
     private val searchBinds: List<InetAddress>,
     private val events: SsdpClientEvents,
     private val searchTarget: InetSocketAddress = InetSocketAddress(SsdpConstants.GROUP, SsdpConstants.PORT),
+    /** Test seam: builds the search socket for one bind address. */
+    internal val socketFactory: (InetAddress) -> MulticastSocket = { MulticastSocket(InetSocketAddress(it, 0)) },
+    /** First wait after a receive failure, in ms; doubled per failure of the run, never above [MAX_RECEIVE_BACKOFF_MS]. */
+    internal val receiveBackoffMs: Long = RECEIVE_BACKOFF_MS,
 ) {
     private class SearchSocket(val bind: InetAddress, val socket: MulticastSocket) {
         lateinit var thread: Thread
@@ -70,7 +80,7 @@ class Ssdp(
         running = true
         for (bind in searchBinds) {
             try {
-                val sock = MulticastSocket(InetSocketAddress(bind, 0))
+                val sock = socketFactory(bind)
                 sock.setupOrClose {
                     timeToLive = 4
                     soTimeout = 1000
