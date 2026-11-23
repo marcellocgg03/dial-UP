@@ -109,10 +109,14 @@ class Ssdp(
     }
 
     /**
-     * True while the client is started and at least one search socket is open. [start] reports a failed bind through
-     * `onError` and does not throw, so a client whose every bind failed is running but deaf: this tells them apart.
+     * True while the client is started and at least one search socket is open and its receive thread is alive (or not
+     * started yet: [start] adds the socket before it starts the thread). [start] reports a failed bind through
+     * `onError` and does not throw, so a client whose every bind failed is running but deaf; a client whose receive
+     * thread gave up is deaf too: this tells them apart from a working one.
      */
-    fun isBound(): Boolean = running && sockets.any { !it.socket.isClosed }
+    fun isBound(): Boolean = running && sockets.any {
+        !it.socket.isClosed && (it.thread.isAlive || it.thread.state == Thread.State.NEW)
+    }
 
     /** Sends an M-SEARCH from every search socket. A loopback socket never sends to a multicast target (JVM tests). */
     fun search(st: String, mx: Int = 3) {
@@ -186,6 +190,13 @@ class Ssdp(
                 failures++
                 // one report per run of failures, so a flapping socket cannot flood the event log
                 if (failures == 1) events.onError("receive:${s.bind.hostAddress}", t)
+                if (failures >= maxReceiveFailures) {
+                    // a socket that never recovers ends visibly: the thread ends, isBound() turns false and the
+                    // housekeeping pass rebuilds the client (BridgeRepair.repairClient)
+                    runCatching { s.socket.close() }
+                    events.onError("receive-gave-up:${s.bind.hostAddress}", t)
+                    break
+                }
                 try {
                     Thread.sleep(backoffFor(failures))
                 } catch (_: InterruptedException) {
