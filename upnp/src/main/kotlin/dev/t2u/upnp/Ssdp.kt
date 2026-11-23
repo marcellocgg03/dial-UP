@@ -24,6 +24,9 @@ internal const val RECEIVE_BACKOFF_MS = 50L
 /** No sleep in the receive loop is longer than this, so stop()'s 3 s join always covers a back-off. */
 internal const val MAX_RECEIVE_BACKOFF_MS = 1000L
 
+/** Consecutive receive failures after which a search socket gives up (about 15 s at the full back-off). */
+internal const val MAX_RECEIVE_FAILURES = 20
+
 private val UDN_RE = Regex("uuid:([^:]+)", RegexOption.IGNORE_CASE)
 private val MAX_AGE_RE = Regex("max-age\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
@@ -69,6 +72,8 @@ class Ssdp(
     internal val socketFactory: (InetAddress) -> MulticastSocket = { MulticastSocket(InetSocketAddress(it, 0)) },
     /** First wait after a receive failure, in ms; doubled per failure of the run, never above [MAX_RECEIVE_BACKOFF_MS]. */
     internal val receiveBackoffMs: Long = RECEIVE_BACKOFF_MS,
+    /** Failures in a row after which the loop closes its socket, reports it and ends. */
+    internal val maxReceiveFailures: Int = MAX_RECEIVE_FAILURES,
 ) {
     private class SearchSocket(val bind: InetAddress, val socket: MulticastSocket) {
         lateinit var thread: Thread

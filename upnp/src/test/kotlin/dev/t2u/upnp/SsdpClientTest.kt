@@ -306,4 +306,85 @@ class SsdpClientTest {
             }
         }
     }
+
+    /** A search socket whose receive always throws; [noClose] makes close() a no-op, so isClosed stays false. */
+    private class DeadSocket(addr: SocketAddress, private val noClose: Boolean = false) : MulticastSocket(addr) {
+        override fun receive(p: DatagramPacket) = throw IOException("bad packet")
+
+        override fun close() {
+            if (!noClose) super.close()
+        }
+
+        fun closeForReal() = super.close()
+    }
+
+    @Test
+    @DisplayName("a socket that fails on every receive gives up after the cap, reports it once and is no longer bound")
+    fun aSocketThatAlwaysFailsGivesUpAndIsNoLongerBound() {
+        val events = Collected()
+        var created: DeadSocket? = null
+        val ssdp = Ssdp(
+            listOf(loopback),
+            events,
+            socketFactory = { DeadSocket(InetSocketAddress(it, 0)).also { s -> created = s } },
+            receiveBackoffMs = 1,
+            maxReceiveFailures = 3,
+        )
+        try {
+            ssdp.start()
+            assertTrue(awaitTrue { !ssdp.isBound() }, "the client reports itself unbound after the give-up: ${events.errors}")
+            assertEquals(1, events.errors.count { it.startsWith("receive:") }, events.errors.toString())
+            assertEquals(1, events.errors.count { it.startsWith("receive-gave-up:") }, events.errors.toString())
+            assertEquals(2, events.errors.size, events.errors.toString())
+            assertTrue(created!!.isClosed, "the socket is closed")
+        } finally {
+            ssdp.stop()
+        }
+    }
+
+    @Test
+    @DisplayName("isBound needs a live receive thread: a socket that still looks open does not make a dead client bound")
+    fun aDeadThreadIsNotBoundEvenWhenItsSocketLooksOpen() {
+        val events = Collected()
+        var created: DeadSocket? = null
+        val ssdp = Ssdp(
+            listOf(loopback),
+            events,
+            socketFactory = { DeadSocket(InetSocketAddress(it, 0), noClose = true).also { s -> created = s } },
+            receiveBackoffMs = 1,
+            maxReceiveFailures = 3,
+        )
+        try {
+            ssdp.start()
+            assertTrue(awaitTrue { events.errors.any { it.startsWith("receive-gave-up:") } }, events.errors.toString())
+            assertFalse(created!!.isClosed, "the socket looks open")
+            assertTrue(awaitTrue { !ssdp.isBound() }, "but its thread is gone, so the client is not bound")
+        } finally {
+            ssdp.stop()
+            created?.closeForReal()
+        }
+    }
+
+    @Test
+    @DisplayName("stop during a back-off returns promptly and the stopping client reports nothing more")
+    fun stopDuringTheBackOffReturnsPromptly() {
+        val events = Collected()
+        val ssdp = Ssdp(
+            listOf(loopback),
+            events,
+            socketFactory = { DeadSocket(InetSocketAddress(it, 0)) },
+            receiveBackoffMs = 1000,
+            maxReceiveFailures = 100,
+        )
+        ssdp.start()
+        try {
+            assertTrue(awaitTrue { events.errors.isNotEmpty() }, "the first failure is reported")
+        } finally {
+            val started = System.currentTimeMillis()
+            ssdp.stop()
+            val took = System.currentTimeMillis() - started
+            assertTrue(took < 2000, "stop returned in $took ms")
+        }
+        assertEquals(1, events.errors.size, events.errors.toString())
+    }
 }
