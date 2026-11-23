@@ -3,6 +3,7 @@
 package dev.dialup.app
 
 import dev.t2u.renderer.BridgeNetwork
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -11,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import java.net.InetAddress
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -35,9 +37,22 @@ class RebindApplierTest {
         var networkUp: Boolean? = null
         var rebindArgument: BridgeNetwork? = null
 
+        /** Which read throws (`wifiIp`, `awaitValidated` or `currentNetwork`), and with what. */
+        var throwFrom: String? = null
+        var thrown: Throwable = IllegalStateException("boom")
+        var startThrew = false
+        var resets = 0
+
+        private fun maybeThrow(where: String) {
+            if (throwFrom == where) throw thrown
+        }
+
         override val hasBridge: Boolean get() = bridge
         override var lastIp: String? = "192.168.1.10"
-        override fun wifiIp(): String? = wifi
+        override fun wifiIp(): String? {
+            maybeThrow("wifiIp")
+            return wifi
+        }
         override fun markNetworkUp(up: Boolean) {
             calls += "networkUp=$up"
             networkUp = up
@@ -63,13 +78,25 @@ class RebindApplierTest {
             calls += "resetBindFailures"
         }
 
+        override val lastStartThrew: Boolean get() = startThrew
+
+        override fun failedAttempt(retryReason: String) {
+            calls += "failed($retryReason)"
+        }
+
+        override fun resetFailures() {
+            resets++
+        }
+
         override suspend fun awaitValidated(): Boolean {
             calls += "awaitValidated"
+            maybeThrow("awaitValidated")
             return validated
         }
 
         override fun currentNetwork(): BridgeNetwork? {
             calls += "currentNetwork"
+            maybeThrow("currentNetwork")
             return network
         }
 
@@ -239,5 +266,106 @@ class RebindApplierTest {
         gate.complete(Unit)
         runCurrent()
         assertTrue(t.startFinished, "the guarded start ran to its end")
+    }
+
+    @Test
+    fun aThrowingNetworkReadIsLoggedAndRetriedWithTheSameReason() = runTest {
+        val t = FakeTarget().apply {
+            throwFrom = "currentNetwork"
+            thrown = java.net.SocketException("no such interface")
+        }
+        RebindApplier(t).apply("available")
+        assertEquals(
+            mapOf(
+                "rebind" to false,
+                "mode" to "failed",
+                "reason" to "available",
+                "oldIp" to "192.168.1.10",
+                "error" to "java.net.SocketException",
+            ),
+            only(t),
+        )
+        assertEquals("failed(available)", t.calls.last())
+        assertFalse("retry" in t.calls, "the retry is the target's, with the original reason: ${t.calls}")
+    }
+
+    @Test
+    fun theEventNeverCarriesTheExceptionMessage() = runTest {
+        val t = FakeTarget().apply { throwFrom = "currentNetwork"; thrown = IllegalStateException("/data/secret/path") }
+        RebindApplier(t).apply("available")
+        assertFalse(only(t).values.any { it.toString().contains("secret") }, "events: ${t.events}")
+    }
+
+    @Test
+    fun aThrowingWifiReadIsRetriedWithTheSameReason() = runTest {
+        val t = FakeTarget().apply { throwFrom = "wifiIp"; thrown = IllegalStateException("wifi") }
+        RebindApplier(t).apply("linkPropertiesChanged")
+        val event = only(t)
+        assertEquals("failed", event["mode"])
+        assertEquals(false, event["rebind"])
+        assertEquals("java.lang.IllegalStateException", event["error"])
+        assertEquals(listOf("event", "failed(linkPropertiesChanged)"), t.calls)
+    }
+
+    @Test
+    fun aThrowingValidationWaitIsRetriedWithTheSameReason() = runTest {
+        val t = FakeTarget().apply { throwFrom = "awaitValidated" }
+        RebindApplier(t).apply("available")
+        assertEquals("failed", only(t)["mode"])
+        assertEquals("failed(available)", t.calls.last())
+    }
+
+    @Test
+    fun aStartThatThrewCountsAsAFailedAttempt() = runTest {
+        val t = FakeTarget().apply { bridge = false; startResult = false; startThrew = true }
+        RebindApplier(t).apply("available")
+        assertEquals("start-failed", only(t)["mode"])
+        assertEquals(listOf("start(available)", "event", "failed(retry)"), t.calls)
+        assertEquals(0, t.resets)
+    }
+
+    @Test
+    fun aRestartThatThrewCountsAsAFailedAttempt() = runTest {
+        val t = FakeTarget().apply { startResult = false; startThrew = true }
+        RebindApplier(t).apply("config")
+        assertEquals("restart-failed", only(t)["mode"])
+        assertEquals(listOf("stop", "start(config)", "event", "failed(retry)"), t.calls)
+    }
+
+    @Test
+    fun aStartWithoutWifiIsNotAFailure() = runTest {
+        val t = FakeTarget().apply { bridge = false; startResult = false; startThrew = false }
+        RebindApplier(t).apply("available")
+        assertEquals(listOf("start(available)", "event", "retry"), t.calls)
+        assertEquals(1, t.resets)
+    }
+
+    @Test
+    fun aSuccessfulMoveEndsTheRunOfFailures() = runTest {
+        val t = FakeTarget().apply { network = this@RebindApplierTest.network }
+        RebindApplier(t).apply("available")
+        assertEquals(1, t.resets)
+    }
+
+    @Test
+    fun aSuccessfulStartEndsTheRunOfFailures() = runTest {
+        val t = FakeTarget().apply { bridge = false }
+        RebindApplier(t).apply("available")
+        assertEquals(1, t.resets)
+    }
+
+    @Test
+    fun noWifiEndsTheRunOfFailures() = runTest {
+        val t = FakeTarget().apply { wifi = null }
+        RebindApplier(t).apply("lost")
+        assertEquals(1, t.resets)
+    }
+
+    @Test
+    fun aCancellationIsRethrownAndNotCounted() = runTest {
+        val t = FakeTarget().apply { throwFrom = "awaitValidated"; thrown = CancellationException("cancelled") }
+        assertFailsWith<CancellationException> { RebindApplier(t).apply("available") }
+        assertFalse(t.calls.any { it.startsWith("failed(") }, "calls: ${t.calls}")
+        assertTrue(t.events.isEmpty(), "no event for a cancellation: ${t.events}")
     }
 }
