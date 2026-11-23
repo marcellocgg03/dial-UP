@@ -411,7 +411,11 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         lastStartThrew = !completed
         consecutiveBindFailures = if (lastStartBindFailure) consecutiveBindFailures + 1 else 0
         val running = bridge != null
-        if (running) failureBudget.reset()
+        if (running) {
+            failureBudget.reset()
+            // a start after the author switched the bridge on again removes the not-running notice
+            BridgeDownNotifier(h.context).cancel()
+        }
         return running
     }
 
@@ -442,9 +446,16 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         }
     }
 
-    /** The bridge has failed [BRIDGE_FAILURE_LIMIT] times in a row: say so once in the log and stop retrying. */
+    /**
+     * The bridge has failed [BRIDGE_FAILURE_LIMIT] times in a row: says so once (log line and the not-running notice), then sets
+     * the saved switch off, so the Enable switch shows the real state and the service stops; nothing retries after this.
+     * [BridgeControl.setEnabled] persists on the settings writer and returns at once.
+     */
     private fun giveUp(h: SpikeHost, reason: String) {
-        h.evidence.event("bridge-error", mapOf("where" to "gave-up", "attempts" to failureBudget.attempts, "reason" to reason))
+        val attempts = failureBudget.attempts
+        h.evidence.event("bridge-error", mapOf("where" to "gave-up", "attempts" to attempts, "reason" to reason))
+        BridgeDownNotifier(h.context).notify(attempts)
+        BridgeControl.setEnabled(h.context, false, "start-failed")
     }
 
     /** Call with the lifecycle lock held, off the main thread. */
