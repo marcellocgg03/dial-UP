@@ -32,6 +32,8 @@ object AppUpdates {
                 channel = { AppSettings.of(app).data.value.updateChannel },
                 // the check outlives any screen that asked for it; the client's 20 s call timeout bounds it
                 scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+                // the screens build this on the main thread; the record file is read on IO by the model's own scope
+                loadContext = Dispatchers.IO,
             )
             instance = created
             return created
