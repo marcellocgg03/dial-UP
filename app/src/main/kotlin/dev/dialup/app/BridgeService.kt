@@ -15,6 +15,7 @@ import dev.dialup.app.model.startWanted
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -210,7 +211,9 @@ class BridgeService : Service(), SpikeHost {
             stopSelf()
             return false
         }
-        NetworkResume.disarm(this)
+        // The armed flag is a SharedPreferences read: in a fresh process (boot, sticky restart) the first one waits for the file, so
+        // it must not run on the main thread. ATOMIC: a stop right after the start cannot cancel it before it has run.
+        scope.launch(start = CoroutineStart.ATOMIC) { NetworkResume.disarm(this@BridgeService) }
         acquireLocks()
         // published only now: currentState() and heartbeatFields() read the lateinit locks that acquireLocks() sets
         ServiceHub.service = this
