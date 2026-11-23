@@ -57,6 +57,10 @@ interface SsdpClientEvents {
     fun onError(where: String, t: Throwable) {}
 }
 
+/**
+ * The SSDP search client. A receive error that is not a timeout does not end the search: the loop waits a short
+ * back-off and listens again, and reports only the first failure of a run (ssdp.js line 80 only logs it and keeps its socket).
+ */
 class Ssdp(
     private val searchBinds: List<InetAddress>,
     private val events: SsdpClientEvents,
@@ -162,15 +166,27 @@ class Ssdp(
 
     private fun receiveLoop(s: SearchSocket) {
         val buf = ByteArray(8192)
+        var failures = 0
         while (running && !s.socket.isClosed) {
             val packet = DatagramPacket(buf, buf.size)
             try {
                 s.socket.receive(packet)
+                failures = 0
             } catch (_: SocketTimeoutException) {
+                failures = 0
                 continue
             } catch (t: Throwable) {
-                if (running && !s.socket.isClosed) events.onError("receive:${s.bind.hostAddress}", t)
-                break
+                // a stop is in progress: leave without a report
+                if (!running || s.socket.isClosed) break
+                failures++
+                // one report per run of failures, so a flapping socket cannot flood the event log
+                if (failures == 1) events.onError("receive:${s.bind.hostAddress}", t)
+                try {
+                    Thread.sleep(backoffFor(failures))
+                } catch (_: InterruptedException) {
+                    break
+                }
+                continue
             }
             try {
                 val src = InetSocketAddress(packet.address, packet.port)
@@ -182,5 +198,12 @@ class Ssdp(
                 events.onError("handle:${s.bind.hostAddress}", t)
             }
         }
+    }
+
+    /** [receiveBackoffMs] doubled per failure of the run, never above [MAX_RECEIVE_BACKOFF_MS]. */
+    private fun backoffFor(failures: Int): Long {
+        var wait = receiveBackoffMs.coerceAtLeast(1)
+        repeat(failures - 1) { if (wait < MAX_RECEIVE_BACKOFF_MS) wait *= 2 }
+        return wait.coerceAtMost(MAX_RECEIVE_BACKOFF_MS)
     }
 }
