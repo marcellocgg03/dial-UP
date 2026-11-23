@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
+import dev.dialup.app.model.startWanted
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -31,9 +32,15 @@ class BootReceiver : BroadcastReceiver() {
         val pending = goAsync()
         val app = context.applicationContext
         BridgeLifecycle.scope.launchFinishing({ pending.finish() }) {
-            val enabled = AppSettings.of(app).data.value.bridgeEnabled
-            if (!enabled) {
+            val switchOn = AppSettings.of(app).data.value.bridgeEnabled
+            if (!switchOn) {
                 Log.i(TAG, "boot: the bridge is switched off in the app; not started")
+                return@launchFinishing
+            }
+            // a trace left by a process that died in the middle of a restart or update is cleared by this first touch
+            val enabled = startWanted(switchOn, MaintenanceMarker.isActive(app))
+            if (!enabled) {
+                Log.i(TAG, "boot: a restart or update is in progress; the bridge starts when it ends")
                 return@launchFinishing
             }
             val exempt = BatteryGate.isOpen(app)

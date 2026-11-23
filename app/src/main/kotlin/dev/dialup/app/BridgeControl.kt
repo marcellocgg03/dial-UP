@@ -63,7 +63,10 @@ object BridgeControl {
     fun resumeAfterNetwork(context: Context) {
         val app = context.applicationContext
         if (ServiceHub.service != null) return
-        if (!AppSettings.of(app).data.value.bridgeEnabled || !BatteryGate.isOpen(app)) {
+        // a restart or update in progress: its end makes the start decision itself, and the callback stays armed
+        val enabled = AppSettings.of(app).data.value.bridgeEnabled
+        if (enabled && MaintenanceMarker.isActive(app)) return
+        if (!enabled || !BatteryGate.isOpen(app)) {
             NetworkResume.disarm(app)
             return
         }
@@ -134,7 +137,8 @@ object BridgeControl {
             startWhenStopped(
                 awaitGone = { awaitServiceGone() },
                 stillWanted = {
-                    AppSettings.of(app).data.value.bridgeEnabled && BatteryGate.isOpen(app) && ServiceHub.service == null
+                    startWanted(AppSettings.of(app).data.value.bridgeEnabled, MaintenanceMarker.isActive(app)) &&
+                        BatteryGate.isOpen(app) && ServiceHub.service == null
                 },
                 start = { if (hasBindableNetwork(app)) startService(app) else NetworkResume.arm(app) },
             )

@@ -10,6 +10,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.util.Log
 import dev.dialup.app.model.YtDlpJobAction
+import dev.dialup.app.model.startWanted
 import dev.dialup.app.model.ytdlpJobAction
 import dev.t2u.media.YtDlpUpdater
 import kotlinx.coroutines.CancellationException
@@ -93,7 +94,9 @@ class YtDlpUpdateJobService : JobService() {
         val cast = ServiceHub.cast.value
         val serviceUp = ServiceHub.service != null && cast != null
         val casting = cast?.castCount?.value?.casting ?: 0
-        val action = ytdlpJobAction(settings.data.value.bridgeEnabled && settings.data.value.ytdlpAutoUpdate, serviceUp, casting)
+        // the switch stays on while an Update now holds the bridge stopped: the marker keeps the daily job from running over it
+        val wanted = startWanted(settings.data.value.bridgeEnabled, MaintenanceMarker.isActive(this))
+        val action = ytdlpJobAction(wanted && settings.data.value.ytdlpAutoUpdate, serviceUp, casting)
         val log = ServiceHub.service?.evidence ?: offlineEvidence(filesDir)
         log.event("ytdlp-job", mapOf("action" to action.wire))
         when (action) {

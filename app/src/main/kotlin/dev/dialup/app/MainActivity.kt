@@ -24,6 +24,7 @@ import dev.dialup.app.model.PermissionState
 import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.notificationGrantAction
 import dev.dialup.app.model.startDecision
+import dev.dialup.app.model.startWanted
 import dev.dialup.app.ui.MainScreen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -163,7 +164,8 @@ class MainActivity : ComponentActivity() {
         val app = applicationContext
         BridgeLifecycle.scope.launch {
             val enabled = AppSettings.of(app).data.value.bridgeEnabled
-            when (startDecision(enabled, BatteryGate.isOpen(app), ServiceHub.service != null, hasBindableNetwork(app))) {
+            val wanted = startWanted(enabled, MaintenanceMarker.isActive(app))
+            when (startDecision(wanted, BatteryGate.isOpen(app), ServiceHub.service != null, hasBindableNetwork(app))) {
                 StartDecision.START -> try {
                     ContextCompat.startForegroundService(app, Intent(app, BridgeService::class.java))
                 } catch (t: Throwable) {
