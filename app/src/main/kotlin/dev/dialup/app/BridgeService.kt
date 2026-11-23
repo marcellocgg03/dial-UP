@@ -65,6 +65,10 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wifiLock: WifiManager.WifiLock
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
+
+    /** The three locks behind one monitor; null until [acquireLocks] has created them (a denied or failed start never does). */
+    @Volatile
+    private var heldLocks: HeldLocks? = null
     private val playLocks = LockPolicy(clock = SystemClock::elapsedRealtime)
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
@@ -221,8 +225,9 @@ class BridgeService : Service(), SpikeHost {
         notifier.cancel()
         ServiceHub.cast.value = null
         stopFeatures()
-        releaseLocks()
+        // the scope goes first: a heartbeat or cast-count tick must not re-acquire a lock the release has just dropped
         scope.cancel()
+        releaseLocks()
         ServiceHub.service = null
         evidence.flush()
         super.onDestroy()
@@ -289,6 +294,36 @@ class BridgeService : Service(), SpikeHost {
 
         mcastLock.acquire()
         evidence.event("lock", mapOf("name" to "t2u:mcast", "mode" to "multicast", "isHeld" to mcastLock.isHeld, "reason" to "service"))
+        heldLocks =
+            HeldLocks(
+                mcast = object : HeldLock {
+                    override val name = "t2u:mcast"
+                    override val mode = "multicast"
+                    override val isHeld get() = mcastLock.isHeld
+
+                    override fun acquire() = mcastLock.acquire()
+
+                    override fun release() = mcastLock.release()
+                },
+                wifi = object : HeldLock {
+                    override val name = "t2u:wifi"
+                    override val mode = modeName
+                    override val isHeld get() = wifiLock.isHeld
+
+                    override fun acquire() = wifiLock.acquire()
+
+                    override fun release() = wifiLock.release()
+                },
+                wake = object : HeldLock {
+                    override val name = "t2u:cpu"
+                    override val mode = "PARTIAL_WAKE_LOCK"
+                    override val isHeld get() = wakeLock.isHeld
+
+                    override fun acquire() = wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
+
+                    override fun release() = wakeLock.release()
+                },
+            ) { kind, fields -> evidence.event(kind, fields) }
     }
 
     /**
@@ -297,46 +332,14 @@ class BridgeService : Service(), SpikeHost {
      * [WAKE_LOCK_TIMEOUT_MS] and is re-armed on every call while held (reference counting is off), so
      * a stuck loop cannot keep the CPU awake for ever. Only transitions are logged.
      */
-    @Synchronized
     private fun applyPlayLocks(hold: Boolean, reason: String) {
-        // a denied or failed start never created the locks
-        if (!::wifiLock.isInitialized || !::wakeLock.isInitialized) return
-        if (hold) {
-            if (!wifiLock.isHeld) {
-                wifiLock.acquire()
-                evidence.event(
-                    "lock",
-                    mapOf("name" to "t2u:wifi", "mode" to wifiLockMode, "isHeld" to wifiLock.isHeld, "reason" to "casting"),
-                )
-            }
-            val wakeWasHeld = wakeLock.isHeld
-            wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
-            if (!wakeWasHeld) {
-                evidence.event(
-                    "lock",
-                    mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld, "reason" to "casting"),
-                )
-            }
-        } else if (wifiLock.isHeld || wakeLock.isHeld) {
-            releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() }, "idle-grace")
-            releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() }, "idle-grace")
-        }
+        // null: a denied or failed start never created the locks
+        heldLocks?.apply(hold, reason)
     }
 
+    /** Releases every lock and keeps them released: a later [applyPlayLocks] acquires nothing. Call after the scope is cancelled. */
     private fun releaseLocks() {
-        // a denied or failed start never created the locks
-        if (::mcastLock.isInitialized) releaseOne("t2u:mcast", { mcastLock.isHeld }, { mcastLock.release() })
-        if (::wifiLock.isInitialized) releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() })
-        if (::wakeLock.isInitialized) releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
-    }
-
-    private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit, reason: String = "service-stop") {
-        try {
-            if (isHeld()) release()
-        } catch (t: Throwable) {
-            evidence.event("feature-error", mapOf("where" to "release:$name", "error" to t.javaClass.name, "message" to t.message))
-        }
-        evidence.event("lock", mapOf("name" to name, "isHeld" to isHeld(), "reason" to reason))
+        heldLocks?.releaseAll()
     }
 
     // ----- wifi helpers --------------------------------------------------------------------------
