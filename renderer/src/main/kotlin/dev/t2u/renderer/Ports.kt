@@ -36,13 +36,15 @@ private val prettyJson = Json { prettyPrint = true }
  * [warn] receives one line per problem (unreadable file, wrong shape, dropped entries,
  * failed write). It is never used for control flow and nothing here throws on bad files.
  *
- * [maxSaved] bounds the remembered entries; [Int.MAX_VALUE] never drops one. [clock] is epoch ms (a test seam).
+ * [maxSaved] bounds the remembered entries; [Int.MAX_VALUE] never drops one. [clock] is epoch ms and [writeText] writes the
+ * file (both test seams; [writeText] sits before [warn] so a trailing lambda at a call site still binds [warn]).
  */
 class PortRegistry(
     private val dataDir: File,
     private val basePort: Int = 3000,
     private val maxSaved: Int = MAX_SAVED,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val writeText: (File, String) -> Unit = { f, text -> writeTextAtomic(f, text, AtomicWriteOptions.RENDERER) },
     private val warn: (String) -> Unit = {},
 ) {
     companion object {
@@ -198,7 +200,7 @@ class PortRegistry(
             try {
                 withContext(Dispatchers.IO) {
                     val json = JsonObject(snapshot.mapValues { JsonPrimitive(it.value) })
-                    writeTextAtomic(file, prettyJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
+                    writeText(file, prettyJson.encodeToString(JsonObject.serializer(), json))
                 }
             } catch (e: IOException) {
                 synchronized(lock) { orderDirty = true }
