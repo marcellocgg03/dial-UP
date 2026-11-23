@@ -136,9 +136,10 @@ class AppUpdateModelTest {
         var fetches = 0
         var saved: UpdateRecord = initial
         var gate: CompletableDeferred<Unit>? = null
+        var failure: Throwable? = null
         fun model(scope: CoroutineScope) = AppUpdateModel(
             "0.9.0-beta.1",
-            fetch = { fetches++; gate?.await(); result },
+            fetch = { fetches++; gate?.await(); failure?.let { throw it }; result },
             load = { saved },
             save = { saved = it },
             wallMs = { now },
@@ -184,6 +185,65 @@ class AppUpdateModelTest {
         env.gate!!.complete(Unit)
         val o = b.await()
         assertEquals("v0.9.0", (o as CheckOutcome.Newer).release.tag)
+        assertEquals(1, env.fetches)
+    }
+
+    @Test
+    fun theCheckFinishesAfterItsOnlyCallerLeft() = runTest {
+        val env = Env(result = FetchResult.Body(list("v0.9.0")))
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = launch { m.checkNow() }
+        testScheduler.runCurrent()
+        assertTrue(m.state.value.checking)
+        a.cancel()
+        testScheduler.runCurrent()
+        assertTrue(m.state.value.checking)
+        env.gate!!.complete(Unit)
+        testScheduler.runCurrent()
+        assertEquals(1, env.fetches)
+        assertFalse(m.state.value.checking)
+        assertEquals(env.now, env.saved.lastCheckWallMs)
+        assertEquals("v0.9.0", env.saved.latestTag)
+        // nobody was waiting, so no manual outcome was recorded
+        assertNull(m.state.value.outcome)
+    }
+
+    @Test
+    fun aFailedCheckReachesEveryWaiter() = runTest {
+        val env = Env()
+        env.gate = CompletableDeferred()
+        env.failure = IllegalStateException("boom")
+        val m = env.model(backgroundScope)
+        val a = async { runCatching { m.checkNow() } }
+        val b = async { runCatching { m.checkNow() } }
+        testScheduler.runCurrent()
+        env.gate!!.complete(Unit)
+        val ra = a.await().exceptionOrNull()
+        val rb = b.await().exceptionOrNull()
+        assertTrue(ra is IllegalStateException, "first waiter got $ra")
+        assertTrue(rb is IllegalStateException, "second waiter got $rb")
+        assertEquals(1, env.fetches)
+        assertFalse(m.state.value.checking)
+        // the next check starts a new request: the failure was not kept
+        env.failure = null
+        env.gate = null
+        assertEquals(CheckOutcome.UpToDate(null), m.checkNow())
+        assertEquals(2, env.fetches)
+    }
+
+    @Test
+    fun anAutomaticCheckJoinsARunningCheckNow() = runTest {
+        val env = Env()
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = async { m.checkNow() }
+        testScheduler.runCurrent()
+        val b = async { m.autoCheck(true) }
+        testScheduler.runCurrent()
+        env.gate!!.complete(Unit)
+        val oa = a.await()
+        assertEquals(oa, b.await())
         assertEquals(1, env.fetches)
     }
 
