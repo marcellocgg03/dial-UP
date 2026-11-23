@@ -3,6 +3,7 @@
 package dev.dialup.app.model
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -122,50 +123,55 @@ class BridgeToggleTest {
     }
 
     @Test
-    fun `the restart switches off, waits for the stop, then switches on`() = runTest {
+    fun `the restart stops, waits for the stop, then resumes`() = runTest {
         val calls = mutableListOf<String>()
         val ok = restartSequence(
-            setEnabled = { calls += "set:$it" },
+            stop = { calls += "stop" },
             awaitStopped = { calls += "await"; true },
+            resume = { calls += "resume" },
         )
-        assertEquals(listOf("set:false", "await", "set:true"), calls)
+        assertEquals(listOf("stop", "await", "resume"), calls)
         assertTrue(ok)
     }
 
     @Test
-    fun `a timeout while waiting for the stop still switches on and reports false`() = runTest {
+    fun `a timeout while waiting for the stop still resumes and reports false`() = runTest {
         val calls = mutableListOf<String>()
         val ok = restartSequence(
-            setEnabled = { calls += "set:$it" },
+            stop = { calls += "stop" },
             awaitStopped = { calls += "await"; false },
+            resume = { calls += "resume" },
         )
-        assertEquals(listOf("set:false", "await", "set:true"), calls)
+        assertEquals(listOf("stop", "await", "resume"), calls)
         assertFalse(ok)
     }
 
     @Test
-    fun `a cancelled restart still switches on`() = runTest {
-        val calls = mutableListOf<Boolean>()
+    fun `a cancelled restart still resumes`() = runTest {
+        val calls = mutableListOf<String>()
         val job = launch {
             restartSequence(
-                setEnabled = { calls += it },
+                stop = { calls += "stop" },
                 awaitStopped = { awaitCancellation() },
+                resume = { calls += "resume" },
             )
         }
         runCurrent()
         job.cancel()
         advanceUntilIdle()
-        assertEquals(listOf(false, true), calls)
+        assertEquals(listOf("stop", "resume"), calls)
+        assertTrue(job.isCancelled, "the cancellation is rethrown after the resume")
     }
 
     @Test
     fun `a restart started on another scope outlives its caller`() = runTest {
-        val calls = mutableListOf<Boolean>()
+        val calls = mutableListOf<String>()
         val flight = SingleFlight<Boolean>()
         val deferred = flight.launch(backgroundScope) {
             restartSequence(
-                setEnabled = { calls += it },
+                stop = { calls += "stop" },
                 awaitStopped = { delay(5_000); true },
+                resume = { calls += "resume" },
             )
         }
         val caller = launch { deferred.await() }
@@ -174,7 +180,85 @@ class BridgeToggleTest {
         advanceTimeBy(6_000)
         runCurrent()
         assertTrue(deferred.isCompleted)
-        assertEquals(listOf(false, true), calls)
+        assertEquals(listOf("stop", "resume"), calls)
+    }
+
+    /** The shape BridgeControl gives StoppedWork: stop, wait, run the body only when the bridge stopped, resume. */
+    private class FakeBridge(private val stops: Boolean = true) {
+        val calls = mutableListOf<String>()
+
+        suspend fun around(body: suspend () -> Unit): Boolean = restartSequence(
+            stop = { calls += "stop" },
+            awaitStopped = { delay(100); if (stops) body(); stops },
+            resume = { calls += "resume" },
+        )
+    }
+
+    @Test
+    fun aSecondCallerJoinsTheFirstAndGetsItsResult() = runTest {
+        val fake = FakeBridge()
+        val work = StoppedWork(backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        var ranB = false
+        val a = async { work.run(fake::around) { gate.await(); "A" } }
+        runCurrent()
+        assertTrue(work.active)
+        val b = async { work.run(fake::around) { ranB = true; "B" } }
+        runCurrent()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("A", a.await())
+        assertEquals("A", b.await())
+        assertFalse(ranB, "the joiner's own block never runs")
+        assertEquals(listOf("stop", "resume"), fake.calls, "the bridge is stopped once")
+        assertFalse(work.active)
+    }
+
+    @Test
+    fun whenTheBridgeDidNotStopBothCallersGetTheSameFailure() = runTest {
+        val fake = FakeBridge(stops = false)
+        val work = StoppedWork(backgroundScope)
+        var ran = 0
+        val a = async { runCatching { work.run(fake::around) { ran++; "A" } } }
+        runCurrent()
+        val b = async { runCatching { work.run(fake::around) { ran++; "B" } } }
+        advanceUntilIdle()
+        for (r in listOf(a.await(), b.await())) {
+            val e = r.exceptionOrNull()
+            assertTrue(e is IllegalStateException, "got $e")
+            assertEquals("the bridge did not stop", e.message)
+        }
+        assertEquals(0, ran)
+        assertEquals(listOf("stop", "resume"), fake.calls)
+    }
+
+    @Test
+    fun aBlockThatThrowsReachesEveryCallerAndTheBridgeStillResumes() = runTest {
+        val fake = FakeBridge()
+        val work = StoppedWork(backgroundScope)
+        val gate = CompletableDeferred<Unit>()
+        val a = async { runCatching { work.run<String>(fake::around) { gate.await(); throw IllegalArgumentException("boom") } } }
+        runCurrent()
+        val b = async { runCatching { work.run(fake::around) { "B" } } }
+        runCurrent()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        for (r in listOf(a.await(), b.await())) {
+            val e = r.exceptionOrNull()
+            assertTrue(e is IllegalArgumentException, "got $e")
+            assertEquals("boom", e.message)
+        }
+        assertEquals(listOf("stop", "resume"), fake.calls)
+    }
+
+    @Test
+    fun aCallAfterTheFlightEndedRunsItsOwnBlock() = runTest {
+        val fake = FakeBridge()
+        val work = StoppedWork(backgroundScope)
+        assertEquals("A", work.run(fake::around) { "A" })
+        assertFalse(work.active)
+        assertEquals("B", work.run(fake::around) { "B" })
+        assertEquals(listOf("stop", "resume", "stop", "resume"), fake.calls)
     }
 
     @Test
