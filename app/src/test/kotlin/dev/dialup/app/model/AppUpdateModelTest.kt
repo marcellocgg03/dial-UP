@@ -3,7 +3,9 @@
 package dev.dialup.app.model
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -134,19 +136,20 @@ class AppUpdateModelTest {
         var fetches = 0
         var saved: UpdateRecord = initial
         var gate: CompletableDeferred<Unit>? = null
-        fun model() = AppUpdateModel(
+        fun model(scope: CoroutineScope) = AppUpdateModel(
             "0.9.0-beta.1",
             fetch = { fetches++; gate?.await(); result },
             load = { saved },
             save = { saved = it },
             wallMs = { now },
+            scope = scope,
         )
     }
 
     @Test
     fun checkNowRunsEvenWithAutoOffAndRecordsTheResult() = runTest {
         val env = Env(result = FetchResult.Body(list("v0.9.0")))
-        val m = env.model()
+        val m = env.model(backgroundScope)
         val o = m.checkNow()
         assertEquals("v0.9.0", (o as CheckOutcome.Newer).release.tag)
         assertEquals(1, env.fetches)
@@ -160,7 +163,7 @@ class AppUpdateModelTest {
     fun twoCheckNowAtOnceShareOneRequest() = runTest {
         val env = Env()
         env.gate = CompletableDeferred()
-        val m = env.model()
+        val m = env.model(backgroundScope)
         val a = async { m.checkNow() }
         val b = async { m.checkNow() }
         testScheduler.runCurrent()
@@ -170,9 +173,24 @@ class AppUpdateModelTest {
     }
 
     @Test
+    fun aCallerThatLeavesDoesNotFailTheOneWaitingWithIt() = runTest {
+        val env = Env(result = FetchResult.Body(list("v0.9.0")))
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = launch { m.checkNow() }
+        val b = async { m.checkNow() }
+        testScheduler.runCurrent()
+        a.cancel()
+        env.gate!!.complete(Unit)
+        val o = b.await()
+        assertEquals("v0.9.0", (o as CheckOutcome.Newer).release.tag)
+        assertEquals(1, env.fetches)
+    }
+
+    @Test
     fun autoCheckIsSilentAndThrottled() = runTest {
         val env = Env(result = FetchResult.Body(list("v0.9.0")))
-        val m = env.model()
+        val m = env.model(backgroundScope)
         assertNull(m.autoCheck(false))
         assertEquals(0, env.fetches)
         assertTrue(m.autoCheck(true) is CheckOutcome.Newer)
@@ -190,7 +208,7 @@ class AppUpdateModelTest {
     @Test
     fun aRateLimitedAnswerRecordsTheAttemptButNotACheck() = runTest {
         val env = Env(UpdateRecord(5L, 5L, "v0.8.0", null), FetchResult.RateLimited)
-        val m = env.model()
+        val m = env.model(backgroundScope)
         assertEquals(CheckOutcome.RateLimited, m.checkNow())
         assertEquals(5L, m.state.value.record.lastCheckWallMs)
         assertEquals(env.now, m.state.value.record.lastAttemptWallMs)
