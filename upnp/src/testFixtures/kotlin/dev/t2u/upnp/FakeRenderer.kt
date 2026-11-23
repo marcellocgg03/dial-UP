@@ -86,8 +86,12 @@ class FakeRenderer(
     private val startDelayMs: Long = 0,
     /** One short line per control call that matters to a start-failure test; never a URL or a DIDL body. Null: silent. */
     private val log: ((String) -> Unit)? = null,
-    /** Opt-in: GetPositionInfo answers a RelTime that follows play time instead of the constant 0:01:05 (the LAN runner). */
-    @Suppress("unused") private val relTimeFollowsPlay: Boolean = false,
+    /**
+     * Opt-in (the LAN runner): GetPositionInfo answers a RelTime that follows play time (it counts while PLAYING, freezes on
+     * Pause, starts at a SOAP Seek target and at 0 for a new SetAVTransportURI) instead of the constant 0:01:05 the JVM tests
+     * pin. A [FakeState.relTime] a test sets by hand still wins.
+     */
+    private val relTimeFollowsPlay: Boolean = false,
 ) : AutoCloseable {
     val calls: MutableList<FakeCall> = CopyOnWriteArrayList()
 
@@ -122,6 +126,10 @@ class FakeRenderer(
     private val playGeneration = AtomicInteger()
     private val transportLock = Any()
     private var timer: ScheduledExecutorService? = null
+
+    // The play-time clock behind relTimeFollowsPlay; only touched under transportLock.
+    private var relBaseMs = 0L
+    private var playingSinceNs: Long? = null
 
     /** http://<bindHost>:<port>/desc.xml, valid after [start]. */
     val location: String get() = "http://$bindHost:$port/desc.xml"
@@ -206,6 +214,7 @@ class FakeRenderer(
                 state.currentUri = unescape(tag(body, "CurrentURI"))
                 state.currentMetaData = unescape(tag(body, "CurrentURIMetaData"))
                 playGeneration.incrementAndGet()
+                resetRelClock()
                 log?.invoke("SetAVTransportURI mime=${mimeOfDidl(state.currentMetaData) ?: "unknown"}")
             }
             "SetNextAVTransportURI" -> state.nextUri = unescape(tag(body, "NextURI"))
@@ -213,20 +222,28 @@ class FakeRenderer(
             "Stop" -> synchronized(transportLock) {
                 playGeneration.incrementAndGet()
                 state.transport = "STOPPED"
+                resetRelClock()
                 log?.invoke("Stop")
             }
             // A real speaker that takes a REL_TIME Seek reports a RelTime at the target afterwards (plan 03-16).
             "Seek" -> {
                 val target = Regex("^(\\d+):(\\d+):(\\d+)").find(tag(body, "Target"))
+                var seekedTo: String? = null
                 if (target != null) {
                     val (h, min, sec) = target.destructured
-                    state.relTime = "%d:%02d:%02d".format(h.toInt(), min.toInt(), sec.toInt())
+                    seekedTo = "%d:%02d:%02d".format(h.toInt(), min.toInt(), sec.toInt())
+                    if (relTimeFollowsPlay) {
+                        seekRelClock((h.toLong() * 3600 + min.toLong() * 60 + sec.toLong()) * 1000)
+                    } else {
+                        state.relTime = seekedTo
+                    }
                 }
-                log?.invoke(if (target != null) "Seek to ${state.relTime}" else "Seek")
+                log?.invoke(if (seekedTo != null) "Seek to $seekedTo" else "Seek")
             }
             "Pause" -> synchronized(transportLock) {
                 playGeneration.incrementAndGet()
                 state.transport = "PAUSED_PLAYBACK"
+                foldRelClock()
             }
             "SetVolume" -> tag(body, "DesiredVolume").toIntOrNull()?.let { state.volume = it }
             "SetMute" -> state.mute = tag(body, "DesiredMute").let { it == "1" || it.equals("true", ignoreCase = true) }
@@ -236,7 +253,7 @@ class FakeRenderer(
             "GetPositionInfo" ->
                 out = "<TrackDuration>${state.trackDuration ?: "0:03:30"}</TrackDuration>" +
                     "<TrackURI>${xmlText(state.reportedUri ?: state.currentUri)}</TrackURI>" +
-                    "<RelTime>${state.relTime ?: "0:01:05"}</RelTime>" +
+                    "<RelTime>${state.relTime ?: if (relTimeFollowsPlay) followedRelTime() else "0:01:05"}</RelTime>" +
                     "<TrackMetaData>${xmlText(state.trackMetaData ?: state.currentMetaData)}</TrackMetaData>"
             "GetMediaInfo" -> out = "<CurrentURI>${xmlText(state.currentUri)}</CurrentURI>"
             "GetVolume" -> out = "<CurrentVolume>${state.volume}</CurrentVolume>"
@@ -265,6 +282,7 @@ class FakeRenderer(
             val startedAt = System.nanoTime()
             fun reached() {
                 state.transport = "PLAYING"
+                if (playingSinceNs == null) playingSinceNs = System.nanoTime()
                 log?.invoke("PLAYING reached ${(System.nanoTime() - startedAt) / 1_000_000} ms after Play")
             }
             when {
@@ -295,6 +313,29 @@ class FakeRenderer(
                 }
             }
         }
+    }
+
+    private fun resetRelClock() = synchronized(transportLock) {
+        relBaseMs = 0
+        playingSinceNs = null
+    }
+
+    /** Pause: what has played so far becomes the base and the clock stops. */
+    private fun foldRelClock() {
+        playingSinceNs?.let { relBaseMs += (System.nanoTime() - it) / 1_000_000 }
+        playingSinceNs = null
+    }
+
+    /** A SOAP Seek: the count restarts at the target, running on if the speaker is playing. */
+    private fun seekRelClock(targetMs: Long) = synchronized(transportLock) {
+        relBaseMs = targetMs
+        if (playingSinceNs != null) playingSinceNs = System.nanoTime()
+    }
+
+    private fun followedRelTime(): String = synchronized(transportLock) {
+        val playedMs = relBaseMs + (playingSinceNs?.let { (System.nanoTime() - it) / 1_000_000 } ?: 0L)
+        val total = playedMs / 1000
+        "%d:%02d:%02d".format(total / 3600, total / 60 % 60, total % 60)
     }
 
     private fun tag(body: String, name: String): String =
