@@ -163,11 +163,10 @@ class BridgeService : Service(), SpikeHost {
         if (startForegroundFailed) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
             evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
-            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on
-            AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
-            evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
-            NetworkResume.disarm(this)
-            stopSelf()
+            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on. The persist, the
+            // settings event, the disarm and this service's stop run as one task on the settings writer, which outlives the service
+            // scope that onDestroy cancels: the write is not lost and the service stops only after it.
+            BridgeControl.setEnabled(this, false, "notification", alsoStop = this)
             return START_NOT_STICKY
         }
         if (!bootstrapped) {

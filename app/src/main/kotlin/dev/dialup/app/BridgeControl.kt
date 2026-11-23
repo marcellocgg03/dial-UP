@@ -2,6 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app
 
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.util.Log
@@ -12,6 +13,7 @@ import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.restartSequence
 import dev.dialup.app.model.startDecision
 import dev.dialup.app.model.startWhenStopped
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -22,31 +24,39 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 object BridgeControl {
     /**
-     * Persists the switch and applies it. On: starts the service when the battery exemption is held and it is
-     * not already running. Off: stops the running service, which stops discovery, DIAL, the media server,
-     * polling and the locks with it. [source] (ui, restart) goes into the `settings` event.
+     * Persists the switch and applies it, as one task on [SettingsWriter]: the persist and the start or stop run on the settings
+     * writer thread in that order, never on the caller's thread, and this returns at once (the [Job] is for callers that want to
+     * wait). The start decision comes after the persist in the same task, so the service bootstrap, which reads the switch
+     * again, never sees the old value. On: starts the service when the battery exemption is held and it is not already
+     * running. Off: stops the running service, which stops discovery, DIAL, the media server, polling and the locks with it.
+     * [source] (ui, restart) goes into the `settings` event. [alsoStop] is a service that must stop after the persist even
+     * when it is not the published one (the notification Stop passes the instance that received the intent).
      */
-    fun setEnabled(context: Context, on: Boolean, source: String) {
+    fun setEnabled(context: Context, on: Boolean, source: String, alsoStop: Service? = null): Job {
         val app = context.applicationContext
-        AppSettings.of(app).update { it.copy(bridgeEnabled = on) }
-        // On while the old service is still being destroyed (a quick off-then-on flip): the start waits for it
-        val deferred = on && ServiceHub.service != null
-        val details = mutableMapOf<String, Any?>("bridgeEnabled" to on, "source" to source)
-        if (deferred) details["deferred"] = true
-        ServiceHub.service?.evidence?.event("settings", details)
-        if (on) {
-            if (deferred) {
-                startAfterStop(app)
-            } else {
-                when (startDecision(true, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
-                    StartDecision.START -> startService(app)
-                    StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
-                    StartDecision.NONE -> Unit
+        return SettingsWriter.post {
+            AppSettings.of(app).update { it.copy(bridgeEnabled = on) }
+            // On while the old service is still being destroyed (a quick off-then-on flip): the start waits for it
+            val deferred = on && ServiceHub.service != null
+            val details = mutableMapOf<String, Any?>("bridgeEnabled" to on, "source" to source)
+            if (deferred) details["deferred"] = true
+            // the instance that got the notification intent logs it, which may not be the published one
+            ((alsoStop as? BridgeService)?.evidence ?: ServiceHub.service?.evidence)?.event("settings", details)
+            if (on) {
+                if (deferred) {
+                    startAfterStop(app)
+                } else {
+                    when (startDecision(true, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
+                        StartDecision.START -> startService(app)
+                        StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
+                        StartDecision.NONE -> Unit
+                    }
                 }
+            } else {
+                NetworkResume.disarm(app)
+                ServiceHub.service?.stopSelf()
+                alsoStop?.stopSelf()
             }
-        } else {
-            NetworkResume.disarm(app)
-            ServiceHub.service?.stopSelf()
         }
     }
 
