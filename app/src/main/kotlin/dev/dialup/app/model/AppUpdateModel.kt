@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -184,18 +185,25 @@ class AppUpdateModel(
     }
 
     private fun flight(): Deferred<CheckOutcome> = synchronized(lock) {
-        inflight ?: scope.async(start = CoroutineStart.LAZY) {
+        inflight ?: start().also { inflight = it; it.start() }
+    }
+
+    /**
+     * The check as a not yet started [Deferred] on [scope]. It has its own supervisor, so a failed check reaches the
+     * waiters through await and never cancels [scope] (a plain Job scope would otherwise refuse every later check).
+     * The reference is recorded before the body starts, so a body that ends at once clears the right one.
+     */
+    private fun start(): Deferred<CheckOutcome> {
+        val supervisor = SupervisorJob(scope.coroutineContext[Job])
+        return scope.async(supervisor, start = CoroutineStart.LAZY) {
             _state.update { it.copy(checking = true) }
             try {
                 run()
             } finally {
                 synchronized(lock) { inflight = null }
                 _state.update { it.copy(checking = false) }
+                supervisor.complete()
             }
-        }.also {
-            // recorded before it starts, so a body that finishes at once clears the right reference
-            inflight = it
-            it.start()
         }
     }
 
