@@ -2,6 +2,8 @@ package dev.t2u.media
 
 // One yt-dlp install at a time in the process. Pure JVM, no android imports. GPL-3.0-only.
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 /**
  * Wraps the library's install call only. A second install while one runs fails at once with an [IllegalStateException]
  * instead of waiting: the updater turns any throw into a FAILED outcome, so a refused install is recorded as a failed
@@ -12,7 +14,17 @@ package dev.t2u.media
  * offline one of Settings and the daily job), which all run in one process.
  */
 class YtDlpInstallLock {
-    fun <T> install(block: () -> T): T = block()
+    private val running = AtomicBoolean(false)
+
+    /** Runs [block] when no install runs, else throws [IllegalStateException] at once. The flag is cleared in every case. */
+    fun <T> install(block: () -> T): T {
+        if (!running.compareAndSet(false, true)) throw IllegalStateException("another yt-dlp update is running")
+        try {
+            return block()
+        } finally {
+            running.set(false)
+        }
+    }
 
     companion object {
         /** The one instance the app installs through. */
