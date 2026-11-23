@@ -25,8 +25,10 @@ import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.notificationGrantAction
 import dev.dialup.app.model.startDecision
 import dev.dialup.app.ui.MainScreen
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * The app's screen: opening the app always shows the Compose UI, never closes it and never
@@ -153,17 +155,27 @@ class MainActivity : ComponentActivity() {
     /**
      * Opening the app never turns a switched-off bridge on: the start goes through [startDecision]. Without a
      * bindable network (no Wi-Fi client address and no hotspot) nothing starts, because the service would stop at once; the
-     * resume callback is armed instead and the bridge starts when the phone connects.
+     * resume callback is armed instead and the bridge starts when the phone connects. The decision (settings read, binder and
+     * interface work in [hasBindableNetwork]) runs on [BridgeLifecycle.scope], off the main thread and not cancelled by the
+     * Activity going away; the start may be refused when the app has left the foreground by then, which is only logged.
      */
     private fun startServiceIfNeeded() {
-        val enabled = AppSettings.of(this).data.value.bridgeEnabled
-        when (startDecision(enabled, BatteryGate.isOpen(this), ServiceHub.service != null, hasBindableNetwork(this))) {
-            StartDecision.START -> ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
-            StartDecision.WAIT_FOR_WIFI -> {
-                NetworkResume.arm(this)
-                Log.i(TAG, "open: no Wi-Fi; the bridge starts when the phone connects")
+        val app = applicationContext
+        BridgeLifecycle.scope.launch {
+            val enabled = AppSettings.of(app).data.value.bridgeEnabled
+            when (startDecision(enabled, BatteryGate.isOpen(app), ServiceHub.service != null, hasBindableNetwork(app))) {
+                StartDecision.START -> try {
+                    ContextCompat.startForegroundService(app, Intent(app, BridgeService::class.java))
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    Log.w(TAG, "open: the system refused to start the bridge service: ${t.javaClass.name}")
+                }
+                StartDecision.WAIT_FOR_WIFI -> {
+                    NetworkResume.arm(app)
+                    Log.i(TAG, "open: no Wi-Fi; the bridge starts when the phone connects")
+                }
+                StartDecision.NONE -> if (!enabled) Log.i(TAG, "open: the bridge is switched off in the app; not started")
             }
-            StartDecision.NONE -> if (!enabled) Log.i(TAG, "open: the bridge is switched off in the app; not started")
         }
     }
 
