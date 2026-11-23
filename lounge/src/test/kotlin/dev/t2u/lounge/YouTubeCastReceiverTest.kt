@@ -292,6 +292,45 @@ class YouTubeCastReceiverTest {
         assertTrue(portIsFree(port), "the new DIAL server was left bound by the cancelled rebind")
     }
 
+    @Test
+    fun anAdvertiseFailureAfterAMoveFreesThePortAndTheNextMoveBindsIt() = run {
+        val port = freePort()
+        val failing = object : DialAdvertiser {
+            @Volatile var failAdvertise = false
+            val inner = RecordingAdvertiser()
+
+            override fun advertise(device: SsdpDevice) {
+                if (failAdvertise) throw IllegalStateException("advertise")
+                inner.advertise(device)
+            }
+
+            override fun withdraw(uuid: String) = inner.withdraw(uuid)
+        }
+        val r = YouTubeCastReceiver(player, options().copy(dialPort = port), deps(adv = failing)).also { receivers.add(it) }
+        r.start()
+        assertFalse(portIsFree(port), "running")
+        failing.failAdvertise = true
+        assertFailsWith<IllegalStateException> { r.rebindDial("127.0.0.1") }
+        assertTrue(portIsFree(port), "the new DIAL server was left bound after the advertise failure")
+        assertTrue(r.dialMissing(), "a receiver whose move failed has no DIAL server")
+        failing.failAdvertise = false
+        r.rebindDial("127.0.0.1")
+        assertFalse(r.dialMissing())
+        assertEquals(200, http.send(
+            HttpRequest.newBuilder(URI("http://127.0.0.1:$port/ytcr/ssdp/device-desc.xml")).GET().build(),
+            HttpResponse.BodyHandlers.ofString(),
+        ).statusCode())
+    }
+
+    @Test
+    fun aDialServerThatFailedAfterItsStartCountsAsMissing() {
+        assertTrue(dialIsMissing(running = true, hasDial = false, dialFailed = false))
+        assertTrue(dialIsMissing(running = true, hasDial = true, dialFailed = true))
+        assertFalse(dialIsMissing(running = true, hasDial = true, dialFailed = false))
+        assertFalse(dialIsMissing(running = false, hasDial = false, dialFailed = false))
+        assertFalse(dialIsMissing(running = false, hasDial = true, dialFailed = true))
+    }
+
     private fun getBytes(port: Int, path: String): ByteArray = http.send(
         HttpRequest.newBuilder(URI("http://127.0.0.1:$port$path")).GET().build(),
         HttpResponse.BodyHandlers.ofByteArray(),
