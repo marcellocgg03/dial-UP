@@ -707,6 +707,37 @@ class Renderer(
     ): Boolean = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly) is LoadResult.Started
 
     /**
+     * [load] for a seek or a resume of the track [c] that is already loaded. [loadResult] stops the poll at its start and only a
+     * successful load starts it again, so a load that failed would leave the track unpolled: it would never advance at its end
+     * and a stop made on the speaker would never reach the phone. When the load failed on its own last attempt (the mp3 retry
+     * of an adts load has its own sequence number), is not overtaken by a newer load, a stop or destroy(), and [c] is still the
+     * loaded track of a playing or paused player, the poll is started again, as [resetLoaded] does. [pending] and [expectStop]
+     * are left as the failed load left them.
+     */
+    private suspend fun loadKeepingPoll(
+        c: Current,
+        video: Video,
+        position: Double,
+        format: String? = null,
+        startPlaying: Boolean = true,
+        forceOffset: Boolean = false,
+        offsetOnly: Boolean = false,
+    ): Boolean {
+        val result = loadResult(video, position, format, startPlaying, forceOffset, offsetOnly)
+        val failedSeq = when (result) {
+            is LoadResult.PrepareFailed -> result.seq
+            is LoadResult.SpeakerFailed -> result.seq
+            else -> null
+        }
+        val holds = status == PlayerStatus.PLAYING || status == PlayerStatus.PAUSED
+        if (failedSeq != null && !superseded(failedSeq) && current === c && holds) {
+            note("warn", "Load failed - polling the loaded track again", "videoId" to c.video.id)
+            pollLoop.start()
+        }
+        return result is LoadResult.Started
+    }
+
+    /**
      * [load] with the reason it did not start: [LoadResult.PrepareFailed] when taking or preparing the item
      * failed (the lookup, the format chain, the registration), which the sender's own plays retry and skip past;
      * [LoadResult.SpeakerFailed] when a call to the speaker failed; [LoadResult.Superseded] when a newer play, a stop or
@@ -782,9 +813,16 @@ class Renderer(
         forceOffset: Boolean,
         offsetOnly: Boolean,
     ): PreparedItem {
-        if (taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id) {
-            note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
-            return taken.item
+        val plainStart = taken != null && format == null && !forceOffset && !offsetOnly && position < 2 && taken.video.id == video.id
+        if (taken != null && plainStart) {
+            // The item's URL names the address it was built with; after a network change in which no re-set ran (a stopped
+            // player) that address may be gone, or belong to another host. Equality with the current address, not "changed
+            // since", so an item is valid again when the address comes back.
+            if (taken.item.address == ip) {
+                note("info", "Using prepared track \"${taken.item.title}\"", "videoId" to video.id)
+                return taken.item
+            }
+            note("info", "Prepared track was built for another address - preparing it again", "videoId" to video.id)
         }
         releaseStream(taken?.item?.current)
         return prepareItem(video, position, format, forceOffset, offsetOnly)
@@ -866,9 +904,9 @@ class Renderer(
         note("error", "Play ${video.id} failed: $lastError")
         expectStop = false
         return when {
-            !preparing -> LoadResult.SpeakerFailed(e)
+            !preparing -> LoadResult.SpeakerFailed(e, seq)
             superseded(seq) -> LoadResult.Superseded
-            else -> LoadResult.PrepareFailed(e)
+            else -> LoadResult.PrepareFailed(e, seq)
         }
     }
 
@@ -985,7 +1023,7 @@ class Renderer(
                 isVideo = mime.startsWith("video/"),
             ),
         )
-        return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata)
+        return PreparedItem(cur, info.title, info.artist, info.duration, info.thumbnail, fmt, mime, url, metadata, address)
     }
 
     /**
@@ -1119,7 +1157,7 @@ class Renderer(
             }
             if (superseded(seq) || current !== c || status != PlayerStatus.PAUSED) return false
             note("info", "Resuming ${c.format} by restarting the stream at ${Math.floor(at).toInt()}s")
-            return load(c.video, at, c.format, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, at, c.format, offsetOnly = c.offsetOnly)
         }
         if (c != null && !sawPlaying) {
             c.loadedAt = deps.clock()
@@ -1422,7 +1460,7 @@ class Renderer(
         val paused = status == PlayerStatus.PAUSED
         if (c.format == "direct" && startsMidTrack(position)) {
             // prepareItem swaps direct for a format that can start at the position
-            return load(c.video, position, "direct", startPlaying = !paused, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, position, "direct", startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         if (FORMATS[c.format]?.seekable != true) {
             // Restart the stream from the new position. Takes a moment longer than a native seek (ffmpeg
@@ -1432,7 +1470,7 @@ class Renderer(
                 "Seek to ${Math.floor(position).toInt()}s by restarting the ${c.format} stream" +
                     if (paused) ", Play deferred until resume" else "",
             )
-            return load(c.video, position, c.format, startPlaying = !paused, offsetOnly = c.offsetOnly)
+            return loadKeepingPoll(c, c.video, position, c.format, startPlaying = !paused, offsetOnly = c.offsetOnly)
         }
         val base = c.startAt
         val before = position < base
@@ -1457,7 +1495,7 @@ class Renderer(
         val at = Math.floor(position).toInt()
         val why = if (before) "Seek to ${at}s is before the start of the ${c.format} file (${base}s)" else "Renderer rejected Seek"
         note("info", "$why - restarting ${c.format} at ${at}s" + if (paused) ", Play deferred until resume" else "")
-        return load(c.video, position, c.format, startPlaying = !paused, forceOffset = true, offsetOnly = c.offsetOnly)
+        return loadKeepingPoll(c, c.video, position, c.format, startPlaying = !paused, forceOffset = true, offsetOnly = c.offsetOnly)
     }
 
     /**
@@ -1696,7 +1734,8 @@ class Renderer(
      * [RESYNC_READ_ATTEMPTS] times [Config.pollIntervalMs] apart, and acts on [resyncAction]:
      *  * KEEP: the speaker still plays our stream on the same address. Nothing is sent, polling resumes, and a watch of
      *    [RESYNC_WATCH_MS] re-sets a mid-track stop once (a speaker that only drains its buffer stops soon after).
-     *  * RESET_AT_SPEAKER: the address changed and the speaker plays or is paused on our stream: re-set at its own position.
+     *  * RESET_AT_SPEAKER: the address changed and the speaker plays or is paused on our stream: re-set at its own position;
+     *    when it cannot report one (an empty, NOT_IMPLEMENTED or unparsable RelTime) at the last polled position, with a note.
      *  * RESET_AT_LAST_POLLED: the speaker ran dry or cannot be read: re-set at the last polled position, never at its own
      *    0:00 and never an extrapolation over the outage.
      *  * RELEASE_FOREIGN: another source took the speaker: nothing is sent, the sender is told the player stopped.
@@ -1788,8 +1827,18 @@ class Renderer(
             ResyncAction.RELEASE_FOREIGN -> releaseTakenOverSpeaker(read.reading?.get("TrackURI"))
             ResyncAction.RESET_AT_SPEAKER -> {
                 val keep = c ?: return false
-                val at = read.reading?.get("RelTime")?.let { parseHms(it) + keep.startAt } ?: position?.rel ?: keep.startAt.toDouble()
-                resetLoaded(keep, at, "speaker")
+                // An empty, NOT_IMPLEMENTED or unparsable RelTime is an unknown position, not 0:00 (D-08).
+                val spoken = parseHmsOrNull(read.reading?.get("RelTime"))?.plus(keep.startAt)
+                if (spoken != null) {
+                    resetLoaded(keep, spoken, "speaker")
+                } else {
+                    note(
+                        "warn",
+                        "Speaker position unreadable after the address change - re-setting at the last polled position",
+                        "videoId" to keep.video.id,
+                    )
+                    resetLoaded(keep, position?.rel ?: keep.startAt.toDouble(), "last-polled")
+                }
             }
             ResyncAction.RESET_AT_LAST_POLLED -> {
                 val keep = c ?: return false

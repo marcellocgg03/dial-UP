@@ -42,6 +42,8 @@ import kotlin.coroutines.resumeWithException
 /**
  * One lounge session. [begin] performs generate_screen_id (unless a screen id is stored), get_lounge_token_batch,
  * the bind init POST and opens the RPC long-poll; incoming messages go to [onMessages], one batch at a time, in order.
+ * Messages can be sent while the session is starting (the answer to the init loungeStatus), running or refreshing its token;
+ * a send that is refused at any other time is logged once (send-dropped) and answers false.
  */
 class Session(
     val client: Client,
@@ -58,10 +60,10 @@ class Session(
     private val rpcRetryDelayMs: Long = 1000,
     /**
      * Adaptation 47: how long the RPC reconnect keeps retrying the same token after network errors (not HTTP statuses)
-     * before the token is refreshed. 0 turns the tolerance off.
+     * before the token is refreshed. The message sends use the same tolerance (a failed POST waits in place, same offset). 0 turns the tolerance off.
      */
     private val rpcOutageBudgetMs: Long = 120_000,
-    /** Waits between those retries; the last value repeats. */
+    /** Waits between those retries, of the RPC reconnect and of the message sends; the last value repeats. */
     private val rpcOutageWaitsMs: List<Long> = listOf(2_000, 4_000, 8_000, 16_000, 30_000),
 ) {
     @Volatile
@@ -101,6 +103,16 @@ class Session(
             val error = SessionException("(${client.displayName}) Failed to establish session", e)
             end()
             throw error
+        }
+        if (status != SessionStatus.STARTING) {
+            // end() ran meanwhile (a send or the reader gave up, or the caller ended it): never write RUNNING over that
+            rpcLongPoll.close()
+            throw SessionException("(${client.displayName}) Session ended while it started")
+        }
+        if (!rpcLongPoll.isOpen()) {
+            // the reader gave up during the start (endUnlessStarting only logged it): a start with nobody listening has failed
+            end()
+            throw SessionException("(${client.displayName}) RPC reader stopped while the session started")
         }
         status = SessionStatus.RUNNING
     }
@@ -172,6 +184,10 @@ class Session(
                     deliveringInitStatus = false
                 }
             }
+        }
+        // an end during the start (a refresh runs this under REFRESHING, which passes) must not get a reader
+        if (status == SessionStatus.STOPPING || status == SessionStatus.STOPPED) {
+            throw SessionException("(${client.displayName}) Session ended while it was being established")
         }
         // test that the RPC query can be built before connecting
         bind.toQueryString(BindType.RPC)
@@ -322,10 +338,27 @@ class Session(
     private val sendQueue = SessionSendQueue(
         scope, endpoints, bind, log, formType,
         execute = ::execute,
-        canSend = { status == SessionStatus.RUNNING || status == SessionStatus.REFRESHING },
+        canSend = { status == SessionStatus.STARTING || status == SessionStatus.RUNNING || status == SessionStatus.REFRESHING },
         refreshToken = ::refreshLoungeToken,
-        endSession = { end(it) },
+        endSession = { endUnlessStarting("send", it) },
+        outageBudgetMs = rpcOutageBudgetMs,
+        outageWaitsMs = rpcOutageWaitsMs,
+        nowMs = { System.nanoTime() / 1_000_000 },
     )
+
+    /**
+     * The end callback of the send queue (from "send") and of the reader (from "reader"). While the session is STARTING
+     * the caller has already given up its own work (the send answered false; begin reports a failed start itself, and
+     * checks the reader before it marks the session RUNNING), so ending the session here would end a start in progress:
+     * it is logged and nothing else happens. Otherwise the session ends with [error].
+     */
+    private suspend fun endUnlessStarting(from: String, error: Throwable) {
+        if (status == SessionStatus.STARTING) {
+            log.session("failed-while-starting", "from" to from, "error" to (error::class.simpleName ?: "Throwable"))
+            return
+        }
+        end(error)
+    }
 
     /**
      * Sends [messages] in queue order. With [deferKey], the send waits [deferMs]; a later call with the same key
@@ -420,6 +453,8 @@ class Session(
         http, endpoints, bind, log, scope, rpcRetryDelayMs, rpcOutageBudgetMs, rpcOutageWaitsMs,
         deliver = ::handleMessages,
         refreshToken = ::refreshLoungeToken,
+        endSession = { endUnlessStarting("reader", it) },
+        starting = { status == SessionStatus.STARTING },
     )
 
     /** True while the RPC stream is open or being reopened. */

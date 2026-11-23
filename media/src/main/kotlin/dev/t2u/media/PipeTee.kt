@@ -12,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -50,6 +51,13 @@ internal suspend fun PipeLauncher.startOwned(args: List<String>): Process {
 }
 
 /**
+ * The failure detail of an attempt whose ffmpeg could not be started. Fixed text and the exception's class only: the
+ * message of the IOException ProcessBuilder throws holds the binary's path (PARITY adaptation 77), and the text must not
+ * match [isUpstreamRefusal], so a launch failure never ends the cast as a refusal.
+ */
+internal fun ffmpegStartFailure(e: IOException): String = "ffmpeg could not be started (${e.javaClass.simpleName})"
+
+/**
  * One attempt's process for a live GET: starts it, waits for the first byte under a watchdog, then pumps stdout to
  * the speaker while teeing the same bytes into the range cache. The process never outlives the call.
  */
@@ -61,6 +69,7 @@ internal class PipeTee(
     /**
      * Runs [args] and answers [call] from its stdout. Returns null when the answer was written (the call is done,
      * whether the speaker stayed to the end or hung up), else the failure detail of this attempt with nothing sent yet.
+     * An ffmpeg that cannot be started is a failed attempt like any other: the detail is [ffmpegStartFailure].
      */
     suspend fun serve(
         call: ApplicationCall,
@@ -71,7 +80,13 @@ internal class PipeTee(
         args: List<String>,
         onFirstByte: () -> Unit = {},
     ): String? {
-        val proc = launcher.startOwned(args)
+        val proc = try {
+            launcher.startOwned(args)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            return ffmpegStartFailure(e)
+        }
         try {
             val stdout = proc.inputStream
             val buf = ByteArray(PIPE_CHUNK)

@@ -21,6 +21,16 @@ const val DEFAULT_CACHE_LIMIT_BYTES = DEFAULT_CACHE_MB * 1_048_576L
 /** True for the names of finished cache files: built `.m4a` / `.flac` and downloaded `.source` (Node `CACHE_FILE`). */
 fun isCacheFileName(name: String): Boolean = name.endsWith(".m4a") || name.endsWith(".flac") || name.endsWith(".source")
 
+/**
+ * True for a name a manifest (`.transient`, `.uncached`) may list: a cache file name that is a plain name, not a path
+ * (`../x.m4a`, `/abs/x.m4a` and `a/b.m4a` are not). A manifest is untrusted text on disk and its lines reach delete calls.
+ */
+internal fun isManifestName(name: String): Boolean = isCacheFileName(name) && File(name).name == name
+
+/** The event of a pass that ignored [count] manifest lines: where and how many, never a name (a name is untrusted text). */
+private fun manifestNamesIgnored(where: String, count: Int): Map<String, Any?> =
+    mapOf("event" to "cache-manifest-name-ignored", "where" to where, "count" to count)
+
 /** What the cache holds now: the number and total size of finished files, and the cap in force at the time. */
 data class CacheInfo(
     val files: Int,
@@ -61,7 +71,7 @@ class FileCache(
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(Files.readAllBytes(transientManifest.toPath())))
                 .toString()
-            text.lines().filter { isCacheFileName(it) && File(it).name == it }.toMutableSet()
+            text.lines().filter { isManifestName(it) }.toMutableSet()
         } catch (e: IOException) {
             emit(mapOf("event" to "cache-transient-unreadable", "error" to e.javaClass.simpleName))
             mutableSetOf()
@@ -320,13 +330,21 @@ class FileCache(
     /** Deletes the unpinned files made under a zero limit (a bridge stop): nothing that was cached before is touched. */
     fun dropUncachedFiles(): Int = synchronized(lock) {
         var removed = 0
+        var ignored = 0
         for (name in uncached.toList()) {
+            if (!isManifestName(name)) {
+                // Never a delete for a name that is not a plain cache file name (the scan already keeps these out of the set).
+                uncached.remove(name)
+                ignored++
+                continue
+            }
             if (pins.containsKey(name)) continue
             if (File(dir, name).let { it.delete() || !it.exists() }) {
                 uncached.remove(name)
                 removed++
             }
         }
+        if (ignored > 0) emit(manifestNamesIgnored("drop", ignored))
         saveManifest()
         for (name in transient.toList()) {
             if (pins.containsKey(name)) continue
@@ -356,7 +374,17 @@ class FileCache(
             }
             saveTransient()
             // Files made under a zero limit by an earlier run of the server stay uncached, not adopted as kept.
-            runCatching { if (manifest.isFile) uncached.addAll(manifest.readLines().filter { it.isNotBlank() }) }
+            // Only plain cache file names count: the others are ignored, counted once, and gone at the next manifest save.
+            runCatching {
+                if (manifest.isFile) {
+                    var ignored = 0
+                    for (line in manifest.readLines()) {
+                        if (line.isBlank()) continue
+                        if (isManifestName(line)) uncached.add(line) else ignored++
+                    }
+                    if (ignored > 0) emit(manifestNamesIgnored("scan", ignored))
+                }
+            }
             for (name in dir.list().orEmpty()) {
                 val f = File(dir, name)
                 if (!f.isFile || name == MANIFEST || name == transientManifest.name) continue
@@ -442,9 +470,9 @@ class FileCache(
     }
 }
 
-/** Moves finished files and removes obsolete range-cache data from a legacy media buffer. */
-fun migrateMediaBufferDir(from: File, to: File) {
-    migrateCacheDir(File(from, "files"), File(to, "files"))
+/** Moves finished files and removes obsolete range-cache data from a legacy media buffer; [onEvent] is the migration's event sink. */
+fun migrateMediaBufferDir(from: File, to: File, onEvent: (Map<String, Any?>) -> Unit = {}) {
+    migrateCacheDir(File(from, "files"), File(to, "files"), onEvent)
     val oldRanges = File(from, "range-cache")
     if (!oldRanges.exists()) return
     val files = oldRanges.listFiles() ?: throw IOException("Cannot list legacy range cache directory: $oldRanges")
@@ -453,8 +481,11 @@ fun migrateMediaBufferDir(from: File, to: File) {
     }
 }
 
-/** Moves a legacy cache into [to], preserving existing destination files and the zero-limit manifest. */
-fun migrateCacheDir(from: File, to: File): Int {
+/**
+ * Moves a legacy cache into [to], preserving existing destination files and the zero-limit manifest. A manifest line
+ * that is not a plain cache file name is dropped; the count of those goes once to [onEvent] (never a name).
+ */
+fun migrateCacheDir(from: File, to: File, onEvent: (Map<String, Any?>) -> Unit = {}): Int {
     if (!from.exists()) return 0
     val names = from.list() ?: throw IOException("Cannot list legacy cache directory: $from")
     if (!to.isDirectory && !to.mkdirs() && !to.isDirectory) throw IOException("Cannot create cache directory: $to")
@@ -462,8 +493,17 @@ fun migrateCacheDir(from: File, to: File): Int {
     val oldManifest = File(from, ".uncached")
     if (oldManifest.isFile) {
         val newManifest = File(to, ".uncached")
-        val entries = (if (newManifest.isFile) newManifest.readLines() else emptyList()) + oldManifest.readLines()
-        newManifest.writeText(entries.filter { it.isNotBlank() }.distinct().sorted().joinToString("\n"))
+        val entries = ((if (newManifest.isFile) newManifest.readLines() else emptyList()) + oldManifest.readLines()).filter { it.isNotBlank() }
+        val plain = entries.filter { isManifestName(it) }
+        val ignored = entries.size - plain.size
+        if (ignored > 0) {
+            try {
+                onEvent(manifestNamesIgnored("migrate", ignored))
+            } catch (_: Throwable) {
+                // logging must never break the migration
+            }
+        }
+        newManifest.writeText(plain.distinct().sorted().joinToString("\n"))
         Files.delete(oldManifest.toPath())
     }
 

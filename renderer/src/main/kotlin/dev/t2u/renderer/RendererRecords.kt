@@ -76,11 +76,14 @@ internal sealed interface LoadResult {
     /** A newer play, a stop or removal overtook the load. */
     data object Superseded : LoadResult
 
-    /** Taking or preparing the item failed (the lookup, the format chain, the registration): a problem with the track. */
-    class PrepareFailed(val error: Exception) : LoadResult
+    /**
+     * Taking or preparing the item failed (the lookup, the format chain, the registration): a problem with the track.
+     * [seq] is the load sequence number of the attempt that failed (the last one when the adts attempt was retried as mp3).
+     */
+    class PrepareFailed(val error: Exception, val seq: Int) : LoadResult
 
-    /** A call to the speaker failed. */
-    class SpeakerFailed(val error: Exception) : LoadResult
+    /** A call to the speaker failed. [seq] is the load sequence number of the attempt that failed. */
+    class SpeakerFailed(val error: Exception, val seq: Int) : LoadResult
 }
 
 /** A track resolved, registered with the media server and described in DIDL, ready to send. */
@@ -94,6 +97,8 @@ internal class PreparedItem(
     val mime: String,
     val url: String,
     val metadata: String,
+    /** The phone address [url] was built with; the item is reused only while the renderer still serves from it. */
+    val address: String,
 )
 
 /** The next track, prepared ahead of its turn (renderer.js `#queued`): the video it was prepared for and the ready item. */

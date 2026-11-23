@@ -104,4 +104,61 @@ internal class NetworkChangeTest {
             }
         }
     }
+
+    /** A track the poll has read at 40 s; the speaker then answers [unreadable] as its position and the phone's address changes. */
+    private fun resetAfterAnUnreadablePosition(unreadable: String) {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                fake.state.relTime = "0:00:40"
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { h.renderer.ui.value.status == PlayerStatus.PLAYING }
+                delay(300) // several polls have read 40 s
+
+                fake.state.relTime = unreadable
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil { h.registered.size > 1 && h.notes("Re-set ").isNotEmpty() }
+
+                assertEquals(2, h.registered.size, "the track was re-set once")
+                assertEquals(A, h.registered.last().videoId)
+                assertEquals(40, h.registered.last().startAt, "at the last polled position, not at 0:00")
+                assertEquals(1, h.notes("Speaker position unreadable after the address change").size)
+                assertEquals("last-polled", h.notes("Re-set ").single()["why"])
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a speaker that answers NOT_IMPLEMENTED as its position after an address change is re-set at the last polled position")
+    fun anUnreadableSpeakerPositionResetsAtTheLastPolledPosition() {
+        resetAfterAnUnreadablePosition("NOT_IMPLEMENTED")
+    }
+
+    @Test
+    @DisplayName("a speaker that answers an empty position after an address change is re-set at the last polled position")
+    fun anEmptySpeakerPositionResetsAtTheLastPolledPosition() {
+        resetAfterAnUnreadablePosition("")
+    }
+
+    @Test
+    @DisplayName("a readable speaker position after an address change is still the position the track is re-set at")
+    fun aReadableSpeakerPositionStillWins() {
+        withFake { fake ->
+            RendererHarness(fake, config = pinned("adts")).use { h ->
+                h.renderer.init()
+                fake.state.relTime = "0:00:40"
+                assertTrue(h.renderer.play(Video(A), 0.0))
+                waitUntil { h.renderer.ui.value.status == PlayerStatus.PLAYING }
+                delay(300)
+
+                fake.state.relTime = "0:01:30"
+                h.renderer.onNetworkChanged("127.0.0.2")
+                waitUntil { h.registered.size > 1 && h.notes("Re-set ").isNotEmpty() }
+
+                assertEquals(90, h.registered.last().startAt, "the speaker's own position")
+                assertTrue(h.notes("Speaker position unreadable").isEmpty())
+                assertEquals("speaker", h.notes("Re-set ").single()["why"])
+            }
+        }
+    }
 }

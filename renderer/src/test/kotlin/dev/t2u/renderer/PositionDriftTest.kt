@@ -102,9 +102,9 @@ internal class PositionDriftTest {
         fun positionReads(): Int = fake.calls.count { it.action == "GetPositionInfo" }
     }
 
-    private fun config(dir: File) = Config(
+    private fun config(dir: File, format: String = "direct") = Config(
         dataDir = dir,
-        outputFormat = "direct",
+        outputFormat = format,
         pollIntervalMs = POLL_MS,
         startTimeoutMs = 5000,
         queueSettleTimeoutMs = 5000,
@@ -113,6 +113,7 @@ internal class PositionDriftTest {
     /** A renderer playing [A] on a mimic that plays on by itself; the speaker is already seen PLAYING at about 0 s. */
     private fun <T> rig(
         lag: Boolean = false,
+        format: String = "direct",
         block: suspend Rig.() -> T,
     ): T {
         val fake = FakeRenderer()
@@ -122,7 +123,7 @@ internal class PositionDriftTest {
         val clock = TestClock()
         mimic.followClock(clock::now)
         if (lag) mimic.laggingSeek(700, 5000, "0:00:20", null, clock::now)
-        val h = RendererHarness(fake, config = ::config, duration = TRACK_S.toDouble(), clock = clock::now)
+        val h = RendererHarness(fake, config = { config(it, format) }, duration = TRACK_S.toDouble(), clock = clock::now)
         try {
             return runBlocking {
                 val events = CopyOnWriteArrayList<PlayerStateEvent>()
@@ -341,6 +342,20 @@ internal class PositionDriftTest {
             delay(100)
 
             assertEquals(emptyList(), sentToPhone(mark).map { it.current.position }, "another stream's position is not ours")
+        }
+    }
+
+    @Test
+    @DisplayName("a restart seek on mp3 reads the target plus the speaker's own play time, not the fake's constant")
+    fun aRestartSeekReadsTheTargetPlusPlayTime() {
+        rig(format = "mp3") {
+            assertTrue(r.doSeek(52.0))
+            advance(2_000)
+            delay(300)
+            // The default fake answers a constant RelTime of 0:01:05, so this holds only with a speaker whose RelTime follows play
+            // time (this mimic here, the LAN runner's relTimeFollowsPlay on the phone rig).
+            val position = r.doGetPosition()
+            assertTrue(position in 52.5..55.5, "52 s plus about 2 s of play, got $position")
         }
     }
 }

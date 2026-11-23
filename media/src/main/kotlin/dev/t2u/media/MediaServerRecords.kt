@@ -23,8 +23,12 @@ internal class Outcome {
     val upstream = CopyOnWriteArrayList<UpstreamTiming>()
 }
 
-/** One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw). */
-internal class PipeAttempt(val name: String, val input: suspend () -> List<String>)
+/**
+ * One way of getting ffmpeg its input: [input] is evaluated when the attempt starts (it may resolve or throw).
+ * [release] hands back what [input] made (a feed token) and is called once the attempt is over: its ffmpeg process has been
+ * killed and waited for, or it never started one. It must be safe to call after an [input] that failed, and twice.
+ */
+internal class PipeAttempt(val name: String, val input: suspend () -> List<String>, val release: () -> Unit = {})
 
 private const val MAX_NOTE = 400
 

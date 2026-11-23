@@ -8,6 +8,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -46,7 +48,14 @@ data class PlayerStateEvent(
     val fromVolumeChange: Boolean = false,
 )
 
-/** A listener must not break playback: its exceptions are caught and reported to [Player.events]. */
+/**
+ * A listener must not break playback: its exceptions are caught and reported to [Player.events].
+ *
+ * A listener must not call an emitting [Player] method (setStatusAndEmit's callers, [Player.notifyExternalStateChange],
+ * [Player.notifyPositionCorrection], [Player.seek], [Player.reset] or the commands): the emit lock is held while the
+ * listeners run and is not reentrant, so such a call would wait for itself. Reading ([Player.getState],
+ * [Player.getNavInfo]) is fine.
+ */
 fun interface PlayerStateListener {
     suspend fun onState(event: PlayerStateEvent)
 }
@@ -98,6 +107,19 @@ abstract class Player {
 
     @Volatile
     private var previousState: PlayerState? = null
+
+    /**
+     * Makes the three steps of a state change atomic: the status write, the [getState] snapshot (with the
+     * [previousState] read and write) and the [emitState] to the listeners. Two racing changes then reach the senders in
+     * the order they were taken, and each event's previous state is the state emitted before it (D-09, LOUNGE WR-11).
+     *
+     * Sections: [setStatusAndEmit], [notifyPositionCorrection], the two emit steps of [seek] and the final IDLE emit of
+     * [reset]. [setVolume]'s emit is not one of them. The lock is a leaf: it is never held across a do* hook
+     * ([play] calls [stop], [next] and [resume] call [play], and the renderer polls the status while a first play
+     * runs), never across a command, and never around the failure listeners (they end the cast, which resets
+     * the player). It is held across [getState], which in the renderer reads the speaker. It is not reentrant.
+     */
+    private val emitLock = Mutex()
 
     /** Epoch milliseconds. The renderer overrides it with its injected clock so tests can move time by hand. */
     protected open fun clockMs(): Long = System.currentTimeMillis()
@@ -236,21 +258,31 @@ abstract class Player {
      * Seeks while playing or paused: reports LOADING at the target first, then PLAYING. A paused player
      * stays paused (LOADING, then PAUSED at the new position, no resume): a deliberate deviation from
      * yt-cast-receiver 2.1.0, which resumes; the sender presses Play when it wants sound.
+     * A seek the speaker refuses reports LOADING and then the real position and state at once
+     * (yt-cast-receiver leaves the sender on LOADING).
      */
     suspend fun seek(position: Double, aid: Int? = null): Boolean {
         if (status != PlayerStatus.PLAYING && status != PlayerStatus.PAUSED) return false
         log("seek", "position" to position)
-        val before = getState()
-        val fakeState = before.copy(position = position, status = PlayerStatus.LOADING)
-        emitState(PlayerStateEvent(aid, fakeState, before))
+        val (before, fakeState) = emitLock.withLock {
+            val snapshot = getState()
+            val fake = snapshot.copy(position = position, status = PlayerStatus.LOADING)
+            emitState(PlayerStateEvent(aid, fake, snapshot))
+            snapshot to fake
+        }
+        // The lock is not held across doSeek: the speaker may take its time.
         val result = doSeek(position)
-        if (result) {
+        if (!result) {
+            // The sender was told LOADING: give it the real position and state, compared with that LOADING state so it is sent.
+            log("seekRefused", "position" to position)
+        }
+        emitLock.withLock {
             previousState = fakeState
-            if (before.status == PlayerStatus.PAUSED) {
-                setStatusAndEmit(PlayerStatus.PAUSED, aid)
-                return true
+            when {
+                !result -> setStatusAndEmitLocked(null, aid)
+                before.status == PlayerStatus.PAUSED -> setStatusAndEmitLocked(PlayerStatus.PAUSED, aid)
+                else -> setStatusAndEmitLocked(PlayerStatus.PLAYING, aid)
             }
-            setStatusAndEmit(PlayerStatus.PLAYING, aid)
         }
         return result
     }
@@ -339,9 +371,11 @@ abstract class Player {
                 log("clearFailed", "error" to (e::class.simpleName ?: e.javaClass.name))
             }
         }
-        previousState = null
         try {
-            setStatusAndEmit(PlayerStatus.IDLE, aid)
+            emitLock.withLock {
+                previousState = null
+                setStatusAndEmitLocked(PlayerStatus.IDLE, aid)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -428,13 +462,20 @@ abstract class Player {
      * state. renderer.js has no counterpart.
      */
     suspend fun notifyPositionCorrection() {
-        val previous = previousState?.copy(position = -1.0)
-        val current = getState()
-        previousState = current
-        emitState(PlayerStateEvent(null, current, previous))
+        emitLock.withLock {
+            val previous = previousState?.copy(position = -1.0)
+            val current = getState()
+            previousState = current
+            emitState(PlayerStateEvent(null, current, previous))
+        }
     }
 
     private suspend fun setStatusAndEmit(newStatus: PlayerStatus?, aid: Int? = null) {
+        emitLock.withLock { setStatusAndEmitLocked(newStatus, aid) }
+    }
+
+    /** The status write, the state snapshot and the emit; the caller holds [emitLock]. */
+    private suspend fun setStatusAndEmitLocked(newStatus: PlayerStatus?, aid: Int?) {
         val previous = previousState
         if (newStatus != null) statusState.value = newStatus
         val current = getState()

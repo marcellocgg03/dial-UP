@@ -28,6 +28,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class YouTubeAppTest {
@@ -199,6 +200,40 @@ class YouTubeAppTest {
         rpc("cl", "stopVideo")
         awaitUntil(what = "stop") { "stop" in player.calls }
         assertEquals(PlayerStatus.STOPPED, player.status)
+    }
+
+    @Test
+    fun aRefusedSeekToLeavesLoadingAtOnce() = run<Unit> {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        player.position = 30.0
+        player.seekResult = false
+
+        rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
+        awaitUntil(what = "the real state after the refused seek") {
+            val states = messages("cl").filter { it.first == "onStateChange" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"]?.toDouble() == 42.0 }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "1" && it.second["currentTime"]?.toDouble() == 30.0 }
+        }
+    }
+
+    @Test
+    fun aRefusedSeekToWhilePausedLeavesLoadingAtOnce() = run<Unit> {
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "pause")
+        awaitUntil(what = "pause") { "pause" in player.calls && player.status == PlayerStatus.PAUSED }
+        player.position = 30.0
+        player.seekResult = false
+
+        rpc("cl", "seekTo", buildJsonObject { put("newTime", "42") })
+        awaitUntil(what = "the paused state after the refused seek") {
+            val states = messages("cl").filter { it.first == "onStateChange" }
+            val loading = states.indexOfLast { it.second["state"] == "3" && it.second["currentTime"]?.toDouble() == 42.0 }
+            loading >= 0 && states.drop(loading + 1).any { it.second["state"] == "2" && it.second["currentTime"]?.toDouble() == 30.0 }
+        }
     }
 
     @Test
@@ -914,6 +949,60 @@ class YouTubeAppTest {
         assertNotNull(store.text(StoreKeys.APP_PID))
     }
 
+    // ---- a stop runs once per start (D-05)
+
+    private fun stopAgainNotes() = events.count { it.first == "lounge-app" && it.second["type"] == "stopAgain" }
+
+    @Test
+    fun aSecondStopWithAnErrorIsANoOp() = run<Unit> {
+        val a = startedApp()
+        connect()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        a.stop(IllegalStateException("first"))
+        a.stop(IllegalStateException("second"))
+        a.stop(IllegalStateException("third"))
+
+        assertEquals(1, terminated.size, "onTerminate exactly once")
+        assertEquals("first", terminated.single().message)
+        assertEquals(1, clearCount(), "the player is reset once")
+        assertEquals(1, disconnects.size, "the sender is reported disconnected once")
+        assertEquals(1, stopAgainNotes(), "the repeat is noted once")
+        assertEquals(AppState.STOPPED, a.state)
+    }
+
+    @Test
+    fun concurrentStopsWithAnErrorRunTheShutdownOnce() = run<Unit> {
+        val a = startedApp()
+        connect()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        coroutineScope {
+            List(4) { i -> async(Dispatchers.Default) { a.stop(IllegalStateException("stop $i")) } }.forEach { it.await() }
+        }
+
+        assertEquals(1, terminated.size, "onTerminate exactly once")
+        assertEquals(1, clearCount(), "the player is reset once")
+        assertEquals(1, stopAgainNotes(), "the repeats are noted once")
+    }
+
+    @Test
+    fun aStopAfterARestartWorksAgain() = run<Unit> {
+        val a = startedApp()
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+
+        a.stop(IllegalStateException("first run"))
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+        a.stop(IllegalStateException("second run"))
+
+        assertEquals(listOf("first run", "second run"), terminated.map { it.message })
+        assertEquals(0, stopAgainNotes(), "a stop in a new run is not a repeat")
+    }
+
     // ---- playback failure ends the cast visibly (quick 261028-ago)
 
     @Test
@@ -1124,6 +1213,40 @@ class YouTubeAppTest {
         player.notifyExternalStateChange(null)
         barrier("cl")
         assertEquals(before, navMessages().size, "the inactive branch did not touch the remembered availability")
+    }
+
+    /** D-11: after the app reset the player, the phone that connects next is told of no old autoplay video and no Previous or Next. */
+    @Test
+    fun aPhoneConnectingAfterAResetIsOfferedNoStaleQueue() = run {
+        installChain()
+        startedApp()
+        connect()
+        castAndPlay("VID00000001")
+        rpc("cl", "next")
+        awaitUntil(what = "hop to the autoplay video") { "play:VID00000002" in player.calls && player.status == PlayerStatus.PLAYING }
+        awaitUntil(what = "previous and autoplay of the hop") {
+            navMessages().any { it["hasPrevious"] == "true" } &&
+                messages("cl").any { it.first == "autoplayUpNext" && it.second["videoId"] == "VID00000003" }
+        }
+        assertEquals("VID00000003", player.queue.autoplay?.id, "setup: the cast has an autoplay video")
+
+        rpc("cl", "loungeStatus", loungeStatus(emptyList(), "dev-1", ui = "true"))
+        awaitUntil(what = "player reset") { player.status == PlayerStatus.IDLE && disconnects.isNotEmpty() }
+        barrier("cl")
+        assertNull(player.queue.autoplay, "the reset queue has no autoplay video")
+        val sentBefore = messages("cl").size
+
+        connect()
+        barrier("cl")
+
+        val after = messages("cl").drop(sentBefore)
+        assertTrue(
+            after.none { it.first == "autoplayUpNext" && it.second["videoId"] in setOf("VID00000002", "VID00000003") },
+            "no autoplayUpNext names an old cast video: $after",
+        )
+        val nav = after.last { it.first == "onHasPreviousNextChanged" }.second
+        assertEquals("false", nav["hasPrevious"])
+        assertEquals("false", nav["hasNext"])
     }
 
     // ---- clear on disconnect, second phone, session switch (plan 03-04, CAST-06)

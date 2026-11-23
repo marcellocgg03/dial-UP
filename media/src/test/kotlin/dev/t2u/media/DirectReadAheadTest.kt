@@ -337,6 +337,39 @@ class DirectReadAheadTest {
     }
 
     @Test
+    @DisplayName("a 206 window that ends before the requested span turns read-ahead off and the plain path answers with the right bytes")
+    fun aShortWindowTurnsReadAheadOffAndThePlainPathAnswers() {
+        runBlocking {
+            val data = payload(1_000_000, salt = 43)
+            val up = CountingUpstream(
+                content = { _, _ -> data },
+                respond = { call, _ ->
+                    if (windowSized(call)) {
+                        // A clipped window: 1024 bytes from 0, honestly described, but shorter than the 6144-byte span.
+                        UpstreamResponse(
+                            206,
+                            mapOf("content-length" to "1024", "content-range" to "bytes 0-1023/${data.size}"),
+                            ByteArrayInputStream(data.copyOfRange(0, 1024)),
+                        )
+                    } else {
+                        null
+                    }
+                },
+            )
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            val starts = listOf(0, 0, 6144, 12288)
+            for (s in starts) scan(ms, path, data, s)
+
+            assertEquals(starts.size + 1, up.calls.size, "one refused window, then one call per range: ${up.calls.map { it.range }}")
+            assertEquals(1, up.calls.count { windowSized(it) }, "read-ahead is off: no further window request: ${up.calls.map { it.range }}")
+            val log = awaitSeen { l -> l.size >= starts.size && l.any { it.note.orEmpty().startsWith("read-ahead off") } }
+            assertTrue(log.any { it.note.orEmpty().startsWith("read-ahead off") }, "the log says so: ${log.map { it.note }}")
+            assertEquals(0L, ms.readAheadHeldBytes())
+        }
+    }
+
+    @Test
     @DisplayName("a failing window fetch is not an error for the speaker: the plain path answers it")
     fun aFailingWindowFetchFallsBackToThePlainPath() {
         runBlocking {
@@ -383,6 +416,31 @@ class DirectReadAheadTest {
             assertEquals(416, r.status)
             assertEquals("bytes */100000", r.header("Content-Range"))
             assertEquals(0, r.body.size)
+        }
+    }
+
+    @Test
+    @DisplayName("a Range end that overflows is relayed like any large range, not cut from a read-ahead window")
+    fun aHugeRangeEndIsRelayedNotReadAhead() {
+        runBlocking {
+            val data = payload(1_048_576, salt = 41)
+            val up = CountingUpstream({ _, _ -> data })
+            val ms = serve(CachingTestResolver(), up)
+            val path = register(ms)
+            scan(ms, path, data, 0)
+
+            val huge = "bytes=0-9223372036854775807"
+            repeat(2) {
+                val before = up.calls.size
+                val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to huge))
+                assertEquals(206, r.status, "a huge Range end is not a 500, reported: ${seen.lastOrNull()}")
+                assertEquals("bytes 0-${data.size - 1}/${data.size}", r.header("Content-Range"))
+                assertTrue(data.contentEquals(r.body), "the whole file, as upstream returns for that Range")
+                assertEquals(before + 1, up.calls.size, "one plain upstream call")
+                assertEquals(huge, up.calls.last().range, "upstream saw the client's Range, not a window Range")
+            }
+            val log = awaitSeen { l -> l.size >= 3 }
+            assertTrue(log.none { it.upstream.orEmpty().startsWith("window") }, "no window was fetched for the huge ranges: ${log.map { it.upstream }}")
         }
     }
 

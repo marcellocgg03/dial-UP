@@ -164,12 +164,18 @@ class Playlist {
         emitPlaylistEvent(name, payload["eventDetails"])
     }
 
-    /** Back to an empty queue with autoplay unsupported (Player.reset). */
+    /**
+     * Back to an empty queue with no previous, next or autoplay video, no refresh in flight and autoplay
+     * unsupported (Player.reset). yt-cast-receiver keeps the next video and the refresh, so a phone that
+     * connects next is offered the old cast's autoplay entry (PARITY P-12).
+     */
     fun reset() {
         id = null
         videoIds = emptyList()
         current = null
         previousVideo = null
+        nextVideo = null
+        abortRefresh()
         autoplayMode = AutoplayMode.UNSUPPORTED
         requestHandler.reset()
     }
@@ -228,7 +234,8 @@ class Playlist {
 
     /**
      * Asks the handler for the videos around the current one. A refresh that starts while another is
-     * suspended cancels the first, which then returns without touching previous or next. A current video
+     * suspended cancels the first, which then returns without touching previous or next. An answer is written
+     * only while the current video is still the one the refresh started for (compared by identity). A current video
      * without a playlist index is skipped unless [force] is true (an autoplay hop, see [refreshAfterHop]).
      */
     private suspend fun refreshPreviousNext(force: Boolean = false) {
@@ -257,10 +264,13 @@ class Playlist {
             }
         }
         if (aborted) return
-
-        previousVideo = nav?.previous
-        if (!isLast || autoplayMode == AutoplayMode.ENABLED) {
-            nextVideo = nav?.next
+        // The answer belongs to [cur]: a reset or a play of another video (setAsCurrent aborts nothing) may have
+        // changed the current video meanwhile, and a late answer must not bring the old queue back (D-11).
+        if (current === cur) {
+            previousVideo = nav?.previous
+            if (!isLast || autoplayMode == AutoplayMode.ENABLED) {
+                nextVideo = nav?.next
+            }
         }
     }
 

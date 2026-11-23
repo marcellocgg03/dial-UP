@@ -95,10 +95,8 @@ internal class DirectRelay(
                 out.note = "read-ahead off for this stream: ${e.javaClass.simpleName}"
                 null
             }
-            if (window != null) {
-                respondFromWindow(call, entry, window, span, out)
-                return true
-            }
+            // A false answer wrote nothing: the plain path answers.
+            if (window != null) return respondFromWindow(call, entry, window, span, out)
         }
         return false
     }
@@ -160,12 +158,16 @@ internal class DirectRelay(
     }
 
 
-    /** A bounded `bytes=a-b` of at most [READ_AHEAD_SCAN_MAX_BYTES] bytes, else null. */
+    /**
+     * A bounded `bytes=a-b` of at most [READ_AHEAD_SCAN_MAX_BYTES] bytes, else null (the request is relayed as it is). The
+     * length test is written so a huge end cannot wrap: with `b >= a >= 0`, `b - a` cannot overflow, while `b - a + 1` does
+     * for `b` = [Long.MAX_VALUE].
+     */
     private fun scanSpan(range: String): LongRange? {
         val m = BOUNDED_RANGE.matchEntire(range) ?: return null
         val a = m.groupValues[1].toLongOrNull() ?: return null
         val b = m.groupValues[2].toLongOrNull() ?: return null
-        if (b < a || b - a + 1 > READ_AHEAD_SCAN_MAX_BYTES) return null
+        if (b < a || b - a >= READ_AHEAD_SCAN_MAX_BYTES) return null
         return a..b
     }
 
@@ -189,14 +191,18 @@ internal class DirectRelay(
             out.upstream.add(UpstreamTiming("window hit"))
             held
         } else {
-            fetchWindow(id, token, state, span.first, out, r, up)
+            fetchWindow(id, token, state, span.first, span.last, out, r, up)
         }
     }
 
-    /** 206 for [span] (its end clamped to the file, as upstream does) cut from [w]; the same headers the plain path passes on. */
-    private suspend fun respondFromWindow(call: ApplicationCall, entry: StreamEntry, w: ReadAheadWindow, span: LongRange, out: Outcome) {
+    /**
+     * 206 for [span] (its end clamped to the file, as upstream does) cut from [w]; the same headers the plain path passes on.
+     * False, with nothing written, when [w] does not hold the whole of that span: a window is never cut outside itself.
+     */
+    private suspend fun respondFromWindow(call: ApplicationCall, entry: StreamEntry, w: ReadAheadWindow, span: LongRange, out: Outcome): Boolean {
         val first = span.first
         val last = minOf(span.last, w.total - 1)
+        if (first < w.start || first >= w.total || last > w.end || last < first) return false
         val length = (last - first + 1).toInt()
         val from = (first - w.start).toInt()
         val body = w.bytes.copyOfRange(from, from + length)
@@ -217,12 +223,14 @@ internal class DirectRelay(
                 override fun bytes(): ByteArray = body
             },
         )
+        return true
     }
 
     /**
      * One upstream request for [READ_AHEAD_WINDOW_BYTES] bytes from [start]. The window is installed only when upstream
-     * answered 206 with a Content-Range that starts at [start], a known total and exactly the bytes it names; a 200 (Range
-     * ignored) or anything else turns read-ahead off for the token and returns null. A 403 or 410 drops the token's windows
+     * answered 206 with a Content-Range that starts at [start], a known total, exactly the bytes it names and an end that
+     * reaches at least [spanEnd] (clamped to the file); a 200 (Range ignored), a window that stops short of the span or
+     * anything else turns read-ahead off for the token and returns null. A 403 or 410 drops the token's windows
      * before the one re-resolve. Only a Range goes upstream besides the resolver's headers.
      */
     private suspend fun fetchWindow(
@@ -230,6 +238,7 @@ internal class DirectRelay(
         token: String,
         state: DirectScan,
         start: Long,
+        spanEnd: Long,
         out: Outcome,
         r: VideoResolver,
         up: UpstreamFetcher,
@@ -266,7 +275,7 @@ internal class DirectRelay(
                     val ce = parsed?.groupValues?.get(2)?.toLongOrNull()
                     val total = parsed?.groupValues?.get(3)?.toLongOrNull()
                     val body = resp.body
-                    if (cs != start || ce == null || total == null || ce < start || ce - start + 1 > want || ce >= total || body == null) {
+                    if (cs != start || ce == null || total == null || ce < start || ce - start + 1 > want || ce >= total || ce < minOf(spanEnd, total - 1) || body == null) {
                         state.disabled = true
                         timing.totalMs = timing.ttfbMs
                         out.note = "read-ahead off for this stream: upstream answered ${resp.status} to a ${want / 1024} KiB range"

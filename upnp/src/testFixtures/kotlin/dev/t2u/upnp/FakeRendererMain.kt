@@ -328,6 +328,8 @@ fun main(args: Array<String>) {
         playMimes = options.playMimes,
         startDelayMs = options.startDelayMs,
         log = ::stamped,
+        // A speaker on the LAN reports where it is, so a restart seek on mp3 or adts reads target plus a few seconds, not plus 65.
+        relTimeFollowsPlay = true,
     )
     try {
         fake.start()

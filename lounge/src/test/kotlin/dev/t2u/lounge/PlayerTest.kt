@@ -3,7 +3,12 @@ package dev.t2u.lounge
 // Tests for Player (port of yt-cast-receiver 2.1.0 lib/Player.js, MIT, Copyright (c) Patrick Kan), GPL-3.0-only.
 
 import dev.t2u.upnp.EventSink
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -32,6 +37,7 @@ class FakePlayer : Player() {
     var lastVolumeSet: Volume? = null
     @Volatile var beforeGetVolume: suspend () -> Unit = {}
     @Volatile var beforeGetPosition: suspend () -> Unit = {}
+    @Volatile var beforePlay: suspend () -> Unit = {}
 
     /** The player's clock (epoch ms); a test moves it by hand. */
     var nowMs: Long = 1_700_000_000_000
@@ -46,9 +52,13 @@ class FakePlayer : Player() {
     /** When set, doPlay throws this after recording the call. */
     var playFailure: Throwable? = null
 
+    /** When set, doSeek throws this after recording the call. */
+    var seekFailure: Throwable? = null
+
     override suspend fun doPlay(video: Video, position: Double): Boolean {
         calls += "play:${video.id}"
         lastPlayedPosition = position
+        beforePlay()
         playFailure?.let { throw it }
         return playResult
     }
@@ -70,6 +80,7 @@ class FakePlayer : Player() {
 
     override suspend fun doSeek(position: Double): Boolean {
         calls += "seek:$position"
+        seekFailure?.let { throw it }
         return seekResult
     }
 
@@ -347,12 +358,138 @@ class PlayerTest {
     }
 
     @Test
-    fun seekFailureEmitsNoPlayingState() = runBlocking {
+    fun aRefusedSeekReEmitsTheRealState(): Unit = runBlocking {
         val (player, events) = playing()
+        val logged = CopyOnWriteArrayList<Map<String, Any?>>()
+        player.events = EventSink { kind, fields -> if (kind == "player") logged += fields }
+        player.position = 30.0
         player.seekResult = false
         assertFalse(player.seek(10.0))
-        assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PLAYING), events.map { it.current.status })
+        assertEquals(10.0, events[0].current.position)
+        assertEquals(PlayerStatus.LOADING, events[1].previous?.status, "the fake LOADING state is the previous state")
+        assertEquals(30.0, events[1].current.position, "the real position, not the refused target")
+        assertTrue(logged.any { it["type"] == "seekRefused" && it["position"] == 10.0 })
         assertEquals(PlayerStatus.PLAYING, player.status)
+    }
+
+    @Test
+    fun aRefusedSeekWhilePausedReEmitsPaused(): Unit = runBlocking {
+        val (player, events) = playing()
+        player.pause()
+        events.clear()
+        player.position = 30.0
+        player.seekResult = false
+        assertFalse(player.seek(10.0))
+        assertEquals(listOf(PlayerStatus.LOADING, PlayerStatus.PAUSED), events.map { it.current.status })
+        assertEquals(PlayerStatus.LOADING, events[1].previous?.status)
+        assertEquals(30.0, events[1].current.position)
+        assertEquals(PlayerStatus.PAUSED, player.status)
+    }
+
+    @Test
+    fun aCancelledSeekEmitsNothingMore(): Unit = runBlocking {
+        val (player, events) = playing()
+        player.seekFailure = kotlinx.coroutines.CancellationException("cancelled")
+        assertFailsWith<kotlinx.coroutines.CancellationException> { player.seek(10.0) }
+        assertEquals(listOf(PlayerStatus.LOADING), events.map { it.current.status })
+    }
+
+    /** Holds the first position read of [player] until [gate] opens; [entered] completes when it is held. */
+    private fun holdFirstGetState(player: FakePlayer, entered: CompletableDeferred<Unit>, gate: CompletableDeferred<Unit>) {
+        var first = true
+        player.beforeGetPosition = {
+            if (first) {
+                first = false
+                entered.complete(Unit)
+                gate.await()
+            }
+        }
+    }
+
+    /** D-09, LOUNGE WR-11: the second state change must not overtake the first one inside the emit. */
+    @Test
+    fun racingStateChangesReachTheSendersInOrder(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        holdFirstGetState(player, entered, gate)
+
+        val first = launch { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        entered.await()
+        val second = launch { player.notifyExternalStateChange(PlayerStatus.PLAYING) }
+        yield()
+        gate.complete(Unit)
+        joinAll(first, second)
+
+        assertEquals(listOf(PlayerStatus.PAUSED, PlayerStatus.PLAYING), events.map { it.current.status }, "emitted in the order taken")
+        assertEquals(PlayerStatus.PLAYING, events[0].previous?.status)
+        assertEquals(events[0].current, events[1].previous, "each event's previous state is the state emitted before it")
+        assertEquals(events.last().current.status, player.status, "the player's status is the last emitted one")
+    }
+
+    @Test
+    fun aPositionCorrectionDoesNotInterleaveWithAStatusChange(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        holdFirstGetState(player, entered, gate)
+
+        val change = launch { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        entered.await()
+        val correction = launch { player.notifyPositionCorrection() }
+        yield()
+        gate.complete(Unit)
+        joinAll(change, correction)
+
+        assertEquals(2, events.size)
+        assertEquals(PlayerStatus.PLAYING, events[0].previous?.status, "the status change came first")
+        assertEquals(PlayerStatus.PAUSED, events[0].current.status)
+        assertEquals(-1.0, events[1].previous?.position, "then the correction, which never equals a real position")
+        assertEquals(events[0].current.status, events[1].previous?.status, "the correction follows the state emitted before it")
+        assertEquals(PlayerStatus.PAUSED, events[1].current.status)
+    }
+
+    @Test
+    fun aListenerThatReadsTheStateDoesNotDeadlock(): Unit = runBlocking {
+        val player = FakePlayer()
+        var reads = 0
+        player.addStateListener {
+            player.getState()
+            player.getNavInfo()
+            reads++
+        }
+        withTimeout(5_000) {
+            player.notifyExternalStateChange(PlayerStatus.PLAYING)
+            player.notifyPositionCorrection()
+            player.notifyExternalStateChange(PlayerStatus.PAUSED)
+            player.reset()
+        }
+        assertEquals(5, reads, "four calls and the STOPPED event of reset's stop")
+    }
+
+    @Test
+    fun commandsAreNotSerialisedByTheEmitLock(): Unit = runBlocking {
+        val (player, events) = playing()
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        player.beforePlay = {
+            entered.complete(Unit)
+            gate.await()
+        }
+
+        // a play on a PLAYING player stops it first, then waits inside doPlay
+        val play = launch { player.play(player.queue.current!!, 0.0) }
+        entered.await()
+        events.clear()
+
+        withTimeout(2_000) { player.notifyExternalStateChange(PlayerStatus.PAUSED) }
+        assertEquals(listOf(PlayerStatus.PAUSED), events.map { it.current.status }, "an emit does not wait for the command in doPlay")
+
+        gate.complete(Unit)
+        play.join()
+        assertEquals(PlayerStatus.PLAYING, player.status)
+        assertEquals(PlayerStatus.PLAYING, events.last().current.status)
     }
 
     @Test
@@ -632,6 +769,63 @@ class PlayerTest {
         assertEquals(PlayerStatus.PLAYING, player.status)
         assertEquals("B", player.queue.current?.id)
         assertTrue(reported.any { it["type"] == "hopRefreshFailed" })
+    }
+
+    /** D-11: a phone that connects after a reset must not be offered the old cast's Previous or autoplay entry. */
+    @Test
+    fun aResetLeavesNoStaleQueueEntry() = runBlocking {
+        val (player, _, events) = chain(AutoplayMode.ENABLED)
+        assertTrue(player.play(player.queue.current!!, 0.0))
+        assertTrue(player.next(), "setup: the hop makes B current and gives it a previous and an autoplay video")
+        assertEquals("C", player.queue.autoplay?.id)
+        assertTrue(player.getNavInfo().hasPrevious)
+        events.clear()
+
+        player.reset()
+
+        val idle = events.last()
+        assertEquals(PlayerStatus.IDLE, idle.current.status)
+        assertNull(idle.current.queue.previous)
+        assertNull(idle.current.queue.next)
+        assertNull(idle.current.queue.autoplay)
+        assertEquals(NavInfo(hasPrevious = false, hasNext = false, autoplayMode = AutoplayMode.UNSUPPORTED), player.getNavInfo())
+    }
+
+    /** D-11, research Pattern 10: a track end that races a reset finds an empty queue and plays nothing. */
+    @Test
+    fun aTrackEndAfterAResetStartsNothing() = runBlocking {
+        val player = FakePlayer()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        player.queue.requestHandler = object : PlaylistRequestHandler {
+            override suspend fun getPreviousNextVideos(target: Video, playlist: Playlist): PreviousNextVideos? {
+                entered.complete(Unit)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() }
+                return PreviousNextVideos(vid("A", 0), vid("C", 2))
+            }
+        }
+        val refresh = launch {
+            player.queue.updateByMessage(
+                "setPlaylist",
+                payload(listId = "L", videoIds = "A,B,C", videoId = "B", currentIndex = "1"),
+                Client.YT,
+            )
+        }
+        entered.await()
+        assertTrue(player.queue.isUpdating)
+
+        player.reset()
+        assertFalse(player.queue.isUpdating, "the settle wait of the renderer must not see a refresh after a reset")
+        player.calls.clear()
+
+        assertFalse(player.next())
+        gate.complete(Unit)
+        refresh.join()
+        assertFalse(player.next())
+
+        assertTrue(player.calls.none { it.startsWith("play:") }, "nothing started: ${player.calls}")
+        assertEquals(PlayerStatus.IDLE, player.status)
+        assertNull(player.queue.current)
     }
 
     // ---- unconditional clear hook (plan 03-04, CAST-06)

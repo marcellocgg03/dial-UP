@@ -15,7 +15,9 @@ import java.net.URI
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -117,9 +119,48 @@ class MediaServerFeedTest {
         if (::upstream.isInitialized) upstream.stop(0)
     }
 
-    private fun serve(resolver: VideoResolver): MediaServer = MediaServer(
-        "127.0.0.1", 0, JvmPipeLauncher(ffmpeg), { seen.add(it) }, File(dir, "buffer"), resolver,
-        PipeRangeConfig(enabled = false), upstream = HttpFetcher(), ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP,
+    /** Wraps a launcher and records the args of every ffmpeg start: the feed URL of an attempt is in them. */
+    private class RecordingLauncher(private val inner: PipeLauncher) : PipeLauncher {
+        val starts = CopyOnWriteArrayList<List<String>>()
+
+        override fun start(args: List<String>): Process {
+            starts += args
+            return inner.start(args)
+        }
+
+        override fun stderrTail(process: Process): String = inner.stderrTail(process)
+    }
+
+    /** The `/feed/<token>` path an ffmpeg start read from, or null for a start that read something else. */
+    private fun feedPathOf(args: List<String>): String? =
+        args.firstNotNullOfOrNull { Regex("^http://[^/]+(/feed/[0-9a-f]{32})$").find(it)?.groupValues?.get(1) }
+
+    /** Polls the feed path with a HEAD until it answers [want] (up to [waitMs]); returns the last status seen. */
+    private fun feedStatusUntil(ms: MediaServer, path: String, want: Int, waitMs: Long = 5_000): Int {
+        val end = System.nanoTime() + waitMs * 1_000_000
+        var status = RawHttp.request(ms.resolvedPort(), "HEAD", path).status
+        while (status != want && System.nanoTime() < end) {
+            Thread.sleep(50)
+            status = RawHttp.request(ms.resolvedPort(), "HEAD", path).status
+        }
+        return status
+    }
+
+    private fun awaitTrue(what: String, waitMs: Long = 10_000, test: () -> Boolean) {
+        val end = System.nanoTime() + waitMs * 1_000_000
+        while (!test()) {
+            check(System.nanoTime() < end) { "timed out waiting for $what" }
+            Thread.sleep(25)
+        }
+    }
+
+    private fun serve(
+        resolver: VideoResolver,
+        launcher: PipeLauncher = JvmPipeLauncher(ffmpeg),
+        pipeRanges: PipeRangeConfig = PipeRangeConfig(enabled = false),
+    ): MediaServer = MediaServer(
+        "127.0.0.1", 0, launcher, { seen.add(it) }, File(dir, "buffer"), resolver,
+        pipeRanges, upstream = HttpFetcher(), ffmpegUrlPolicy = FfmpegUrlPolicy.ANY_HTTP,
         feedRefreshMarginMs = 5_000, feedCutMarginMs = 3_000,
     ).also {
         it.start()
@@ -169,4 +210,69 @@ class MediaServerFeedTest {
         assertEquals(0, resolver.resolves.get())
         assertTrue(upstreamRequests.isEmpty())
     }
+
+    @Test
+    @DisplayName("a feed token answers while its ffmpeg runs and is gone once the stream has ended")
+    fun aFeedTokenIsReleasedWhenItsFfmpegEnds() {
+        val launcher = RecordingLauncher(JvmPipeLauncher(ffmpeg))
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher)
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        val answer = AtomicReference<RawResponse>()
+        val getter = Thread { answer.set(RawHttp.request(ms.resolvedPort(), "GET", path)) }.also { it.isDaemon = true; it.start() }
+        awaitTrue("ffmpeg to have fetched its feed") { launcher.starts.isNotEmpty() && upstreamRequests.isNotEmpty() }
+        val feed = assertNotNull(feedPathOf(launcher.starts.first()), "the feed attempt comes first: ${launcher.starts}")
+        assertTrue(RawHttp.request(ms.resolvedPort(), "HEAD", feed).status in 200..299, "the token answers while the stream runs")
+        getter.join(60_000)
+        assertEquals(200, answer.get().status, "reported: $seen")
+        assertEquals(404, feedStatusUntil(ms, feed, 404), "the token must be released once its ffmpeg has ended")
+    }
+
+    @Test
+    @DisplayName("an HTTP/1.0 request (the buffered path) releases its feed token once its ffmpeg has ended")
+    fun aBufferedRequestReleasesItsFeedToken() {
+        val launcher = RecordingLauncher(JvmPipeLauncher(ffmpeg))
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher)
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        val r = RawHttp.request(ms.resolvedPort(), "GET", path, version = "HTTP/1.0")
+        assertEquals(200, r.status, "reported: $seen")
+        val feed = assertNotNull(feedPathOf(launcher.starts.first()), "the feed attempt comes first: ${launcher.starts}")
+        assertEquals(404, feedStatusUntil(ms, feed, 404), "the buffered path must release the token once its ffmpeg has ended")
+    }
+
+    @Test
+    @DisplayName("a cold range fill releases its feed token once its ffmpeg has ended")
+    fun aColdFillReleasesItsFeedToken() {
+        val launcher = RecordingLauncher(JvmPipeLauncher(ffmpeg))
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher, PipeRangeConfig(enabled = true, coldFillTimeoutMs = 60_000))
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        val r = RawHttp.request(ms.resolvedPort(), "GET", path, mapOf("Range" to "bytes=100000-"))
+        assertEquals(206, r.status, "a bounded fill answers the range; reported: $seen")
+        assertEquals(1, launcher.starts.size, "one ffmpeg ran, the fill: ${launcher.starts}")
+        val feed = assertNotNull(feedPathOf(launcher.starts.first()), "the feed attempt comes first: ${launcher.starts}")
+        assertEquals(404, feedStatusUntil(ms, feed, 404), "the cold fill must release the token once its ffmpeg has ended")
+    }
+
+    /** Records the args of every start and then fails it the way ProcessBuilder does for a binary that cannot run. */
+    private class UnstartableLauncher : PipeLauncher {
+        val starts = CopyOnWriteArrayList<List<String>>()
+
+        override fun start(args: List<String>): Process {
+            starts += args
+            throw IOException("Cannot run program \"/nowhere/ffmpeg\": error=2")
+        }
+    }
+
+    @Test
+    @DisplayName("a feed attempt whose ffmpeg cannot be started leaves no token behind, on the buffered and the live path")
+    fun aFeedAttemptWhoseLaunchFailsLeavesNoTokenBehind() {
+        val launcher = UnstartableLauncher()
+        val ms = serve(ExpiringResolver(base, ttlSeconds = 600), launcher)
+        val path = ms.registerVideo(VideoEntry("fffffffffff", "adts"))
+        assertEquals(502, RawHttp.request(ms.resolvedPort(), "GET", path, version = "HTTP/1.0").status, "buffered; reported: $seen")
+        assertEquals(502, RawHttp.request(ms.resolvedPort(), "GET", path).status, "live; reported: $seen")
+        val feeds = launcher.starts.mapNotNull(::feedPathOf)
+        assertEquals(2, feeds.size, "each request tried the feed attempt first: ${launcher.starts}")
+        feeds.forEach { assertEquals(404, feedStatusUntil(ms, it, 404), "$it was left behind") }
+    }
 }
+

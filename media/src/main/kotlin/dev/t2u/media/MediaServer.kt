@@ -31,11 +31,13 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.IOException
 import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -161,10 +163,11 @@ class MediaServer(
     private val feedRelay: FeedRelay? =
         if (resolver != null && upstream != null) FeedRelay(resolver, upstream, refreshMarginMs = feedRefreshMarginMs, cutMarginMs = feedCutMarginMs) else null
 
-    /** Feed token to video ID; a token is secret and made for one ffmpeg attempt. Guarded by itself; the oldest go first. */
-    private val feeds = object : LinkedHashMap<String, String>() {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>): Boolean = size > MAX_FEEDS
-    }
+    /**
+     * Feed token to video ID; a token is secret and made for one ffmpeg attempt. A token stays until its attempt's ffmpeg
+     * has ended ([PipeAttempt.release]); only tokens never fetched are evicted by age (see [FeedTokens]).
+     */
+    private val feedTokens = FeedTokens(MAX_FEEDS, random)
     private val byteRanges = ByteRangeResponder()
 
     /** Finished runs of video pipe tokens, for ranged GETs; null when disabled or without a [bufferDir]. */
@@ -482,7 +485,7 @@ class MediaServer(
     /** A GET or HEAD of an ffmpeg feed: only from this phone, only for a token this server made. */
     private suspend fun serveFeed(call: ApplicationCall, token: String, method: HttpMethod, out: Outcome) {
         val relay = feedRelay
-        val id = synchronized(feeds) { feeds[token] }
+        val id = feedTokens.lookup(token)
         val remote = call.request.local.remoteAddress
         val own = remote == "127.0.0.1" || remote == "::1" || remote == host
         if (relay == null || id == null || !own || (method != HttpMethod.Get && method != HttpMethod.Head)) {
@@ -494,12 +497,8 @@ class MediaServer(
         relay.serve(call, id, method == HttpMethod.Head, out)
     }
 
-    /** The URL ffmpeg reads for [videoId]: this server's own address and a new secret token. */
-    private fun feedUrl(videoId: String): String {
-        val bytes = ByteArray(16)
-        random.nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
-        synchronized(feeds) { feeds[token] = videoId }
+    /** The URL ffmpeg reads for [token]: this server's own address and the secret token. */
+    private fun feedUrl(token: String): String {
         val h = host.takeIf { it != "0.0.0.0" && it != "::" && it.isNotBlank() } ?: "127.0.0.1"
         val shown = if (':' in h) "[$h]" else h
         return "http://$shown:$boundPort/feed/$token"
@@ -612,25 +611,39 @@ class MediaServer(
      * ffmpeg the local file. A source that is already downloaded (or downloading) goes first, so YouTube is not asked.
      */
     private fun attemptsFor(src: StreamSource): List<PipeAttempt>? = when (src) {
-        is StreamSource.PipeSource -> listOf(PipeAttempt("stream") { src.inputArgs })
+        is StreamSource.PipeSource -> listOf(PipeAttempt("stream", input = { src.inputArgs }))
         is StreamSource.VideoPipe -> resolver?.let { r ->
             val id = src.entry.videoId
             val startAt = src.entry.startAt
             val attempts = mutableListOf<PipeAttempt>()
             if (feedFirst && feedRelay != null) {
-                attempts += PipeAttempt("the feed") {
-                    feedInputArgs(feedUrl(id), startAt, ffmpegLogLevel)
-                }
+                // the tokens this request's input() made; the ladder, the cold fill and the buffered path each call release()
+                val made = CopyOnWriteArrayList<String>()
+                attempts += PipeAttempt(
+                    "the feed",
+                    input = {
+                        val token = feedTokens.register(id)
+                        made += token
+                        feedInputArgs(feedUrl(token), startAt, ffmpegLogLevel)
+                    },
+                    release = {
+                        made.forEach { feedTokens.release(it) }
+                        made.clear()
+                    },
+                )
             }
             attempts += listOf(
-                PipeAttempt("YouTube URL") { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy) },
-                PipeAttempt("a fresh extraction") {
-                    r.invalidate(id)
-                    urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy)
-                },
+                PipeAttempt("YouTube URL", input = { urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy) }),
+                PipeAttempt(
+                    "a fresh extraction",
+                    input = {
+                        r.invalidate(id)
+                        urlInputArgs(r.resolve(id), startAt, ffmpegLogLevel, ffmpegUrlPolicy)
+                    },
+                ),
             )
             files?.let { f ->
-                attempts += PipeAttempt("the yt-dlp download") { fileInputArgs(f.sourceFile(id).path, startAt, ffmpegLogLevel) }
+                attempts += PipeAttempt("the yt-dlp download", input = { fileInputArgs(f.sourceFile(id).path, startAt, ffmpegLogLevel) })
                 // Node moves the last attempt to the front when the source is there already.
                 if (f.hasSource(id)) attempts.add(0, attempts.removeAt(attempts.lastIndex))
             }
@@ -800,21 +813,27 @@ class MediaServer(
         for ((index, attempt) in attempts.withIndex()) {
             // An earlier attempt failed and this one has to produce the stream: the speaker is only waiting.
             if (index > 0) setRecovering(true)
-            val input = try {
-                attempt.input()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
-                continue
+            // serve has killed and waited for its process when it returns; an attempt whose input failed has none: either way
+            // the attempt's feed token is not needed any more (a reconnect of the same process happens inside serve)
+            try {
+                val input = try {
+                    attempt.input()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
+                    continue
+                }
+                // Hung up while we resolved: an ffmpeg started now would block on a pipe nobody reads (mediaServer.js).
+                // Measured with Ktor CIO 3.6.0: the call's coroutine stays active when the peer closes before the first
+                // response byte, so this only catches cancellation (engine stop). A hang-up during the lookup is caught by
+                // the first write below, which fails and kills ffmpeg within a flush (MediaServerLadderTest).
+                if (!currentCoroutineContext().isActive) return
+                val failure = pipeTee.serve(call, entry, out, cache, token, input + tail + "pipe:1", onFirstByte = { setRecovering(false) }) ?: return
+                failures += failureLine(attempt.name, failure, attempts.size > 1)
+            } finally {
+                attempt.release()
             }
-            // Hung up while we resolved: an ffmpeg started now would block on a pipe nobody reads (mediaServer.js).
-            // Measured with Ktor CIO 3.6.0: the call's coroutine stays active when the peer closes before the first
-            // response byte, so this only catches cancellation (engine stop). A hang-up during the lookup is caught by
-            // the first write below, which fails and kills ffmpeg within a flush (MediaServerLadderTest).
-            if (!currentCoroutineContext().isActive) return
-            val failure = pipeTee.serve(call, entry, out, cache, token, input + tail + "pipe:1", onFirstByte = { setRecovering(false) }) ?: return
-            failures += failureLine(attempt.name, failure, attempts.size > 1)
         }
         out.status = 502
         out.note = failures.joinToString(" | ").ifEmpty { "ffmpeg produced no output" }
@@ -864,41 +883,53 @@ class MediaServer(
         var handedOver = false
         try {
             for (attempt in attempts) {
-                val input = try {
-                    attempt.input()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    continue // the live path that follows a failed fill records the failure
-                }
-                if (!currentCoroutineContext().isActive) return null
-                withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
-                val proc = l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
+                // the attempt's feed token goes once its process has been killed and waited for (the inner finally), or at once
+                // when it never started one; not before: ffmpeg reconnects to the feed inside one process
                 try {
-                    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
-                    while (true) {
-                        val exited = withContext(Dispatchers.IO) { proc.waitFor(FILL_POLL_MS, TimeUnit.MILLISECONDS) }
-                        if (exited) break
+                    val input = try {
+                        attempt.input()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        continue // the live path that follows a failed fill records the failure
+                    }
+                    if (!currentCoroutineContext().isActive) return null
+                    withContext(Dispatchers.IO) { runCatching { part.writeBytes(ByteArray(0)) } } // a retry starts from an empty file
+                    val proc = try {
+                        l.startOwned(listOf("-y") + input + outputArgs + part.absolutePath)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: IOException) {
+                        return null // ffmpeg cannot be started: the live path that follows records it (ffmpegStartFailure) and answers
+                    }
+                    try {
+                        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(pipeRanges.coldFillTimeoutMs)
+                        while (true) {
+                            val exited = withContext(Dispatchers.IO) { proc.waitFor(FILL_POLL_MS, TimeUnit.MILLISECONDS) }
+                            if (exited) break
+                            if (part.length() > pipeRanges.maxBytesPerToken) {
+                                cache.markOversize(token)
+                                out.note = "range fill passed the size cap"
+                                return null
+                            }
+                            if (System.nanoTime() > deadline) {
+                                out.note = "range fill passed the ${pipeRanges.coldFillTimeoutMs} ms budget"
+                                return null
+                            }
+                        }
+                        if (proc.exitValue() != 0 || part.length() == 0L) continue
                         if (part.length() > pipeRanges.maxBytesPerToken) {
                             cache.markOversize(token)
-                            out.note = "range fill passed the size cap"
                             return null
                         }
-                        if (System.nanoTime() > deadline) {
-                            out.note = "range fill passed the ${pipeRanges.coldFillTimeoutMs} ms budget"
-                            return null
-                        }
+                    } finally {
+                        killAndWait(proc)
                     }
-                    if (proc.exitValue() != 0 || part.length() == 0L) continue
-                    if (part.length() > pipeRanges.maxBytesPerToken) {
-                        cache.markOversize(token)
-                        return null
-                    }
+                    handedOver = true
+                    return withContext(Dispatchers.IO) { cache.promote(token, part) }
                 } finally {
-                    killAndWait(proc)
+                    attempt.release()
                 }
-                handedOver = true
-                return withContext(Dispatchers.IO) { cache.promote(token, part) }
             }
             return null
         } finally {
@@ -924,18 +955,25 @@ class MediaServer(
         val failures = mutableListOf<String>()
         try {
             for (attempt in attempts) {
-                val input = try {
-                    attempt.input()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
-                    continue
-                }
-                if (!currentCoroutineContext().isActive) return
                 var proc: Process? = null
                 try {
-                    val p = l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
+                    val input = try {
+                        attempt.input()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failures += failureLine(attempt.name, e.message ?: e.javaClass.simpleName, attempts.size > 1)
+                        continue
+                    }
+                    if (!currentCoroutineContext().isActive) return
+                    val p = try {
+                        l.startOwned(listOf("-y") + input + outputArgs + tmp.absolutePath)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: IOException) {
+                        failures += failureLine(attempt.name, ffmpegStartFailure(e), attempts.size > 1)
+                        continue
+                    }
                     proc = p
                     val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
                     if (!done) {
@@ -950,7 +988,9 @@ class MediaServer(
                         continue
                     }
                 } finally {
+                    // the feed token goes with the process, never before: ffmpeg reconnects to the feed inside one process
                     proc?.let { killAndWait(it) }
+                    attempt.release()
                 }
                 permit.release()
                 serveFile(call, entry, tmp, false, out, "buffered")
