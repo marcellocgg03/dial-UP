@@ -103,6 +103,14 @@ class BridgeToggleTest {
     }
 
     @Test
+    fun startWantedIsTheSwitchWithoutMaintenance() {
+        assertTrue(startWanted(bridgeEnabled = true, maintenance = false))
+        assertFalse(startWanted(bridgeEnabled = true, maintenance = true))
+        assertFalse(startWanted(bridgeEnabled = false, maintenance = false))
+        assertFalse(startWanted(bridgeEnabled = false, maintenance = true))
+    }
+
+    @Test
     fun `a restart with nothing playing runs at once`() {
         assertEquals(RestartStep.RESTART_NOW, restartStep(0))
     }
