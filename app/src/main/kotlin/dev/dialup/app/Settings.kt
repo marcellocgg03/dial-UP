@@ -155,15 +155,19 @@ fun settingsOverrideKeys(data: AppSettingsData): List<String> = buildList {
 
 /**
  * Turns the text of settings.json into [AppSettingsData]. Pure: it never throws. Text that is not a JSON object gives
- * the defaults and one problem; a key with a wrong type or value falls back alone and adds its name to the problems.
+ * the defaults, with the build's yt-dlp auto-update default, and one problem; a key with a wrong type or value falls
+ * back alone and adds its name to the problems.
+ *
+ * [ytdlpAutoDefault] is what the automatic yt-dlp update is when the file does not say: on, but off in an F-Droid build.
+ * A damaged file must not turn on a remote-code download in a build that promised it off, so the not-an-object result
+ * carries it too.
  */
-/** [ytdlpAutoDefault] is what the automatic yt-dlp update is when the file does not say: on, but off in an F-Droid build. */
 fun parseSettings(text: String, ytdlpAutoDefault: Boolean = !BuildConfigFacts.fdroid): ParsedSettings {
     val o = try {
         Json.parseToJsonElement(text) as? JsonObject
     } catch (_: SerializationException) {
         null
-    } ?: return ParsedSettings(AppSettingsData(), emptyMap(), listOf("settings.json"))
+    } ?: return ParsedSettings(AppSettingsData(ytdlpAutoUpdate = ytdlpAutoDefault), emptyMap(), listOf("settings.json"))
     val problems = mutableListOf<String>()
     var data = AppSettingsData(ytdlpAutoUpdate = ytdlpAutoDefault)
 
@@ -228,9 +232,9 @@ fun readSettingsFile(file: File): AppSettingsData =
     try {
         if (file.isFile) parseSettings(file.readText()).data else AppSettingsData(ytdlpAutoUpdate = !BuildConfigFacts.fdroid)
     } catch (_: IOException) {
-        AppSettingsData()
+        AppSettingsData(ytdlpAutoUpdate = !BuildConfigFacts.fdroid)
     } catch (_: SecurityException) {
-        AppSettingsData()
+        AppSettingsData(ytdlpAutoUpdate = !BuildConfigFacts.fdroid)
     }
 
 /** The JSON written for [data]: known keys in a stable order, null overrides and default switches left out. */
