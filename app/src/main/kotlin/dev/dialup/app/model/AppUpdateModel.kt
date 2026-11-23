@@ -3,7 +3,12 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.Failures
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -143,6 +148,9 @@ data class AppUpdateUi(
 
 /**
  * Holds the update check. One request runs at a time: a second caller while one is in flight gets that request's result.
+ * The request runs in [scope] (the app's, not a caller's): a caller that leaves, because its screen closed or its time
+ * limit ran out, only stops waiting; the check goes on, clears [AppUpdateUi.checking] and saves the record itself, and
+ * every other caller still gets the outcome or the failure. The request's own call timeout bounds it.
  * [checkNow] always runs and sets [AppUpdateUi.outcome]; [autoCheck] runs only when enabled and due and stays silent
  * (it updates the record, never the outcome). Pure: the request, the record file and the clock are passed in.
  */
@@ -153,16 +161,17 @@ class AppUpdateModel(
     private val save: (UpdateRecord) -> Unit,
     private val wallMs: () -> Long,
     private val channel: () -> UpdateChannel = { UpdateChannel.STABLE },
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     private val _state = MutableStateFlow(AppUpdateUi(record = load()))
     val state: StateFlow<AppUpdateUi> = _state.asStateFlow()
 
     private val lock = Any()
-    private var inflight: CompletableDeferred<CheckOutcome>? = null
+    private var inflight: Deferred<CheckOutcome>? = null
 
     /** Checks now, whatever the throttle and the automatic-check setting say. */
     suspend fun checkNow(): CheckOutcome {
-        val o = flight()
+        val o = flight().await()
         _state.update { it.copy(outcome = o) }
         return o
     }
@@ -171,26 +180,22 @@ class AppUpdateModel(
     suspend fun autoCheck(enabled: Boolean): CheckOutcome? {
         if (!enabled) return null
         if (!autoCheckDue(_state.value.record, wallMs(), channel())) return null
-        return flight()
+        return flight().await()
     }
 
-    private suspend fun flight(): CheckOutcome {
-        val mine = CompletableDeferred<CheckOutcome>()
-        val existing = synchronized(lock) {
-            inflight ?: run { inflight = mine; null }
-        }
-        if (existing != null) return existing.await()
-        _state.update { it.copy(checking = true) }
-        try {
-            val outcome = run()
-            mine.complete(outcome)
-            return outcome
-        } catch (t: Throwable) {
-            mine.completeExceptionally(t)
-            throw t
-        } finally {
-            synchronized(lock) { inflight = null }
-            _state.update { it.copy(checking = false) }
+    private fun flight(): Deferred<CheckOutcome> = synchronized(lock) {
+        inflight ?: scope.async(start = CoroutineStart.LAZY) {
+            _state.update { it.copy(checking = true) }
+            try {
+                run()
+            } finally {
+                synchronized(lock) { inflight = null }
+                _state.update { it.copy(checking = false) }
+            }
+        }.also {
+            // recorded before it starts, so a body that finishes at once clears the right reference
+            inflight = it
+            it.start()
         }
     }
 

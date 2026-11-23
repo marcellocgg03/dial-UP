@@ -5,7 +5,9 @@ package dev.dialup.app
 import android.content.Context
 import dev.dialup.app.model.AppUpdateModel
 import dev.dialup.app.model.RELEASES_API_URL
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
 
 /** The one process-wide app update check: the card on the Renderers tab and the App updates section in Settings share it. */
@@ -28,6 +30,8 @@ object AppUpdates {
                 save = record::save,
                 wallMs = System::currentTimeMillis,
                 channel = { AppSettings.of(app).data.value.updateChannel },
+                // the check outlives any screen that asked for it; the client's 20 s call timeout bounds it
+                scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             )
             instance = created
             return created
