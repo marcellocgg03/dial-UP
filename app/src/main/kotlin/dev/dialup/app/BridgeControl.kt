@@ -8,11 +8,14 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import dev.dialup.app.model.SingleFlight
+import dev.dialup.app.model.StoppedWork
 import dev.dialup.app.model.awaitNull
 import dev.dialup.app.model.StartDecision
 import dev.dialup.app.model.restartSequence
 import dev.dialup.app.model.startDecision
+import dev.dialup.app.model.startWanted
 import dev.dialup.app.model.startWhenStopped
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -43,15 +46,7 @@ object BridgeControl {
             // the instance that got the notification intent logs it, which may not be the published one
             ((alsoStop as? BridgeService)?.evidence ?: ServiceHub.service?.evidence)?.event("settings", details)
             if (on) {
-                if (deferred) {
-                    startAfterStop(app)
-                } else {
-                    when (startDecision(true, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
-                        StartDecision.START -> startService(app)
-                        StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
-                        StartDecision.NONE -> Unit
-                    }
-                }
+                applyStart(app, enabled = true, deferred = deferred)
             } else {
                 NetworkResume.disarm(app)
                 ServiceHub.service?.stopSelf()
@@ -77,6 +72,54 @@ object BridgeControl {
             Log.i("t2u", "network resume: started the bridge service")
         } catch (t: Throwable) {
             Log.w("t2u", "network resume: the system refused the start: ${t.javaClass.name}: ${t.message}")
+        }
+    }
+
+    /**
+     * The start decision behind [setEnabled] (on) and the end of maintenance: nothing when the switch is off or maintenance runs,
+     * the deferred start while a service is still going away, otherwise the start or the wait for Wi-Fi. Runs on [SettingsWriter].
+     */
+    private fun applyStart(app: Context, enabled: Boolean, deferred: Boolean) {
+        if (!enabled) return
+        if (deferred) {
+            startAfterStop(app)
+            return
+        }
+        val wanted = startWanted(enabled, MaintenanceMarker.isActive(app))
+        when (startDecision(wanted, BatteryGate.isOpen(app), false, hasBindableNetwork(app))) {
+            StartDecision.START -> startService(app)
+            StartDecision.WAIT_FOR_WIFI -> NetworkResume.arm(app)
+            StartDecision.NONE -> Unit
+        }
+    }
+
+    /**
+     * The stop half of a restart or an update: the maintenance marker holds every start path off, the network resume is
+     * disarmed and the running service is asked to stop. The saved switch is not written.
+     */
+    private fun beginMaintenance(app: Context, source: String) {
+        MaintenanceMarker.begin(app)
+        ServiceHub.service?.evidence?.event("maintenance", mapOf("state" to "begin", "source" to source))
+        NetworkResume.disarm(app)
+        ServiceHub.service?.stopSelf()
+    }
+
+    /**
+     * The resume half: on the settings writer, so it runs after every queued settings write. Only the last of overlapping work
+     * ends the marker and decides; it reads the saved switch, so an author who switched the bridge off meanwhile keeps it off.
+     * A service still going away (the wait timed out) gets the deferred start, never a start sent to the dying service.
+     */
+    private suspend fun endMaintenance(app: Context, source: String) {
+        SettingsWriter.run {
+            if (!MaintenanceMarker.end(app)) return@run
+            try {
+                (ServiceHub.service?.evidence ?: offlineEvidence(app.filesDir)).event("maintenance", mapOf("state" to "end", "source" to source))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.w("t2u", "maintenance end event failed: ${t.javaClass.name}")
+            }
+            applyStart(app, AppSettings.of(app).data.value.bridgeEnabled, ServiceHub.service != null)
         }
     }
 
@@ -111,47 +154,56 @@ object BridgeControl {
     private val restartFlight = SingleFlight<Boolean>()
 
     /**
-     * Restarts the bridge: off, wait up to 15 s for the old service to be gone and for the process-wide stop,
-     * then on. Only call it after [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (the
-     * restart prompt does that): a restart ends playback like a switch-off does. The off-then-on order avoids starting
+     * Restarts the bridge: stop it (the maintenance marker holds every start path off, the saved switch stays on), wait up to
+     * 15 s for the old service to be gone and for the process-wide stop, then start it again. Only call it after [dev.dialup.app.model.restartStep] said RESTART_NOW or the author confirmed (the
+     * restart prompt does that): a restart ends playback like a switch-off does. The stop-then-start order avoids starting
      * the service while the old instance is still being destroyed. The sequence runs on [BridgeLifecycle.scope], so closing
-     * or recreating the Activity mid-restart cannot cancel it, and its switch-on is non-cancellable. A second restart
+     * or recreating the Activity mid-restart cannot cancel it, and its resume is non-cancellable (it reads the saved switch, so a switch-off made meanwhile is kept). A second restart
      * while one runs joins it. Returns false when the old service did not stop in time. [source] lands in the `settings`
      * evidence events: "restart" for the author's button, "auto-restart" for the restart an app open makes.
      */
-    suspend fun restart(context: Context, source: String = "restart"): Boolean =
-        restartFlight.launch(BridgeLifecycle.scope) {
+    suspend fun restart(context: Context, source: String = "restart"): Boolean {
+        val app = context.applicationContext
+        return restartFlight.launch(BridgeLifecycle.scope) {
             restartSequence(
-                setEnabled = { setEnabled(context, it, source) },
+                stop = { beginMaintenance(app, source) },
                 awaitStopped = { awaitServiceGone() },
+                resume = { endMaintenance(app, source) },
             )
         }.await()
+    }
 
-    private val stoppedWorkFlight = SingleFlight<Boolean>()
+    private val stoppedWork = StoppedWork(BridgeLifecycle.scope)
 
     /**
      * Runs [block] with the bridge stopped, then starts it again: for work that cannot run while a renderer is being cast to (a
      * yt-dlp update). Only a bridge that is running is stopped and started again; with the bridge off, or never started, [block]
-     * simply runs and the switch is left alone. The bridge comes back on in all cases once the stop was requested, also when
-     * [block] throws or is cancelled, and a stop that did not finish in time still gets its restart (the same guarantee as
-     * [restart]). It ends playback like a switch-off does, so call it only after the author agreed. The sequence runs on
-     * [BridgeLifecycle.scope]; [source] lands in the `settings` evidence events.
+     * simply runs. The saved switch is never written: the maintenance marker holds every start path off meanwhile, so a process
+     * killed in the middle leaves the switch on. A second caller while one runs joins the first flight and gets its result (its
+     * own [block] does not run; the bridge is stopped once); when the bridge did not stop in time every caller gets
+     * IllegalStateException. The bridge comes back in all cases once the stop was requested, also when [block] throws or is
+     * cancelled and when the stop timed out, unless the author switched it off meanwhile (the resume reads the saved switch).
+     * It ends playback like a switch-off does, so call it only after the author agreed. The sequence runs on
+     * [BridgeLifecycle.scope]; [source] lands in the `maintenance` evidence events.
      */
     suspend fun <T> whileStopped(context: Context, source: String, block: suspend () -> T): T {
-        if (ServiceHub.service == null) return block()
-        var result: Result<T>? = null
-        stoppedWorkFlight.launch(BridgeLifecycle.scope) {
-            restartSequence(
-                setEnabled = { setEnabled(context, it, source) },
-                awaitStopped = {
-                    val stopped = awaitServiceGone()
-                    // a bridge that is still running keeps the work away: nothing changes under an active cast
-                    if (stopped) result = runCatching { block() }
-                    stopped
-                },
-            )
-        }.await()
-        return (result ?: Result.failure(IllegalStateException("the bridge did not stop"))).getOrThrow()
+        val app = context.applicationContext
+        if (!stoppedWork.active && ServiceHub.service == null && !MaintenanceMarker.isActive(app)) return block()
+        return stoppedWork.run(
+            around = { body ->
+                restartSequence(
+                    stop = { beginMaintenance(app, source) },
+                    awaitStopped = {
+                        val stopped = awaitServiceGone()
+                        // a bridge that is still running keeps the work away: nothing changes under an active cast
+                        if (stopped) body()
+                        stopped
+                    },
+                    resume = { endMaintenance(app, source) },
+                )
+            },
+            block = block,
+        )
     }
 
     /** True when the service is gone and no stop is in flight, each within [STOP_TIMEOUT_MS]. */
