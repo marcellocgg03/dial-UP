@@ -20,14 +20,16 @@ object AppUpdates {
             instance?.let { return it }
             val app = context.applicationContext
             val version = BuildConfigFacts.versionName(app)
-            val client = githubReleasesClient()
+            // Both are built on first use, on the model's own threads: this runs in the main screen's composition, and StrictMode
+            // reports `filesDir` (a disk lookup) and building the HTTP client (a custom slow call) there.
+            val client by lazy { githubReleasesClient() }
             val agent = userAgentFor(version)
-            val record = UpdateRecordFile(app.filesDir)
+            val record by lazy { UpdateRecordFile(app.filesDir) }
             val created = AppUpdateModel(
                 currentVersion = version ?: "0",
                 fetch = { withContext(Dispatchers.IO) { fetchReleases(client, RELEASES_API_URL, agent) } },
-                load = record::load,
-                save = record::save,
+                load = { record.load() },
+                save = { record.save(it) },
                 wallMs = System::currentTimeMillis,
                 channel = { AppSettings.of(app).data.value.updateChannel },
                 // the check outlives any screen that asked for it; the client's 20 s call timeout bounds it
