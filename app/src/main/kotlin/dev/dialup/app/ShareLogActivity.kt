@@ -15,16 +15,17 @@ import androidx.core.content.FileProvider
  * summary of their time ranges) and nothing else (an unrelated file must never be shared). Started
  * by the Share log button on the Settings tab (no longer by the notification); not exported. A chooser started by an Activity carries the
  * one-file read grant reliably, which is why this is an Activity and not a service trampoline.
- * state.json, store.json and config.json are never offered. The flush, the file listing and the zip are built on a
+ * state.json, store.json and config.json are never offered. The files directory lookup, the flush, the file listing and the zip are built on a
  * background thread; only the Toasts and the chooser start run on the UI thread.
  */
 class ShareLogActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val dir = eventLogDir(filesDir)
         val authority = "$packageName.fileprovider"
         Thread({
             try {
+                // Context.getFilesDir stats the directory (a disk read), so it is read here and not in onCreate.
+                val dir = eventLogDir(filesDir)
                 // Make the file complete before it is handed over.
                 val file = LogArchive.prepare(dir) { ServiceHub.service?.evidence?.flush() }
                 val uri = file?.let { FileProvider.getUriForFile(this, authority, it) }
