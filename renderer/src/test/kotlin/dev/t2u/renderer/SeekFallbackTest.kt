@@ -138,7 +138,7 @@ internal class SeekFallbackTest {
                 assertTrue(h.renderer.doPlay(Video(A), 0.0))
                 assertTrue(h.renderer.doSeek(80.0))
                 assertEquals(listOf("mp4" to 0, "mp4" to 80), h.registered.map { it.format to it.startAt })
-                assertEquals(80.0 + 65.0, h.renderer.doGetPosition(), "the offset plus the speaker's own RelTime")
+                assertEquals(80.0 + 65.0, h.renderer.doGetPosition(), "the offset plus the speaker's own RelTime (the stub's constant 0:01:05)")
             }
         }
     }
@@ -167,7 +167,7 @@ internal class SeekFallbackTest {
                 assertTrue(h.renderer.doPlay(Video(A), 0.0))
                 assertTrue(h.renderer.doSeek(95.7))
                 assertEquals(listOf("mp3" to 0, "mp3" to 95), h.registered.map { it.format to it.startAt })
-                assertEquals(95.0 + 65.0, h.renderer.doGetPosition())
+                assertEquals(95.0 + 65.0, h.renderer.doGetPosition(), "the offset plus the stub's constant RelTime of 0:01:05")
                 assertEquals(210.0, h.renderer.doGetDuration())
                 assertEquals(0, fake.count("Seek"), "no AVTransport Seek on a non-seekable stream")
             }
