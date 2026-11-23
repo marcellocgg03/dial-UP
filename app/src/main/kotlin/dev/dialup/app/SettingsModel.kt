@@ -59,7 +59,10 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         return FileCache(dir, limit)
     }
 
-    /** One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping. */
+    /**
+     * One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping.
+     * Reach it through [offline]: that applies the configured log level and builds this off the main thread.
+     */
     private val offlineUpdater: YtDlpUpdater by lazy {
         // Looked up for every event: a bridge restart (an update that stops the bridge) closes the log this was first built with.
         fun log(): EvidenceLog = EvidenceLog.shared(eventLogDir(app.filesDir))
@@ -69,6 +72,16 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             onEvent = { log().event("ytdlp-update", it) },
             record = YtDlpRecords.of(app),
         )
+    }
+
+    /**
+     * The offline updater with the configured log level applied (event logging off is honoured with no bridge running).
+     * The level read and the lazy creation happen on Dispatchers.IO; the per-event log() of the updater does not read files,
+     * because its events are delivered on the caller's thread.
+     */
+    private suspend fun offline(): YtDlpUpdater = withContext(Dispatchers.IO) {
+        offlineEvidence(app.filesDir)
+        offlineUpdater
     }
 
     private val bridgePort = object : BridgePort {
@@ -103,15 +116,15 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         override suspend fun cacheInfo(): CacheInfo? =
             withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
 
-        override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offlineUpdater.updateNow()
+        override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offline().updateNow()
 
-        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offlineUpdater.check()
+        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offline().check()
 
         // The offline updater has no cast to wait for; the bridge is stopped around it so nothing is cast to while yt-dlp changes.
         override suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? =
-            BridgeControl.whileStopped(app, "ytdlp-update") { offlineUpdater.updateNow("ui") }
+            BridgeControl.whileStopped(app, "ytdlp-update") { offline().updateNow("ui") }
 
-        override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offlineUpdater.version()
+        override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offline().version()
 
         override fun runningWith(): RestartFields? = model.cast.value?.runningWith()
 

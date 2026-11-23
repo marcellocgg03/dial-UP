@@ -94,7 +94,7 @@ class YtDlpUpdateJobService : JobService() {
         val serviceUp = ServiceHub.service != null && cast != null
         val casting = cast?.castCount?.value?.casting ?: 0
         val action = ytdlpJobAction(settings.data.value.bridgeEnabled && settings.data.value.ytdlpAutoUpdate, serviceUp, casting)
-        val log = ServiceHub.service?.evidence ?: EvidenceLog.shared(eventLogDir(filesDir))
+        val log = ServiceHub.service?.evidence ?: offlineEvidence(filesDir)
         log.event("ytdlp-job", mapOf("action" to action.wire))
         when (action) {
             YtDlpJobAction.SKIP_OFF, YtDlpJobAction.POSTPONE_CASTING -> Unit
