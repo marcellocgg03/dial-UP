@@ -96,7 +96,13 @@ class MediaServer(
     /** The address the engine listens on now; [rebindHost] replaces it. */
     @Volatile private var host: String = host
 
-    private var server: EmbeddedServer<*, *>? = null
+    @Volatile private var server: EmbeddedServer<*, *>? = null
+
+    /** Set by [stop], cleared by [startSuspending]: an engine that finishes binding after a stop is stopped, never published. */
+    @Volatile private var stopped = false
+
+    /** Held only for the check-and-publish of an engine and the take-and-clear of [server]; never across a Ktor start or stop. */
+    private val publishLock = Any()
 
     /** True while an engine is bound and accepting; false before [start], after [stop] and after a [rebindHost] whose bind failed. */
     @Volatile private var listening = false
@@ -179,6 +185,7 @@ class MediaServer(
 
     suspend fun startSuspending() {
         check(server == null) { "already started" }
+        synchronized(publishLock) { stopped = false }
         rangeCache?.clear() // files of an earlier run are never reused
         files?.start() // keeps the finished files of an earlier run, drops half-written ones
         startEngine(host, port)
@@ -224,8 +231,19 @@ class MediaServer(
                 ?: BindException("media server cannot bind $bindHost:$bindPort: ${cause.message}").also { it.initCause(cause) }
         }
         afterEngineStarted()
-        server = s
-        listening = true
+        val published = synchronized(publishLock) {
+            if (stopped) {
+                false
+            } else {
+                server = s
+                listening = true
+                true
+            }
+        }
+        if (!published) {
+            runCatching { s.stop(0, 200) }
+            throw IllegalStateException("media server stopped while binding")
+        }
     }
 
     private fun requireBindable(bindHost: String, bindPort: Int) {
@@ -262,9 +280,12 @@ class MediaServer(
     }
 
     fun stop() {
-        listening = false
-        server?.stop(200, 1000)
-        server = null
+        val engine = synchronized(publishLock) {
+            stopped = true
+            listening = false
+            server.also { server = null }
+        }
+        engine?.stop(200, 1000)
         rangeCache?.clear()
         feedRelay?.close()
         releaseAllTokenPins()
