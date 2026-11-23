@@ -174,6 +174,9 @@ class MediaServer(
     private val rangeCache: PipeRangeCache? =
         if (pipeRanges.enabled && bufferDir != null) PipeRangeCache(File(bufferDir, "range-cache"), pipeRanges) else null
 
+    /** Test seam: runs in [startEngine] after the new engine is bound and before it is published, where a [stop] can race. */
+    internal var afterEngineStarted: suspend () -> Unit = {}
+
     suspend fun startSuspending() {
         check(server == null) { "already started" }
         rangeCache?.clear() // files of an earlier run are never reused
@@ -220,6 +223,7 @@ class MediaServer(
             throw cause as? BindException
                 ?: BindException("media server cannot bind $bindHost:$bindPort: ${cause.message}").also { it.initCause(cause) }
         }
+        afterEngineStarted()
         server = s
         listening = true
     }

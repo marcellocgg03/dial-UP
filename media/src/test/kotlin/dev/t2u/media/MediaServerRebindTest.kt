@@ -4,12 +4,14 @@ package dev.t2u.media
 // stream URLs already handed to a speaker keep working after a network move. Loopback stands in for Wi-Fi: a socket bound
 // to 127.0.0.1 refuses connections on 127.0.0.2. GPL-3.0-only.
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.net.ConnectException
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
@@ -75,6 +77,25 @@ class MediaServerRebindTest {
         assertEquals(port, s.resolvedPort())
         assertEquals(501, status("127.0.0.1", port, path))
         refuses("127.0.0.2", port)
+    }
+
+    @Test
+    fun aStopDuringAMoveLeavesNothingBoundAndTheServerStartsAgain() {
+        val s = started()
+        val port = s.resolvedPort()
+        var stops = 0
+        s.afterEngineStarted = { if (stops++ == 0) s.stop() }
+
+        assertFailsWith<IllegalStateException> { s.rebindHost("127.0.0.1") }
+
+        assertEquals(false, s.isListening(), "the move must not publish an engine after stop()")
+        assertEquals(false, s.isRunning())
+        ServerSocket().use { it.bind(InetSocketAddress("127.0.0.1", port)) } // the port is free
+
+        s.afterEngineStarted = {}
+        runBlocking { s.startSuspending() }
+        assertEquals(true, s.isListening())
+        assertEquals(404, status("127.0.0.1", s.resolvedPort(), unknown))
     }
 
     @Test
