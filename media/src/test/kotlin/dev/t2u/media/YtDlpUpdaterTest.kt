@@ -44,7 +44,15 @@ class YtDlpUpdaterTest {
         /** Plan 07-09: runs at the start of every update, so a test can hold the gateway busy. */
         @Volatile var onUpdate: (() -> Unit)? = null
 
+        /** Plan 14-05: when set, the install runs inside this lock, like AndroidYtDlpGateway.update with the process lock. */
+        @Volatile var installLock: YtDlpInstallLock? = null
+
         override fun update(channel: String): String {
+            val lock = installLock
+            return if (lock == null) install(channel) else lock.install { install(channel) }
+        }
+
+        private fun install(channel: String): String {
             updateThreads += Thread.currentThread().name
             updates += channel
             onUpdate?.invoke()
@@ -747,5 +755,44 @@ class YtDlpUpdaterTest {
         assertEquals("2026.01.01", runBlocking { u.version() })
         g.versionFailure = IllegalStateException("no python yet")
         assertNull(runBlocking { u.version() })
+    }
+
+    // ----- plan 14-05: one install at a time across the updaters (APP WR-08) --------------------------------
+
+    @Test
+    fun twoUpdatersInstallOneAtATime() {
+        val g = FakeGateway()
+        g.installLock = YtDlpInstallLock()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        g.onUpdate = {
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val storeA = MemoryStore()
+        val storeB = MemoryStore()
+        val eventsB = CopyOnWriteArrayList<Map<String, Any?>>()
+        val executorB = Executors.newSingleThreadExecutor { Thread(it, "yt-dlp-updater-test-b") }
+        val a = YtDlpUpdater(g, { "stable" }, { }, dispatcher = dispatcher, record = storeA, wallMs = { WALL })
+        val b = YtDlpUpdater(g, { "stable" }, { eventsB += it }, dispatcher = executorB.asCoroutineDispatcher(), record = storeB, wallMs = { WALL })
+        var outcomeA: YtDlpUpdateOutcome? = null
+        val first = thread(name = "updater-a") { outcomeA = runBlocking { a.updateNow() } }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "updater A is inside the install")
+            val refused = runBlocking { b.updateNow() }
+            assertEquals(false, refused.ok)
+            assertEquals("FAILED", refused.status)
+            assertTrue(refused.error.orEmpty().contains("another yt-dlp update is running"), refused.error)
+            assertEquals(false, eventsB.single()["ok"])
+            assertTrue(storeB.saves.isEmpty(), "a refused install writes no record")
+            assertNull(storeB.value.lastSuccessWallMs)
+        } finally {
+            release.countDown()
+            first.join(5_000)
+            executorB.shutdownNow()
+        }
+        assertEquals(true, outcomeA?.ok)
+        assertEquals(YtDlpRecord(WALL, WALL), storeA.value)
+        assertEquals(1, g.updates.size, "the install ran once")
     }
 }
