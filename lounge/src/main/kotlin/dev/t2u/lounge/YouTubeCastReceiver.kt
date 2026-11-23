@@ -57,6 +57,13 @@ data class ReceiverDeps(
     val onSenderConnected: (speaker: String, sender: Sender) -> Unit = { _, _ -> },
 )
 
+/**
+ * Whether a receiver needs its DIAL server rebuilt: it runs and has either none (a move whose bind failed) or one whose
+ * engine reported a failure after its start. Pure, so the truth table is testable without an engine.
+ */
+internal fun dialIsMissing(running: Boolean, hasDial: Boolean, dialFailed: Boolean): Boolean =
+    running && (!hasDial || dialFailed)
+
 private val UUID_SHAPE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 class YouTubeCastReceiver(
@@ -243,10 +250,12 @@ class YouTubeCastReceiver(
     }
 
     /**
-     * True when the receiver runs but has no DIAL listener: a move whose bind failed (rebindDial) leaves none, and the
-     * speaker is then missing from the phone's cast menu. The bridge's housekeeping rebinds it ([rebindDial]).
+     * True when the receiver runs but has no working DIAL listener: a move whose bind failed (rebindDial) leaves none, and
+     * a DIAL server whose engine failed after its start ([DialServer.failure]) no longer accepts, so both count as
+     * missing and the speaker is then missing from the phone's cast menu. The bridge's housekeeping
+     * (BridgeRepair.repairDial) rebuilds it through [rebindDial], which stops the old one and binds the same port.
      */
-    fun dialMissing(): Boolean = status == "running" && dial == null
+    fun dialMissing(): Boolean = dialIsMissing(status == "running", dial != null, dial?.failure() != null)
 
     /**
      * Moves the DIAL server to [newHost] on the port it already has and advertises the new LOCATION.
@@ -288,6 +297,8 @@ class YouTubeCastReceiver(
                 dial = null
                 throw e
             } catch (e: Throwable) {
+                // advertise (or the start) failed after the new server may be bound: stop it so its port is free for the next move
+                withContext(NonCancellable) { created?.let { s -> runQuietly { withContext(Dispatchers.IO) { s.stop() } } } }
                 dial = null
                 note("rebindFailed", "error" to (e::class.simpleName ?: "Throwable"))
                 throw e
