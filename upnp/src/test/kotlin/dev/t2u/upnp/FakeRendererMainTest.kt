@@ -502,4 +502,68 @@ class FakeRendererMainTest {
             }
         }
     }
+
+    // ---- RelTime that follows play time (opt-in, LAN runner) ----------------------------------------------
+
+    private fun relTimeOnTheWire(fake: FakeRenderer): String =
+        Regex("<RelTime>(.*?)</RelTime>").find(soap(fake, "AVTransport", "GetPositionInfo"))?.groupValues?.get(1) ?: ""
+
+    private fun seekTo(fake: FakeRenderer, target: String) =
+        soap(fake, "AVTransport", "Seek", "<Unit>REL_TIME</Unit><Target>$target</Target>")
+
+    @Test
+    fun relTimeFollowsPlayTimeWhenAskedTo() {
+        FakeRenderer(relTimeFollowsPlay = true, startDelayMs = 0).use { fake ->
+            fake.start()
+            setUri(fake, "audio/mpeg")
+            play(fake)
+            Thread.sleep(1200)
+            val first = relTimeOnTheWire(fake)
+            assertTrue(first == "0:00:01" || first == "0:00:02", "RelTime follows play time, got $first")
+            assertNotEquals("0:01:05", first)
+
+            // a new track starts again from the top
+            setUri(fake, "audio/mpeg")
+            play(fake)
+            val second = relTimeOnTheWire(fake)
+            assertTrue(second == "0:00:00" || second == "0:00:01", "a new SetAVTransportURI and Play restart the count, got $second")
+        }
+    }
+
+    @Test
+    fun relTimeFreezesOnPauseAndStartsAtTheSeekTarget() {
+        FakeRenderer(relTimeFollowsPlay = true, startDelayMs = 0).use { fake ->
+            fake.start()
+            setUri(fake, "audio/mpeg")
+            play(fake)
+            Thread.sleep(1200)
+            soap(fake, "AVTransport", "Pause")
+            val frozen = relTimeOnTheWire(fake)
+            Thread.sleep(600)
+            assertEquals(frozen, relTimeOnTheWire(fake), "Pause freezes RelTime")
+
+            seekTo(fake, "0:10:00")
+            assertEquals("0:10:00", relTimeOnTheWire(fake), "a Seek while paused reports the target at once")
+            play(fake)
+            Thread.sleep(1200)
+            val after = relTimeOnTheWire(fake)
+            assertTrue(after == "0:10:01" || after == "0:10:02", "play carries on from the Seek target, got $after")
+
+            soap(fake, "AVTransport", "Stop")
+            assertEquals("0:00:00", relTimeOnTheWire(fake), "Stop resets the count")
+        }
+    }
+
+    @Test
+    fun relTimeStaysTheOldConstantByDefault() {
+        FakeRenderer(startDelayMs = 0).use { fake ->
+            fake.start()
+            setUri(fake, "audio/mpeg")
+            play(fake)
+            Thread.sleep(1200)
+            assertEquals("0:01:05", relTimeOnTheWire(fake))
+            seekTo(fake, "0:10:00")
+            assertEquals("0:10:00", relTimeOnTheWire(fake), "a SOAP Seek still sets it, as before")
+        }
+    }
 }

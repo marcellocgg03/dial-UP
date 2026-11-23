@@ -86,6 +86,8 @@ class FakeRenderer(
     private val startDelayMs: Long = 0,
     /** One short line per control call that matters to a start-failure test; never a URL or a DIDL body. Null: silent. */
     private val log: ((String) -> Unit)? = null,
+    /** Opt-in: GetPositionInfo answers a RelTime that follows play time instead of the constant 0:01:05 (the LAN runner). */
+    @Suppress("unused") private val relTimeFollowsPlay: Boolean = false,
 ) : AutoCloseable {
     val calls: MutableList<FakeCall> = CopyOnWriteArrayList()
 
