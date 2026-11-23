@@ -126,7 +126,26 @@ class DialServer(
     /** Without a launch callback; keeps `DialServer(config) { request -> ... }` working. */
     constructor(config: DialConfig, onRequest: (DialRequest) -> Unit) : this(config, onRequest, null)
 
-    private var server: EmbeddedServer<*, *>? = null
+    @Volatile private var server: EmbeddedServer<*, *>? = null
+
+    /** The first failure the engine reported on its coroutine context; reset by each [startSuspending]. */
+    private val asyncFailure = AtomicReference<Throwable?>(null)
+
+    /**
+     * The engine's exception handler: a safety net for the race between the pre-bind check and the real bind, and for
+     * an accept job that dies after the start. The failure is recorded, never thrown on a thread.
+     */
+    internal val failureHandler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
+
+    /** How [stop] stops the engine; a seam so a test can make Ktor's stop throw. */
+    internal var engineStop: (EmbeddedServer<*, *>) -> Unit = { it.stop(200, 1000) }
+
+    /**
+     * A failure the engine reported after [startSuspending] returned (its accept job died). The server may still look
+     * bound but no longer accepts; the owner should rebuild it. Null while the engine is healthy; a new
+     * [startSuspending] clears it.
+     */
+    fun failure(): Throwable? = asyncFailure.get()
 
     /** The friendlyName the device description carries; starts as [DialConfig.friendlyName] and changes with [rename]. */
     @Volatile private var friendlyName: String = config.friendlyName
@@ -154,12 +173,11 @@ class DialServer(
         // Pre-bind check: Ktor CIO binds inside its accept job, where a failure is uncaught. reuseAddress
         // keeps TIME_WAIT from failing it, as for the real bind below.
         if (config.port != 0) requireBindable(config.bindHost, config.port)
-        // Safety net for the race between the check and the bind: the failure is recorded, not thrown on a thread.
-        val asyncFailure = AtomicReference<Throwable?>(null)
-        val handler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
+        // A fresh start forgets an old failure; the race between the check and the bind is recorded by failureHandler.
+        asyncFailure.set(null)
         // reuseAddress: a restart (variant change, Wi-Fi rebind) must not hit EADDRINUSE from TIME_WAIT
         val s = embeddedServer(CIO, serverConfig {
-            parentCoroutineContext = SupervisorJob() + handler
+            parentCoroutineContext = SupervisorJob() + failureHandler
             module { configure(this) }
         }) {
             reuseAddress = true
@@ -201,9 +219,17 @@ class DialServer(
         }
     }
 
+    /**
+     * Stops the engine and forgets it even when Ktor's stop throws, so the same instance can start again and no
+     * caller keeps a reference to a dead engine. The exception still reaches the caller.
+     */
     fun stop() {
-        server?.stop(200, 1000)
-        server = null
+        val s = server
+        try {
+            if (s != null) engineStop(s)
+        } finally {
+            server = null
+        }
     }
 
     fun resolvedPort(): Int = boundPort
