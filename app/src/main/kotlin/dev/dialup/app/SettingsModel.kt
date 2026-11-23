@@ -31,10 +31,14 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
     private val settingsPort = object : SettingsPort {
         override val data: StateFlow<AppSettingsData> get() = settings.data
 
-        override fun update(change: (AppSettingsData) -> AppSettingsData) = settings.update(change)
+        // Posted, not run here: the write and its fsync happen on the settings writer thread, in the order of the changes.
+        override fun update(change: (AppSettingsData) -> AppSettingsData) {
+            SettingsWriter.post { settings.update(change) }
+        }
 
-        override suspend fun effective(): EffectiveSettings = withContext(Dispatchers.IO) {
-            // The file may not be rewritten yet when this runs right after update(): lay the current data on top again.
+        override suspend fun effective(): EffectiveSettings = SettingsWriter.run {
+            // Runs on the settings writer, so it reads after every write posted before it; the current data is still laid
+            // on top of the file in case a change was made by another path.
             val c = applySettings(loadAppConfig(app.filesDir).config, settings.data.value)
             EffectiveSettings(
                 logEnabled = c.logLevel != "off",

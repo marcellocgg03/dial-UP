@@ -73,7 +73,8 @@ class SettingsWriterTest {
         val writer = SerialWriter("t2u-test-writer") { _, _ -> }
         try {
             val name = runBlocking { writer.run { Thread.currentThread().name } }
-            assertEquals("t2u-test-writer", name)
+            // coroutines debug mode (on under -ea) appends " @coroutine#N" to the thread name while a task runs
+            assertTrue(name.startsWith("t2u-test-writer"), name)
             assertNotEquals(Thread.currentThread().name, name)
         } finally {
             writer.close()
