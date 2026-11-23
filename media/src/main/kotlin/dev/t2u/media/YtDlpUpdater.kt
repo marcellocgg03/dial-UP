@@ -27,6 +27,9 @@ const val YTDLP_UPDATE_RETRY_MS: Long = 60L * 60 * 1000
 /** The status of an Update now that was refused because a renderer is being cast to (author's decision, 2026-11-04). */
 const val YTDLP_STATUS_CASTING: String = "CASTING"
 
+/** One yt-dlp update may take this long (Node: `execFileP(cmd, args, { timeout: 5 * 60 * 1000 })`, resolver.js:131); then it fails. */
+const val YTDLP_UPDATE_TIMEOUT_MS: Long = 5 * 60_000L
+
 private const val ERROR_LIMIT = 300
 
 /**
@@ -134,6 +137,8 @@ class YtDlpUpdater(
     private val autoEnabled: () -> Boolean = { true },
     /** How often the loop looks at [autoEnabled] again while it is off. */
     private val offRecheckMs: Long = 15 * 60_000L,
+    /** The longest one install may take, counted from the moment it starts; then the attempt ends FAILED. */
+    private val updateTimeoutMs: Long = YTDLP_UPDATE_TIMEOUT_MS,
 ) {
     /** One attempt; never throws except for cancellation. The outcome was also delivered to the event sink. */
     suspend fun updateOnce(trigger: String): YtDlpUpdateOutcome {
