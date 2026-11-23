@@ -59,6 +59,13 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
 
+/**
+ * The one rule every start path uses (service bootstrap, boot, app open, Wi-Fi back, the deferred start, the daily yt-dlp
+ * job). The saved switch ([bridgeEnabled]) stays on during a restart or update; the [maintenance] marker holds the bridge off
+ * meanwhile, so a process killed in the middle leaves the switch on.
+ */
+fun startWanted(bridgeEnabled: Boolean, maintenance: Boolean): Boolean = bridgeEnabled && !maintenance
+
 /** What a start path does: start the service, wait for Wi-Fi, or nothing. */
 enum class StartDecision { START, WAIT_FOR_WIFI, NONE }
 

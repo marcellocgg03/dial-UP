@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import dev.dialup.app.model.NetworkLossWatcher
 import dev.dialup.app.model.WIFI_REBIND_WINDOW_MS
+import dev.dialup.app.model.startWanted
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.CoroutineScope
@@ -185,6 +186,9 @@ class BridgeService : Service(), SpikeHost {
         val exempt = BatteryGate.isOpen(this)
         // The author's switch, persisted; a sticky restart after it went off is denied below
         val enabled = AppSettings.of(this).data.value.bridgeEnabled
+        // the switch stays on during a restart or update; the maintenance marker holds the bridge off meanwhile
+        val maintenance = MaintenanceMarker.isActive(this)
+        if (MaintenanceMarker.takeInterrupted(this)) evidence.event("maintenance-interrupted")
         evidence.event(
             "service-start",
             mapOf(
@@ -194,11 +198,15 @@ class BridgeService : Service(), SpikeHost {
                 "reason" to reason.wire,
                 "exempt" to exempt,
                 "enabled" to enabled,
+                "maintenance" to maintenance,
             ),
         )
         logDirFact?.let { logDir -> evidence.event("logdir", mapOf("where" to "internal", "path" to logDir.absolutePath)) }
-        if (!gateDecision(exempt, enabled, reason)) {
-            evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled))
+        if (!gateDecision(exempt, startWanted(enabled, maintenance), reason)) {
+            evidence.event(
+                "service-gate",
+                mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled, "maintenance" to maintenance),
+            )
             stopSelf()
             return false
         }
