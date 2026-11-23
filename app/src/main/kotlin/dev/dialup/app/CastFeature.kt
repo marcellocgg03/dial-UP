@@ -267,7 +267,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             maxPauseMs = UPDATE_RECHECK_MS,
             busy = { (resolver?.inFlightCount() ?: 0) > 0 || (bridge?.activeBuilds() ?: 0) > 0 },
             casting = { count.value.casting > 0 },
-            record = YtDlpRecords.of(host.context),
+            // found on the updater's first load, not here: this runs on the service's main thread and the lookup reads the disk
+            record = LazyYtDlpRecordStore { YtDlpRecords.of(host.context) },
             wallMs = { System.currentTimeMillis() },
             autoEnabled = { appSettings.data.value.ytdlpAutoUpdate },
         )
