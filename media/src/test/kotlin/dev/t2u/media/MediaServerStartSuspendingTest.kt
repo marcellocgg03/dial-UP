@@ -93,4 +93,29 @@ class MediaServerStartSuspendingTest {
         assertEquals(true, s.isRunning())
         blocker.close()
     }
+
+    @Test
+    fun aStopDuringTheStartLeavesNothingBound() = runBlocking<Unit> {
+        val s = newServer("127.0.0.1", 0)
+        s.afterEngineStarted = { s.stop() }
+
+        assertFailsWith<IllegalStateException> { s.startSuspending() }
+
+        assertEquals(false, s.isRunning())
+        assertEquals(false, s.isListening())
+        ServerSocket().use { it.bind(InetSocketAddress("127.0.0.1", s.resolvedPort())) } // the port is free
+    }
+
+    @Test
+    fun aStartAfterAStopBindsAgain() = runBlocking<Unit> {
+        val s = newServer("127.0.0.1", 0)
+        s.startSuspending()
+        s.stop()
+        assertEquals(false, s.isRunning())
+
+        s.startSuspending()
+
+        assertTrue(s.isListening())
+        assertEquals(404, status("127.0.0.1", s.resolvedPort(), unknown))
+    }
 }
