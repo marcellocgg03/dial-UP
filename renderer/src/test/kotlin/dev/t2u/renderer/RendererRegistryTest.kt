@@ -53,6 +53,7 @@ private class FakeManagedRenderer(
     val refreshCalls = java.util.concurrent.atomic.AtomicInteger()
     val reviveCalls = java.util.concurrent.atomic.AtomicInteger()
     @Volatile var reviveResult: suspend (Long) -> Boolean? = { null }
+    @Volatile var onDestroy: suspend () -> Unit = {}
 
     override suspend fun reviveIfDue(now: Long): Boolean? {
         reviveCalls.incrementAndGet()
@@ -76,6 +77,7 @@ private class FakeManagedRenderer(
 
     override suspend fun destroy() {
         destroyCalls.incrementAndGet()
+        onDestroy()
     }
 }
 
@@ -177,6 +179,7 @@ class RendererRegistryTest {
         val now: AtomicLong = AtomicLong(1_000_000),
         val friendlyName: String? = null,
         var initBehaviour: suspend (String) -> Boolean = { true },
+        val onDestroy: suspend () -> Unit = {},
         hidden: (String) -> Boolean = { false },
         maxRunning: Int = RendererRegistry.MAX_RUNNING,
         maxSaved: Int = PortRegistry.MAX_SAVED,
@@ -197,6 +200,7 @@ class RendererRegistryTest {
                 FakeManagedRenderer(udn, location, address, maxAge, port, friendlyName ?: "Fake $udn") { initBehaviour(udn) }
                     .also {
                         it.lastSeen = now.get()
+                        it.onDestroy = onDestroy
                         created.add(it)
                     }
             },
@@ -422,6 +426,27 @@ class RendererRegistryTest {
         assertEquals(2, h.created.size)
         assertEquals(3000, h.created[1].port)
         assertEquals(1, h.registry.count.value)
+    }
+
+    @Test
+    @DisplayName("an init that returns false destroys the renderer before its port is released")
+    fun anInitThatReturnsFalseDestroysTheRendererBeforeThePortIsReleased() = runBlocking {
+        var portAtDestroy = -1
+        lateinit var h: Harness
+        h = Harness(initBehaviour = { false }, onDestroy = {
+            // the probe is given 3000 only when the renderer's port is already free
+            portAtDestroy = h.ports.claim("probe")
+            h.ports.release(portAtDestroy)
+        })
+        h.alive()
+        val r = h.created.single()
+        assertEquals(1, r.destroyCalls.get(), "destroy ran once")
+        assertEquals(3001, portAtDestroy, "the port was still held while destroy ran")
+        assertEquals(3000, h.ports.claim("after"), "the port is free afterwards")
+        assertEquals(0, h.registry.count.value)
+        h.now.addAndGet(RendererRegistry.RETRY_FAILED_MS + 1)
+        h.alive()
+        assertEquals(2, h.created.size, "the UDN is not left pending: a later alive sets it up again")
     }
 
     @Test
