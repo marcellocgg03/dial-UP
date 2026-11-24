@@ -3,7 +3,10 @@
 package dev.dialup.app
 
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -21,19 +24,33 @@ object LogArchive {
     fun logFiles(dir: File, name: String = EvidenceLog.FILE_NAME, keep: Int = EvidenceLog.KEEP_ROTATED): List<File> =
         ((keep downTo 1).map { File(dir, "$name.$it") } + File(dir, name)).filter { it.isFile && it.length() > 0 }
 
-    /** Writes [files] and the summary to [out] (replacing it). Returns how many log files went in. */
+    /**
+     * Writes [files] and the summary to [out] (replacing it). Returns how many log files went in. The zip is built in a uniquely
+     * named temporary file in the same directory and moved over [out] in one atomic step, so a reader or a second build never sees
+     * a half-written or mixed zip, and a failed build leaves the previous zip and no temporary file behind.
+     */
     fun build(files: List<File>, out: File): Int {
-        out.parentFile?.mkdirs()
-        out.delete()
-        ZipOutputStream(out.outputStream().buffered()).use { zip ->
-            zip.putNextEntry(ZipEntry(SUMMARY_NAME))
-            zip.write(summary(files).toByteArray())
-            zip.closeEntry()
-            for (f in files) {
-                zip.putNextEntry(ZipEntry(f.name))
-                f.inputStream().use { it.copyTo(zip) }
+        val parent = out.absoluteFile.parentFile
+        parent?.mkdirs()
+        val tmp = File.createTempFile("dialup-log-", ".zip.tmp", parent)
+        try {
+            ZipOutputStream(tmp.outputStream().buffered()).use { zip ->
+                zip.putNextEntry(ZipEntry(SUMMARY_NAME))
+                zip.write(summary(files).toByteArray())
                 zip.closeEntry()
+                for (f in files) {
+                    zip.putNextEntry(ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
             }
+            Files.move(tmp.toPath(), out.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: IOException) {
+            tmp.delete()
+            throw e
+        } catch (e: RuntimeException) {
+            tmp.delete()
+            throw e
         }
         return files.size
     }
