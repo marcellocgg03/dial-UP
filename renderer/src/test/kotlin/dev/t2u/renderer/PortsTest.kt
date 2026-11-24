@@ -18,6 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /** CAST-02: a speaker keeps its DIAL port whatever the discovery order. */
@@ -33,7 +34,7 @@ class PortsTest {
         maxSaved: Int = PortRegistry.MAX_SAVED,
         clock: () -> Long = System::currentTimeMillis,
         warn: (String) -> Unit = {},
-    ) = PortRegistry(dataDir, basePort, maxSaved, clock, warn).load()
+    ) = PortRegistry(dataDir, basePort, maxSaved, clock, warn = warn).load()
 
     /** The entry order of ports.json as written (a JsonObject's equality ignores order). */
     private fun fileOrder(dataDir: File): List<String> =
@@ -339,5 +340,42 @@ class PortsTest {
         for (i in 1..5) r.release(r.up("n$i"))
         assertEquals(305, r.saved().size)
         assertEquals(305, fileOrder(dataDir).size)
+    }
+
+    @Test
+    @DisplayName("a write that throws a RuntimeException is warned and retried at the next write")
+    fun aWriteThatThrowsARuntimeExceptionIsWarnedAndRetriedAtTheNextWrite() = runBlocking {
+        val dataDir = tempDir()
+        val warnings = CopyOnWriteArrayList<String>()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val r = PortRegistry(
+            dataDir,
+            3000,
+            writeText = { f, text ->
+                if (calls.incrementAndGet() == 1) throw IllegalStateException("disk")
+                f.writeText(text)
+            },
+            warn = { warnings += it },
+        ).load()
+        r.up("a")
+        assertEquals(1, warnings.size)
+        assertEquals(mapOf("a" to 3000), r.saved())
+        r.up("b")
+        assertEquals(1, warnings.size)
+        assertEquals(expectedFile("a" to 3000, "b" to 3001), portsFile(dataDir))
+    }
+
+    @Test
+    @DisplayName("a cancelled write is not swallowed")
+    fun aCancelledWriteIsNotSwallowed() = runBlocking {
+        val warnings = CopyOnWriteArrayList<String>()
+        val r = PortRegistry(
+            tempDir(),
+            3000,
+            writeText = { _, _ -> throw kotlinx.coroutines.CancellationException("cancelled") },
+            warn = { warnings += it },
+        ).load()
+        assertFailsWith<kotlinx.coroutines.CancellationException> { r.up("a") }
+        assertTrue(warnings.isEmpty())
     }
 }

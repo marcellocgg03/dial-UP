@@ -102,4 +102,14 @@ class CastNotificationTest {
         assertEquals(seen.toList(), seen.toList().fold(emptyList<CastCount>()) { acc, c -> if (acc.lastOrNull() == c) acc else acc + c })
         assertEquals(CastCount(1, 5), seen.last())
     }
+
+    @Test
+    fun `the not-running text names the attempts and how to start again`() {
+        val five = bridgeDownText(5)
+        assertEquals(true, "5 times" in five, five)
+        assertEquals(true, "switch it on" in five, five)
+        val one = bridgeDownText(1)
+        assertEquals(true, "1 time" in one, one)
+        assertEquals(false, "1 times" in one, one)
+    }
 }

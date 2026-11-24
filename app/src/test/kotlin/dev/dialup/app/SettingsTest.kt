@@ -280,6 +280,27 @@ class SettingsTest {
     }
 
     @Test
+    fun aSettingsFileThatIsNotAnObjectKeepsTheBuildsAutoUpdateDefault() {
+        for (content in listOf("not json", "[1,2]", "42")) {
+            val f = File(dir, SETTINGS_FILE).apply { writeText(content) }
+            errors.clear()
+            assertFalse(Settings(f, fdroid = true) { where, _ -> errors.add(where) }.data.value.ytdlpAutoUpdate, "F-Droid: $content")
+            assertEquals(listOf("settings:read"), errors, "F-Droid: $content")
+            errors.clear()
+            assertTrue(Settings(f, fdroid = false) { where, _ -> errors.add(where) }.data.value.ytdlpAutoUpdate, "GitHub: $content")
+            assertEquals(listOf("settings:read"), errors, "GitHub: $content")
+        }
+    }
+
+    @Test
+    fun parseSettingsGivesTheDefaultItIsToldForANonObject() {
+        val off = parseSettings("[1,2]", ytdlpAutoDefault = false)
+        assertFalse(off.data.ytdlpAutoUpdate)
+        assertEquals(listOf("settings.json"), off.problems)
+        assertTrue(parseSettings("[1,2]", ytdlpAutoDefault = true).data.ytdlpAutoUpdate)
+    }
+
+    @Test
     fun aNormalBuildKeepsTheAutomaticUpdateSwitchesAsSaved() {
         val f = File(dir, SETTINGS_FILE)
         val s = Settings(f, fdroid = false) { where, _ -> errors.add(where) }

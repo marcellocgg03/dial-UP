@@ -31,10 +31,14 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
     private val settingsPort = object : SettingsPort {
         override val data: StateFlow<AppSettingsData> get() = settings.data
 
-        override fun update(change: (AppSettingsData) -> AppSettingsData) = settings.update(change)
+        // Posted, not run here: the write and its fsync happen on the settings writer thread, in the order of the changes.
+        override fun update(change: (AppSettingsData) -> AppSettingsData) {
+            SettingsWriter.post { settings.update(change) }
+        }
 
-        override suspend fun effective(): EffectiveSettings = withContext(Dispatchers.IO) {
-            // The file may not be rewritten yet when this runs right after update(): lay the current data on top again.
+        override suspend fun effective(): EffectiveSettings = SettingsWriter.run {
+            // Runs on the settings writer, so it reads after every write posted before it; the current data is still laid
+            // on top of the file in case a change was made by another path.
             val c = applySettings(loadAppConfig(app.filesDir).config, settings.data.value)
             EffectiveSettings(
                 logEnabled = c.logLevel != "off",
@@ -59,7 +63,10 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         return FileCache(dir, limit)
     }
 
-    /** One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping. */
+    /**
+     * One updater for the times there is no bridge: no schedule, nothing to wait for. It also keeps two taps from overlapping.
+     * Reach it through [offline]: that applies the configured log level and builds this off the main thread.
+     */
     private val offlineUpdater: YtDlpUpdater by lazy {
         // Looked up for every event: a bridge restart (an update that stops the bridge) closes the log this was first built with.
         fun log(): EvidenceLog = EvidenceLog.shared(eventLogDir(app.filesDir))
@@ -69,6 +76,16 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
             onEvent = { log().event("ytdlp-update", it) },
             record = YtDlpRecords.of(app),
         )
+    }
+
+    /**
+     * The offline updater with the configured log level applied (event logging off is honoured with no bridge running).
+     * The level read and the lazy creation happen on Dispatchers.IO; the per-event log() of the updater does not read files,
+     * because its events are delivered on the caller's thread.
+     */
+    private suspend fun offline(): YtDlpUpdater = withContext(Dispatchers.IO) {
+        offlineEvidence(app.filesDir)
+        offlineUpdater
     }
 
     private val bridgePort = object : BridgePort {
@@ -103,15 +120,15 @@ class SettingsModel(context: Context, private val scope: CoroutineScope) {
         override suspend fun cacheInfo(): CacheInfo? =
             withContext(Dispatchers.IO) { model.cast.value?.cacheInfo() ?: offlineCache().info() }
 
-        override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offlineUpdater.updateNow()
+        override suspend fun updateNow(): YtDlpUpdateOutcome? = model.cast.value?.updateNow() ?: offline().updateNow()
 
-        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offlineUpdater.check()
+        override suspend fun checkYtdlpUpdate(): YtDlpCheck = offline().check()
 
         // The offline updater has no cast to wait for; the bridge is stopped around it so nothing is cast to while yt-dlp changes.
         override suspend fun updateStoppingBridge(): YtDlpUpdateOutcome? =
-            BridgeControl.whileStopped(app, "ytdlp-update") { offlineUpdater.updateNow("ui") }
+            BridgeControl.whileStopped(app, "ytdlp-update") { offline().updateNow("ui") }
 
-        override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offlineUpdater.version()
+        override suspend fun ytdlpVersion(): String? = model.cast.value?.ytdlpVersion() ?: offline().version()
 
         override fun runningWith(): RestartFields? = model.cast.value?.runningWith()
 

@@ -9,6 +9,7 @@ import dev.dialup.app.model.FetchResult
 import dev.t2u.media.GatewayResult
 import dev.t2u.media.YtDlpCall
 import dev.t2u.media.YtDlpGateway
+import dev.t2u.media.YtDlpInstallLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -84,12 +85,17 @@ class AndroidYtDlpGateway(
         return YoutubeDL.getInstance().version(context.applicationContext)
     }
 
-    /** [channel] is "stable" or "nightly" (anything else is treated as stable). Throws on a failed update. */
+    /**
+     * [channel] is "stable" or "nightly" (anything else is treated as stable). Throws on a failed update, and while another
+     * install runs in the process ([YtDlpInstallLock.PROCESS]): the updater records that as a failed attempt.
+     */
     override fun update(channel: String): String {
         checkOffMain()
         NativePayloads.ensure(context, evidence)
         val updateChannel = if (channel == "nightly") YoutubeDL.UpdateChannel.NIGHTLY else YoutubeDL.UpdateChannel.STABLE
-        val status = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, updateChannel)
+        val status = YtDlpInstallLock.PROCESS.install {
+            YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, updateChannel)
+        }
         return status?.name ?: "UNKNOWN"
     }
 

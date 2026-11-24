@@ -73,11 +73,16 @@ object NetworkResume {
     }
 }
 
-/** Receives the Wi-Fi network events of [NetworkResume.arm]; acts only while armed, with the switch on, and with an address the bridge can bind to ([hasBindableNetwork], the rule every start gate uses). */
+/** Receives the Wi-Fi network events of [NetworkResume.arm] and decides off the main thread (`goAsync`); acts only while armed, with the switch on, and with an address the bridge can bind to ([hasBindableNetwork], the rule every start gate uses). */
 class NetworkResumeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (!NetworkResume.isArmed(context)) return
-        if (!hasBindableNetwork(context)) return
-        BridgeControl.resumeAfterNetwork(context)
+        // isArmed reads preferences and hasBindableNetwork does binder work: off the main thread, with the broadcast kept alive
+        val pending = goAsync()
+        val app = context.applicationContext
+        BridgeLifecycle.scope.launchFinishing({ pending.finish() }) {
+            if (!NetworkResume.isArmed(app)) return@launchFinishing
+            if (!hasBindableNetwork(app)) return@launchFinishing
+            BridgeControl.resumeAfterNetwork(app)
+        }
     }
 }

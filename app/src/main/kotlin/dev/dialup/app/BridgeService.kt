@@ -11,9 +11,11 @@ import android.os.PowerManager
 import android.os.SystemClock
 import dev.dialup.app.model.NetworkLossWatcher
 import dev.dialup.app.model.WIFI_REBIND_WINDOW_MS
+import dev.dialup.app.model.startWanted
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -65,6 +67,10 @@ class BridgeService : Service(), SpikeHost {
     private lateinit var wifiLock: WifiManager.WifiLock
     private lateinit var wakeLock: PowerManager.WakeLock
     private var wifiLockMode = ""
+
+    /** The three locks behind one monitor; null until [acquireLocks] has created them (a denied or failed start never does). */
+    @Volatile
+    private var heldLocks: HeldLocks? = null
     private val playLocks = LockPolicy(clock = SystemClock::elapsedRealtime)
     private val startedAtMs = SystemClock.elapsedRealtime()
     private var bootstrapped = false
@@ -159,11 +165,10 @@ class BridgeService : Service(), SpikeHost {
         if (startForegroundFailed) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
             evidence.event("cmd", mapOf("name" to "stop", "source" to "notification"))
-            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on
-            AppSettings.of(this).update { it.copy(bridgeEnabled = false) }
-            evidence.event("settings", mapOf("bridgeEnabled" to false, "source" to "notification"))
-            NetworkResume.disarm(this)
-            stopSelf()
+            // the author's own Stop: persist off so no start path (reboot, reopen, sticky) turns the bridge back on. The persist, the
+            // settings event, the disarm and this service's stop run as one task on the settings writer, which outlives the service
+            // scope that onDestroy cancels: the write is not lost and the service stops only after it.
+            BridgeControl.setEnabled(this, false, "notification", alsoStop = this)
             return START_NOT_STICKY
         }
         if (!bootstrapped) {
@@ -182,6 +187,9 @@ class BridgeService : Service(), SpikeHost {
         val exempt = BatteryGate.isOpen(this)
         // The author's switch, persisted; a sticky restart after it went off is denied below
         val enabled = AppSettings.of(this).data.value.bridgeEnabled
+        // the switch stays on during a restart or update; the maintenance marker holds the bridge off meanwhile
+        val maintenance = MaintenanceMarker.isActive(this)
+        if (MaintenanceMarker.takeInterrupted(this)) evidence.event("maintenance-interrupted")
         evidence.event(
             "service-start",
             mapOf(
@@ -191,15 +199,21 @@ class BridgeService : Service(), SpikeHost {
                 "reason" to reason.wire,
                 "exempt" to exempt,
                 "enabled" to enabled,
+                "maintenance" to maintenance,
             ),
         )
         logDirFact?.let { logDir -> evidence.event("logdir", mapOf("where" to "internal", "path" to logDir.absolutePath)) }
-        if (!gateDecision(exempt, enabled, reason)) {
-            evidence.event("service-gate", mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled))
+        if (!gateDecision(exempt, startWanted(enabled, maintenance), reason)) {
+            evidence.event(
+                "service-gate",
+                mapOf("denied" to true, "reason" to reason.wire, "exempt" to exempt, "enabled" to enabled, "maintenance" to maintenance),
+            )
             stopSelf()
             return false
         }
-        NetworkResume.disarm(this)
+        // The armed flag is a SharedPreferences read: in a fresh process (boot, sticky restart) the first one waits for the file, so
+        // it must not run on the main thread. ATOMIC: a stop right after the start cannot cancel it before it has run.
+        scope.launch(start = CoroutineStart.ATOMIC) { NetworkResume.disarm(this@BridgeService) }
         acquireLocks()
         // published only now: currentState() and heartbeatFields() read the lateinit locks that acquireLocks() sets
         ServiceHub.service = this
@@ -221,8 +235,9 @@ class BridgeService : Service(), SpikeHost {
         notifier.cancel()
         ServiceHub.cast.value = null
         stopFeatures()
-        releaseLocks()
+        // the scope goes first: a heartbeat or cast-count tick must not re-acquire a lock the release has just dropped
         scope.cancel()
+        releaseLocks()
         ServiceHub.service = null
         evidence.flush()
         super.onDestroy()
@@ -289,6 +304,36 @@ class BridgeService : Service(), SpikeHost {
 
         mcastLock.acquire()
         evidence.event("lock", mapOf("name" to "t2u:mcast", "mode" to "multicast", "isHeld" to mcastLock.isHeld, "reason" to "service"))
+        heldLocks =
+            HeldLocks(
+                mcast = object : HeldLock {
+                    override val name = "t2u:mcast"
+                    override val mode = "multicast"
+                    override val isHeld get() = mcastLock.isHeld
+
+                    override fun acquire() = mcastLock.acquire()
+
+                    override fun release() = mcastLock.release()
+                },
+                wifi = object : HeldLock {
+                    override val name = "t2u:wifi"
+                    override val mode = modeName
+                    override val isHeld get() = wifiLock.isHeld
+
+                    override fun acquire() = wifiLock.acquire()
+
+                    override fun release() = wifiLock.release()
+                },
+                wake = object : HeldLock {
+                    override val name = "t2u:cpu"
+                    override val mode = "PARTIAL_WAKE_LOCK"
+                    override val isHeld get() = wakeLock.isHeld
+
+                    override fun acquire() = wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
+
+                    override fun release() = wakeLock.release()
+                },
+            ) { kind, fields -> evidence.event(kind, fields) }
     }
 
     /**
@@ -297,46 +342,14 @@ class BridgeService : Service(), SpikeHost {
      * [WAKE_LOCK_TIMEOUT_MS] and is re-armed on every call while held (reference counting is off), so
      * a stuck loop cannot keep the CPU awake for ever. Only transitions are logged.
      */
-    @Synchronized
     private fun applyPlayLocks(hold: Boolean, reason: String) {
-        // a denied or failed start never created the locks
-        if (!::wifiLock.isInitialized || !::wakeLock.isInitialized) return
-        if (hold) {
-            if (!wifiLock.isHeld) {
-                wifiLock.acquire()
-                evidence.event(
-                    "lock",
-                    mapOf("name" to "t2u:wifi", "mode" to wifiLockMode, "isHeld" to wifiLock.isHeld, "reason" to "casting"),
-                )
-            }
-            val wakeWasHeld = wakeLock.isHeld
-            wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
-            if (!wakeWasHeld) {
-                evidence.event(
-                    "lock",
-                    mapOf("name" to "t2u:cpu", "mode" to "PARTIAL_WAKE_LOCK", "isHeld" to wakeLock.isHeld, "reason" to "casting"),
-                )
-            }
-        } else if (wifiLock.isHeld || wakeLock.isHeld) {
-            releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() }, "idle-grace")
-            releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() }, "idle-grace")
-        }
+        // null: a denied or failed start never created the locks
+        heldLocks?.apply(hold, reason)
     }
 
+    /** Releases every lock and keeps them released: a later [applyPlayLocks] acquires nothing. Call after the scope is cancelled. */
     private fun releaseLocks() {
-        // a denied or failed start never created the locks
-        if (::mcastLock.isInitialized) releaseOne("t2u:mcast", { mcastLock.isHeld }, { mcastLock.release() })
-        if (::wifiLock.isInitialized) releaseOne("t2u:wifi", { wifiLock.isHeld }, { wifiLock.release() })
-        if (::wakeLock.isInitialized) releaseOne("t2u:cpu", { wakeLock.isHeld }, { wakeLock.release() })
-    }
-
-    private fun releaseOne(name: String, isHeld: () -> Boolean, release: () -> Unit, reason: String = "service-stop") {
-        try {
-            if (isHeld()) release()
-        } catch (t: Throwable) {
-            evidence.event("feature-error", mapOf("where" to "release:$name", "error" to t.javaClass.name, "message" to t.message))
-        }
-        evidence.event("lock", mapOf("name" to name, "isHeld" to isHeld(), "reason" to reason))
+        heldLocks?.releaseAll()
     }
 
     // ----- wifi helpers --------------------------------------------------------------------------

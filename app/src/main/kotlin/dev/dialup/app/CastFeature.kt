@@ -61,8 +61,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * A Wi-Fi blip pauses renderer polling at once, then after a 2 s debounce the bridge moves in place and resyncs playback
  * when Wi-Fi returns. A continuous outage beyond [dev.dialup.app.model.WIFI_REBIND_WINDOW_MS] stops the bridge/service
  * without sending Stop or Clear to speakers; Wi-Fi return starts a fresh bridge. Only `reload-config` otherwise restarts it.
- * A start that throws, or finds no Wi-Fi, is logged
- * (`feature-error where=start-bridge`) and retried every 30 s while no bridge exists. The rebind is always on.
+ * A start that throws is logged (`feature-error where=start-bridge`) and retried with the back-off, up to
+ * [BRIDGE_FAILURE_LIMIT] times in a row; a network move that throws is logged (`net mode=failed`) and retried with its own
+ * reason. After the limit the bridge says so once and stops retrying. A start that finds no Wi-Fi is retried every 30 s as
+ * before and is not a failure. The rebind is always on.
  */
 class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     override val name = "cast"
@@ -79,6 +81,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      */
     @Volatile private var lastStartBindFailure = false
     private var consecutiveBindFailures = 0
+
+    /** The last start ended on a thrown exception (not on a missing Wi-Fi address); set by [startBridgeGuarded]. */
+    @Volatile private var lastStartThrew = false
+
+    /** Failed starts and moves in a row; after [BRIDGE_FAILURE_LIMIT] the bridge gives up. */
+    private val failureBudget = FailureBudget()
     private var countJob: Job? = null
     private var updaterJob: Job? = null
     @Volatile private var networkLossExpired = false
@@ -229,7 +237,19 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         mon.seed(host.wifiIpv4()?.hostAddress)
         wifiPresentState.value = mon.currentIp() != null
         mon.start()
-        host.scope.launch { withBridgeLock(host) { if (!startBridgeGuarded(host, "start")) scheduleStartRetry(host) } }
+        host.scope.launch {
+            withBridgeLock(host) {
+                if (!startBridgeGuarded(host, "start")) {
+                    if (lastStartThrew) {
+                        failedAttempt(host, "retry")
+                    } else {
+                        // no Wi-Fi is not a failure
+                        failureBudget.reset()
+                        scheduleStartRetry(host)
+                    }
+                }
+            }
+        }
         HousekeepingAlarm.schedule(host.context)
         // Daily yt-dlp update job; a no-op while one with its id is pending.
         YtDlpJob.schedule(host.context)
@@ -247,7 +267,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             maxPauseMs = UPDATE_RECHECK_MS,
             busy = { (resolver?.inFlightCount() ?: 0) > 0 || (bridge?.activeBuilds() ?: 0) > 0 },
             casting = { count.value.casting > 0 },
-            record = YtDlpRecords.of(host.context),
+            // found on the updater's first load, not here: this runs on the service's main thread and the lookup reads the disk
+            record = LazyYtDlpRecordStore { YtDlpRecords.of(host.context) },
             wallMs = { System.currentTimeMillis() },
             autoEnabled = { appSettings.data.value.ytdlpAutoUpdate },
         )
@@ -376,7 +397,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      */
     private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
         lastStartBindFailure = false
-        runGuarded("start-bridge", { where, t ->
+        lastStartThrew = false
+        val completed = runGuarded("start-bridge", { where, t ->
             if (isBindFailure(t)) {
                 // a port the previous bridge still holds: heals on a quick retry, so it is a bridge-error and not a feature-error
                 lastStartBindFailure = true
@@ -387,22 +409,54 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         }) {
             startBridge(h)
         }
+        lastStartThrew = !completed
         consecutiveBindFailures = if (lastStartBindFailure) consecutiveBindFailures + 1 else 0
-        return bridge != null
+        val running = bridge != null
+        if (running) {
+            failureBudget.reset()
+            // a start after the author switched the bridge on again removes the not-running notice
+            BridgeDownNotifier(h.context).cancel()
+        }
+        return running
     }
 
     /**
-     * Looks for a bridge again after [startRetryDelayMs]: 2 s for the first two bind failures in a row, else
-     * [START_RETRY_MS]. Its own job, so a retry that fails can schedule the next one without cancelling itself;
+     * Tries again after [startRetryDelayMs]: 2 s for the first two bind failures in a row, else [START_RETRY_MS]. The job
+     * replays [reason]: "retry" looks for a bridge, while the reason of a move that threw repeats that move (a "retry" does
+     * nothing while a bridge exists). Its own job, so a retry that fails can schedule the next one without cancelling itself;
      * [scheduleRebind] and [stop] cancel it.
      */
-    private fun scheduleStartRetry(h: SpikeHost) {
+    private fun scheduleStartRetry(h: SpikeHost, reason: String = "retry") {
         val delayMs = startRetryDelayMs(maxOf(consecutiveBindFailures - 1, 0), lastStartBindFailure)
-        h.evidence.event("net", mapOf("retry" to true, "inMs" to delayMs))
+        h.evidence.event("net", mapOf("retry" to true, "inMs" to delayMs, "reason" to reason))
         retryJob = h.scope.launch {
             delay(delayMs)
-            withBridgeLock(h) { applyRebind(h, "retry") }
+            withBridgeLock(h) { applyRebind(h, reason) }
         }
+    }
+
+    /**
+     * One failed start or move: retries it with [retryReason] while the budget lasts; the attempt that reaches
+     * [BRIDGE_FAILURE_LIMIT] reports once and schedules nothing more. Call with the lifecycle lock held.
+     */
+    private fun failedAttempt(h: SpikeHost, retryReason: String) {
+        when (failureBudget.fail()) {
+            FailureStep.RETRY -> scheduleStartRetry(h, retryReason)
+            FailureStep.GIVE_UP -> giveUp(h, retryReason)
+            FailureStep.ALREADY_GAVE_UP -> Unit
+        }
+    }
+
+    /**
+     * The bridge has failed [BRIDGE_FAILURE_LIMIT] times in a row: says so once (log line and the not-running notice), then sets
+     * the saved switch off, so the Enable switch shows the real state and the service stops; nothing retries after this.
+     * [BridgeControl.setEnabled] persists on the settings writer and returns at once.
+     */
+    private fun giveUp(h: SpikeHost, reason: String) {
+        val attempts = failureBudget.attempts
+        h.evidence.event("bridge-error", mapOf("where" to "gave-up", "attempts" to attempts, "reason" to reason))
+        BridgeDownNotifier(h.context).notify(attempts)
+        BridgeControl.setEnabled(h.context, false, "start-failed")
     }
 
     /** Call with the lifecycle lock held, off the main thread. */
@@ -570,6 +624,12 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         override suspend fun stopKeepingSpeakers() = stopBridge(clearSpeakers = false)
 
         override fun scheduleStartRetry() = scheduleStartRetry(h)
+
+        override val lastStartThrew: Boolean get() = this@CastFeature.lastStartThrew
+
+        override fun failedAttempt(retryReason: String) = this@CastFeature.failedAttempt(h, retryReason)
+
+        override fun resetFailures() = failureBudget.reset()
 
         override fun resetBindFailures() {
             lastStartBindFailure = false

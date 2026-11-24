@@ -3,7 +3,9 @@
 package dev.dialup.app.model
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -134,19 +136,23 @@ class AppUpdateModelTest {
         var fetches = 0
         var saved: UpdateRecord = initial
         var gate: CompletableDeferred<Unit>? = null
-        fun model() = AppUpdateModel(
+        var failure: Throwable? = null
+        var loads = 0
+        var loadFailure: Throwable? = null
+        fun model(scope: CoroutineScope) = AppUpdateModel(
             "0.9.0-beta.1",
-            fetch = { fetches++; gate?.await(); result },
-            load = { saved },
+            fetch = { fetches++; gate?.await(); failure?.let { throw it }; result },
+            load = { loads++; loadFailure?.let { throw it }; saved },
             save = { saved = it },
             wallMs = { now },
+            scope = scope,
         )
     }
 
     @Test
     fun checkNowRunsEvenWithAutoOffAndRecordsTheResult() = runTest {
         val env = Env(result = FetchResult.Body(list("v0.9.0")))
-        val m = env.model()
+        val m = env.model(backgroundScope)
         val o = m.checkNow()
         assertEquals("v0.9.0", (o as CheckOutcome.Newer).release.tag)
         assertEquals(1, env.fetches)
@@ -160,7 +166,7 @@ class AppUpdateModelTest {
     fun twoCheckNowAtOnceShareOneRequest() = runTest {
         val env = Env()
         env.gate = CompletableDeferred()
-        val m = env.model()
+        val m = env.model(backgroundScope)
         val a = async { m.checkNow() }
         val b = async { m.checkNow() }
         testScheduler.runCurrent()
@@ -170,9 +176,83 @@ class AppUpdateModelTest {
     }
 
     @Test
+    fun aCallerThatLeavesDoesNotFailTheOneWaitingWithIt() = runTest {
+        val env = Env(result = FetchResult.Body(list("v0.9.0")))
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = launch { m.checkNow() }
+        val b = async { m.checkNow() }
+        testScheduler.runCurrent()
+        a.cancel()
+        env.gate!!.complete(Unit)
+        val o = b.await()
+        assertEquals("v0.9.0", (o as CheckOutcome.Newer).release.tag)
+        assertEquals(1, env.fetches)
+    }
+
+    @Test
+    fun theCheckFinishesAfterItsOnlyCallerLeft() = runTest {
+        val env = Env(result = FetchResult.Body(list("v0.9.0")))
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = launch { m.checkNow() }
+        testScheduler.runCurrent()
+        assertTrue(m.state.value.checking)
+        a.cancel()
+        testScheduler.runCurrent()
+        assertTrue(m.state.value.checking)
+        env.gate!!.complete(Unit)
+        testScheduler.runCurrent()
+        assertEquals(1, env.fetches)
+        assertFalse(m.state.value.checking)
+        assertEquals(env.now, env.saved.lastCheckWallMs)
+        assertEquals("v0.9.0", env.saved.latestTag)
+        // nobody was waiting, so no manual outcome was recorded
+        assertNull(m.state.value.outcome)
+    }
+
+    @Test
+    fun aFailedCheckReachesEveryWaiter() = runTest {
+        val env = Env()
+        env.gate = CompletableDeferred()
+        env.failure = IllegalStateException("boom")
+        val m = env.model(backgroundScope)
+        val a = async { runCatching { m.checkNow() } }
+        val b = async { runCatching { m.checkNow() } }
+        testScheduler.runCurrent()
+        env.gate!!.complete(Unit)
+        val ra = a.await().exceptionOrNull()
+        val rb = b.await().exceptionOrNull()
+        assertTrue(ra is IllegalStateException, "first waiter got $ra")
+        assertTrue(rb is IllegalStateException, "second waiter got $rb")
+        assertEquals(1, env.fetches)
+        assertFalse(m.state.value.checking)
+        // the next check starts a new request: the failure was not kept
+        env.failure = null
+        env.gate = null
+        assertEquals(CheckOutcome.UpToDate(null), m.checkNow())
+        assertEquals(2, env.fetches)
+    }
+
+    @Test
+    fun anAutomaticCheckJoinsARunningCheckNow() = runTest {
+        val env = Env()
+        env.gate = CompletableDeferred()
+        val m = env.model(backgroundScope)
+        val a = async { m.checkNow() }
+        testScheduler.runCurrent()
+        val b = async { m.autoCheck(true) }
+        testScheduler.runCurrent()
+        env.gate!!.complete(Unit)
+        val oa = a.await()
+        assertEquals(oa, b.await())
+        assertEquals(1, env.fetches)
+    }
+
+    @Test
     fun autoCheckIsSilentAndThrottled() = runTest {
         val env = Env(result = FetchResult.Body(list("v0.9.0")))
-        val m = env.model()
+        val m = env.model(backgroundScope)
         assertNull(m.autoCheck(false))
         assertEquals(0, env.fetches)
         assertTrue(m.autoCheck(true) is CheckOutcome.Newer)
@@ -188,9 +268,52 @@ class AppUpdateModelTest {
     }
 
     @Test
+    fun buildingTheModelReadsNoFileOnTheCallersThread() = runTest {
+        val stored = UpdateRecord(5L, 5L, "v0.8.0", null)
+        val env = Env(stored)
+        val m = env.model(backgroundScope)
+        // the screen builds the model on the main thread: the record file is read by the model's own scope, not by the constructor
+        assertEquals(0, env.loads)
+        testScheduler.runCurrent()
+        assertEquals(1, env.loads)
+        assertEquals(stored, m.state.value.record)
+    }
+
+    @Test
+    fun anAutomaticCheckWaitsForTheRecordBeforeItDecidesIfItIsDue() = runTest {
+        // a check made 1 hour ago is not due; asked before the file is read, the throttle must not see an empty (always due) record
+        val env = Env(UpdateRecord(100L * h - h, 100L * h - h, "v0.8.0", null))
+        val m = env.model(backgroundScope)
+        assertNull(m.autoCheck(true))
+        assertEquals(0, env.fetches)
+        assertEquals("v0.8.0", m.state.value.record.latestTag)
+    }
+
+    @Test
+    fun aFailedCheckKeepsTheRecordThatWasReadEvenWhenItWasAskedFirst() = runTest {
+        val env = Env(UpdateRecord(5L, 5L, "v0.8.0", null), FetchResult.Offline)
+        val m = env.model(backgroundScope)
+        assertEquals(CheckOutcome.Offline, m.checkNow())
+        assertEquals(5L, m.state.value.record.lastCheckWallMs)
+        assertEquals("v0.8.0", m.state.value.record.latestTag)
+        assertEquals(env.now, env.saved.lastAttemptWallMs)
+        assertEquals("v0.8.0", env.saved.latestTag)
+    }
+
+    @Test
+    fun aRecordFileThatCannotBeReadIsAnEmptyRecordAndTheCheckStillRuns() = runTest {
+        val env = Env(result = FetchResult.Body(list("v0.9.0")))
+        env.loadFailure = IllegalStateException("unreadable")
+        val m = env.model(backgroundScope)
+        assertTrue(m.autoCheck(true) is CheckOutcome.Newer)
+        assertEquals(1, env.fetches)
+        assertEquals("v0.9.0", m.state.value.record.latestTag)
+    }
+
+    @Test
     fun aRateLimitedAnswerRecordsTheAttemptButNotACheck() = runTest {
         val env = Env(UpdateRecord(5L, 5L, "v0.8.0", null), FetchResult.RateLimited)
-        val m = env.model()
+        val m = env.model(backgroundScope)
         assertEquals(CheckOutcome.RateLimited, m.checkNow())
         assertEquals(5L, m.state.value.record.lastCheckWallMs)
         assertEquals(env.now, m.state.value.record.lastAttemptWallMs)

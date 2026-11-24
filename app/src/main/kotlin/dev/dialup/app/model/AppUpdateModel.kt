@@ -3,7 +3,14 @@
 package dev.dialup.app.model
 
 import dev.dialup.app.Failures
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +21,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** The longest an automatic check waits after a successful one (the budget of 60 requests an hour is shared with the yt-dlp updater). */
 const val AUTO_CHECK_INTERVAL_MS: Long = 12L * 60 * 60 * 1000
@@ -143,6 +152,12 @@ data class AppUpdateUi(
 
 /**
  * Holds the update check. One request runs at a time: a second caller while one is in flight gets that request's result.
+ * The request runs in [scope] (the app's, not a caller's): a caller that leaves, because its screen closed or its time
+ * limit ran out, only stops waiting; the check goes on, clears [AppUpdateUi.checking] and saves the record itself, and
+ * every other caller still gets the outcome or the failure. The request's own call timeout bounds it.
+ * The record file is read by [scope] (with [loadContext]), never by the constructor, because the screens build this model on the
+ * main thread: until that read ends [AppUpdateUi.record] is the empty record. [autoCheck] and every check wait for the read before
+ * they look at the record, so the throttle never decides on the empty one and a failed check never writes it over the real one.
  * [checkNow] always runs and sets [AppUpdateUi.outcome]; [autoCheck] runs only when enabled and due and stays silent
  * (it updates the record, never the outcome). Pure: the request, the record file and the clock are passed in.
  */
@@ -153,16 +168,32 @@ class AppUpdateModel(
     private val save: (UpdateRecord) -> Unit,
     private val wallMs: () -> Long,
     private val channel: () -> UpdateChannel = { UpdateChannel.STABLE },
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Where [load] runs; the app passes the IO dispatcher so the read is a file read off the main thread. */
+    loadContext: CoroutineContext = EmptyCoroutineContext,
 ) {
-    private val _state = MutableStateFlow(AppUpdateUi(record = load()))
+    private val _state = MutableStateFlow(AppUpdateUi())
     val state: StateFlow<AppUpdateUi> = _state.asStateFlow()
 
+    /** Ends when the record file has been read and is in [state]; started here, run by [scope]. */
+    private val loaded: Deferred<Unit> = scope.async(loadContext) {
+        val record = try {
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Failures.report("app-update:load-record", e)
+            UpdateRecord() // unreadable: the same as no file, so the next check runs and writes a good one
+        }
+        _state.update { it.copy(record = record) }
+    }
+
     private val lock = Any()
-    private var inflight: CompletableDeferred<CheckOutcome>? = null
+    private var inflight: Deferred<CheckOutcome>? = null
 
     /** Checks now, whatever the throttle and the automatic-check setting say. */
     suspend fun checkNow(): CheckOutcome {
-        val o = flight()
+        val o = flight().await()
         _state.update { it.copy(outcome = o) }
         return o
     }
@@ -170,31 +201,36 @@ class AppUpdateModel(
     /** An automatic check: null (no request) when [enabled] is false or the last attempt is too recent. */
     suspend fun autoCheck(enabled: Boolean): CheckOutcome? {
         if (!enabled) return null
+        loaded.await()
         if (!autoCheckDue(_state.value.record, wallMs(), channel())) return null
-        return flight()
+        return flight().await()
     }
 
-    private suspend fun flight(): CheckOutcome {
-        val mine = CompletableDeferred<CheckOutcome>()
-        val existing = synchronized(lock) {
-            inflight ?: run { inflight = mine; null }
-        }
-        if (existing != null) return existing.await()
-        _state.update { it.copy(checking = true) }
-        try {
-            val outcome = run()
-            mine.complete(outcome)
-            return outcome
-        } catch (t: Throwable) {
-            mine.completeExceptionally(t)
-            throw t
-        } finally {
-            synchronized(lock) { inflight = null }
-            _state.update { it.copy(checking = false) }
+    private fun flight(): Deferred<CheckOutcome> = synchronized(lock) {
+        inflight ?: start().also { inflight = it; it.start() }
+    }
+
+    /**
+     * The check as a not yet started [Deferred] on [scope]. It has its own supervisor, so a failed check reaches the
+     * waiters through await and never cancels [scope] (a plain Job scope would otherwise refuse every later check).
+     * The reference is recorded before the body starts, so a body that ends at once clears the right one.
+     */
+    private fun start(): Deferred<CheckOutcome> {
+        val supervisor = SupervisorJob(scope.coroutineContext[Job])
+        return scope.async(supervisor, start = CoroutineStart.LAZY) {
+            _state.update { it.copy(checking = true) }
+            try {
+                run()
+            } finally {
+                synchronized(lock) { inflight = null }
+                _state.update { it.copy(checking = false) }
+                supervisor.complete()
+            }
         }
     }
 
     private suspend fun run(): CheckOutcome {
+        loaded.await()
         val result = fetch()
         val ch = channel()
         val outcome = outcomeOf(result, currentVersion, ch)

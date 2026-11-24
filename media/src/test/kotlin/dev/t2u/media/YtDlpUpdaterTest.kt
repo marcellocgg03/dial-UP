@@ -36,7 +36,10 @@ class YtDlpUpdaterTest {
 
         override fun run(call: YtDlpCall): GatewayResult = error("not used")
 
+        val versionCalls = java.util.concurrent.atomic.AtomicInteger()
+
         override fun version(): String? {
+            versionCalls.incrementAndGet()
             versionFailure?.let { throw it }
             return current
         }
@@ -44,7 +47,15 @@ class YtDlpUpdaterTest {
         /** Plan 07-09: runs at the start of every update, so a test can hold the gateway busy. */
         @Volatile var onUpdate: (() -> Unit)? = null
 
+        /** Plan 14-05: when set, the install runs inside this lock, like AndroidYtDlpGateway.update with the process lock. */
+        @Volatile var installLock: YtDlpInstallLock? = null
+
         override fun update(channel: String): String {
+            val lock = installLock
+            return if (lock == null) install(channel) else lock.install { install(channel) }
+        }
+
+        private fun install(channel: String): String {
             updateThreads += Thread.currentThread().name
             updates += channel
             onUpdate?.invoke()
@@ -198,6 +209,7 @@ class YtDlpUpdaterTest {
         casting: () -> Boolean = { false },
         store: YtDlpRecordStore? = null,
         wall: () -> Long = { WALL },
+        updateTimeoutMs: Long = YTDLP_UPDATE_TIMEOUT_MS,
         busy: () -> Boolean = { false },
     ) = YtDlpUpdater(
         g,
@@ -211,6 +223,7 @@ class YtDlpUpdaterTest {
         casting = casting,
         record = store,
         wallMs = wall,
+        updateTimeoutMs = updateTimeoutMs,
     )
 
     private class MemoryStore(var value: YtDlpRecord = YtDlpRecord()) : YtDlpRecordStore {
@@ -747,5 +760,175 @@ class YtDlpUpdaterTest {
         assertEquals("2026.01.01", runBlocking { u.version() })
         g.versionFailure = IllegalStateException("no python yet")
         assertNull(runBlocking { u.version() })
+    }
+
+    // ----- plan 14-05: one install at a time across the updaters (APP WR-08) --------------------------------
+
+    @Test
+    fun twoUpdatersInstallOneAtATime() {
+        val g = FakeGateway()
+        g.installLock = YtDlpInstallLock()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        g.onUpdate = {
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val storeA = MemoryStore()
+        val storeB = MemoryStore()
+        val eventsB = CopyOnWriteArrayList<Map<String, Any?>>()
+        val executorB = Executors.newSingleThreadExecutor { Thread(it, "yt-dlp-updater-test-b") }
+        val a = YtDlpUpdater(g, { "stable" }, { }, dispatcher = dispatcher, record = storeA, wallMs = { WALL })
+        val b = YtDlpUpdater(g, { "stable" }, { eventsB += it }, dispatcher = executorB.asCoroutineDispatcher(), record = storeB, wallMs = { WALL })
+        var outcomeA: YtDlpUpdateOutcome? = null
+        val first = thread(name = "updater-a") { outcomeA = runBlocking { a.updateNow() } }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "updater A is inside the install")
+            val refused = runBlocking { b.updateNow() }
+            assertEquals(false, refused.ok)
+            assertEquals("FAILED", refused.status)
+            assertTrue(refused.error.orEmpty().contains("another yt-dlp update is running"), refused.error)
+            assertEquals(false, eventsB.single()["ok"])
+            assertTrue(storeB.saves.isEmpty(), "a refused install writes no record")
+            assertNull(storeB.value.lastSuccessWallMs)
+        } finally {
+            release.countDown()
+            first.join(5_000)
+            executorB.shutdownNow()
+        }
+        assertEquals(true, outcomeA?.ok)
+        assertEquals(YtDlpRecord(WALL, WALL), storeA.value)
+        assertEquals(1, g.updates.size, "the install ran once")
+    }
+
+    // ----- plan 14-05: the update is bounded and the schedule lock is not held across it (MEDIA WR-07) -----
+
+    /** An update that ignores interrupts, like a library download that does not stop when its thread is interrupted. */
+    private fun hangUntil(release: CountDownLatch, g: FakeGateway, halfReplaced: String? = null) {
+        g.onUpdate = {
+            if (halfReplaced != null) g.current = halfReplaced
+            val giveUp = System.nanoTime() + TimeUnit.SECONDS.toNanos(6)
+            var released = false
+            while (!released && System.nanoTime() < giveUp) {
+                try {
+                    released = release.await(100, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    // ignored on purpose: the call keeps going when its thread is interrupted
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aHungUpdateEndsAsFailedAfterTheTimeoutAndReadsTheVersionAgain() {
+        val g = FakeGateway()
+        val release = CountDownLatch(1)
+        hangUntil(release, g, halfReplaced = "2026.03.03")
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val u = YtDlpUpdater(g, { "stable" }, { events += it }, dispatcher = dispatcher, updateTimeoutMs = 200)
+        try {
+            val t0 = System.nanoTime()
+            val outcome = runBlocking { u.updateNow() }
+            val tookMs = (System.nanoTime() - t0) / 1_000_000
+            assertTrue(tookMs < 3_000, "returned after the bound, not after the hung call: $tookMs ms")
+            assertEquals(false, outcome.ok)
+            assertEquals("FAILED", outcome.status)
+            assertTrue(outcome.error.orEmpty().contains("timed out"), outcome.error)
+            assertEquals("2026.01.01", outcome.before)
+            assertEquals("2026.03.03", outcome.after, "the version was read again after the cut install")
+            assertTrue(g.versionCalls.get() >= 2, "versions read: ${g.versionCalls.get()}")
+            assertEquals(false, events.single()["ok"])
+        } finally {
+            release.countDown()
+        }
+        // the hung call has ended; the next update is not refused as BUSY
+        val next = runBlocking { u.updateNow() }
+        assertTrue(next.status != "BUSY", next.status)
+        assertEquals(true, next.ok)
+    }
+
+    @Test
+    fun aHungUpdateDoesNotHoldTheScheduleLock() {
+        val g = FakeGateway()
+        val release = CountDownLatch(1)
+        val entered = CountDownLatch(1)
+        hangUntil(release, g)
+        val hang = g.onUpdate!!
+        g.onUpdate = {
+            entered.countDown()
+            hang()
+        }
+        val clock = Clock()
+        val parked = CountDownLatch(1)
+        val loopGate = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val u = YtDlpUpdater(
+            g,
+            { "stable" },
+            { events += it },
+            pause = {
+                parked.countDown()
+                loopGate.await(10, TimeUnit.SECONDS)
+                throw CancellationException("test over")
+            },
+            dispatcher = dispatcher,
+            elapsedMs = { clock.now },
+            updateTimeoutMs = 10_000,
+        )
+        val loop = thread(name = "scheduled-run") { runLoop(u) }
+        var manual: YtDlpUpdateOutcome? = null
+        val manualThread = thread(name = "manual-update") { manual = runBlocking { u.updateNow() } }
+        try {
+            assertTrue(parked.await(5, TimeUnit.SECONDS), "the loop set its first deadline")
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "the manual update is inside the gateway")
+            clock.now = 40_000L // the loop's first deadline (30 s) has passed
+            val t0 = System.nanoTime()
+            val viaAlarm = runBlocking { u.runIfDue() }
+            val alarmMs = (System.nanoTime() - t0) / 1_000_000
+            assertNull(viaAlarm)
+            assertTrue(alarmMs < 1_000, "runIfDue did not wait for the running update: $alarmMs ms")
+            val t1 = System.nanoTime()
+            val job = runBlocking { u.updateIfDue("job") }
+            val jobMs = (System.nanoTime() - t1) / 1_000_000
+            assertEquals("BUSY", job?.status)
+            assertTrue(jobMs < 1_000, "updateIfDue answered BUSY at once: $jobMs ms")
+            assertEquals(1, g.updates.size)
+        } finally {
+            release.countDown()
+            loopGate.countDown()
+            manualThread.join(10_000)
+            loop.join(10_000)
+        }
+        assertEquals(true, manual?.ok)
+    }
+
+    @Test
+    fun aPostponedWaitIsNotCountedAgainstTheTimeout() {
+        val g = FakeGateway()
+        g.onUpdate = { Thread.sleep(50) }
+        val events = CopyOnWriteArrayList<Map<String, Any?>>()
+        val clock = Clock()
+        val startedAt = System.nanoTime()
+        val u = YtDlpUpdater(
+            g,
+            { "stable" },
+            { events += it },
+            // the loop really waits 100 ms per step while the lookup runs, 500 ms in all, longer than the 200 ms bound
+            pause = {
+                if (g.updates.isNotEmpty()) throw CancellationException("test over")
+                Thread.sleep(100)
+                clock.now += it
+            },
+            dispatcher = dispatcher,
+            elapsedMs = { clock.now },
+            busy = { (System.nanoTime() - startedAt) / 1_000_000 < 500 },
+            busyWaitMs = 60_000L,
+            updateTimeoutMs = 200,
+        )
+        runLoop(u)
+        assertEquals(1, events.count { it["status"] == "POSTPONED" })
+        val done = events.last()
+        assertEquals(true, done["ok"], events.toString())
+        assertEquals(1, g.updates.size)
     }
 }

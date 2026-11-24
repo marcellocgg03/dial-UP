@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.zip.ZipFile
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LogArchiveTest {
@@ -49,5 +50,30 @@ class LogArchiveTest {
         LogArchive.build(LogArchive.logFiles(dir), z)
         LogArchive.build(LogArchive.logFiles(dir), z)
         ZipFile(z).use { assertEquals(2, it.size()) }
+    }
+
+    @Test
+    fun `prepare deletes an old zip and gives null when there is no log`() {
+        val dir = File(tmp, "e3").also { it.mkdirs() }
+        val zip = File(dir, LogArchive.ZIP_NAME).apply { writeText("old") }
+        var flushed = false
+        assertEquals(null, LogArchive.prepare(dir) { flushed = true })
+        assertFalse(zip.exists())
+        assertTrue(flushed)
+    }
+
+    @Test
+    fun `prepare flushes first and builds the zip from every log file`() {
+        val dir = File(tmp, "e4").also { it.mkdirs() }
+        File(dir, "dialup-events.jsonl.1").writeText(line("2026-11-18T08:00:00.000-05:00"))
+        val current = File(dir, "dialup-events.jsonl").apply { writeText(line("2026-11-19T00:00:00.000-05:00")) }
+        val flushedLine = line("2026-11-19T10:00:00.000-05:00")
+        val out = LogArchive.prepare(dir) { current.appendText(flushedLine) }
+        assertEquals(File(dir, LogArchive.ZIP_NAME), out)
+        ZipFile(out!!).use { z ->
+            assertEquals(listOf("SUMMARY.txt", "dialup-events.jsonl.1", "dialup-events.jsonl"), z.entries().toList().map { it.name })
+            val body = z.getInputStream(z.getEntry("dialup-events.jsonl")).readBytes().decodeToString()
+            assertTrue(flushedLine in body, "the flush ran before the files were read")
+        }
     }
 }

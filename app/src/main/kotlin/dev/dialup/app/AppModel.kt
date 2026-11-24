@@ -63,11 +63,13 @@ class AppModel private constructor(context: Context) {
      * Whether the phone has a Wi-Fi or hotspot address the bridge could bind to ([hasBindableNetwork]). The service stops itself
      * on Wi-Fi loss, so the UI reads presence itself instead of asking the service. It listens only while a
      * screen collects it (WhileSubscribed): the network callback is unregistered when the last collector goes, and the 5 s
-     * re-check (a hotspot starting or stopping raises no Wi-Fi callback) stops with it.
+     * re-check (a hotspot starting or stopping raises no Wi-Fi callback) stops with it. It starts at true, the safe value
+     * (never claim "no Wi-Fi" before the check has run), and the flow corrects it on Dispatchers.IO within its first emission:
+     * no probe runs on the caller's (main) thread.
      */
     val wifiPresent: StateFlow<Boolean> =
         wifiPresenceFlow().distinctUntilChanged().flowOn(Dispatchers.IO)
-            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), runCatching { hasBindableNetwork(context) }.getOrDefault(true))
+            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), true)
 
     private fun wifiPresenceFlow(): Flow<Boolean> = callbackFlow {
         val cm = appContext.getSystemService(ConnectivityManager::class.java)

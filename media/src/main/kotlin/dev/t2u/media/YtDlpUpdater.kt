@@ -5,11 +5,17 @@ package dev.t2u.media
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The update channels youtubedl-android knows; the single source of truth (anything else is treated as stable). */
 val YTDLP_CHANNELS: Set<String> = setOf("stable", "nightly")
@@ -27,7 +33,13 @@ const val YTDLP_UPDATE_RETRY_MS: Long = 60L * 60 * 1000
 /** The status of an Update now that was refused because a renderer is being cast to (author's decision, 2026-11-04). */
 const val YTDLP_STATUS_CASTING: String = "CASTING"
 
+/** One yt-dlp update may take this long (Node: `execFileP(cmd, args, { timeout: 5 * 60 * 1000 })`, resolver.js:131); then it fails. */
+const val YTDLP_UPDATE_TIMEOUT_MS: Long = 5 * 60_000L
+
 private const val ERROR_LIMIT = 300
+
+/** How long the version is waited for after a timed out update: the installed files may be half replaced. */
+private const val VERSION_REREAD_TIMEOUT_MS = 10_000L
 
 /**
  * What a look-ahead found: the installed [current] version, the newest published [latest] on [channel], and whether [latest]
@@ -107,6 +119,12 @@ data class YtDlpUpdateOutcome(
  * [busyWaitMs] until the way is clear. Automatic updates also follow the persisted [record]: none sooner than
  * [YTDLP_DUE_SLACK_MS] short of a day after a success and none sooner than [retryMs] after an attempt, so a restart or a
  * Wi-Fi flap never re-updates. Update now ([updateNow]) is refused while casting (status [YTDLP_STATUS_CASTING]).
+ *
+ * The install is bounded by [updateTimeoutMs] ([YTDLP_UPDATE_TIMEOUT_MS], as in Node), counted from the moment it starts:
+ * the postponed wait comes before and is never part of it. A timeout ends FAILED and the installed version is read again,
+ * because the library may have half replaced its files. The schedule lock ([dueMutex]) is held for decisions and
+ * bookkeeping only, never across an update: one update at a time per updater runs through a private claim (BUSY while it is
+ * taken), and one install at a time per process through [YtDlpInstallLock].
  */
 class YtDlpUpdater(
     private val gateway: YtDlpGateway,
@@ -134,29 +152,55 @@ class YtDlpUpdater(
     private val autoEnabled: () -> Boolean = { true },
     /** How often the loop looks at [autoEnabled] again while it is off. */
     private val offRecheckMs: Long = 15 * 60_000L,
+    /** The longest one install may take, counted from the moment it starts; then the attempt ends FAILED. */
+    private val updateTimeoutMs: Long = YTDLP_UPDATE_TIMEOUT_MS,
 ) {
     /** One attempt; never throws except for cancellation. The outcome was also delivered to the event sink. */
     suspend fun updateOnce(trigger: String): YtDlpUpdateOutcome {
-        val outcome = withContext(dispatcher) {
-            val chosen = chosenChannel()
-            val before = runCatching { gateway.version() }.getOrNull()
-            val t0 = System.nanoTime()
-            try {
-                val status = gateway.update(chosen)
-                val ms = (System.nanoTime() - t0) / 1_000_000
-                val after = runCatching { gateway.version() }.getOrNull()
+        val chosen = chosenChannel()
+        val before = withContext(dispatcher) { runCatching { gateway.version() }.getOrNull() }
+        val t0 = System.nanoTime()
+        // The install runs detached, so the bound holds even for a library call that ignores a thread interrupt (it is
+        // abandoned on a timeout; YtDlpInstallLock turns any overlap with the next attempt into a quick failure).
+        val install = updateScope.async { gateway.update(chosen) }
+        val outcome = try {
+            val status = withTimeoutOrNull(updateTimeoutMs) { install.await() }
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            if (status != null) {
+                val after = withContext(dispatcher) { runCatching { gateway.version() }.getOrNull() }
                 YtDlpUpdateOutcome(true, trigger, chosen, before, after, status, ms)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                val ms = (System.nanoTime() - t0) / 1_000_000
-                val text = (t::class.java.simpleName.ifEmpty { "Throwable" }) + ": " + Resolver.redactUrls(t.message.orEmpty())
-                YtDlpUpdateOutcome(false, trigger, chosen, before, before, "FAILED", ms, text.take(ERROR_LIMIT))
+            } else {
+                install.cancel()
+                val after = rereadVersion()
+                val text = "TimeoutException: the yt-dlp update timed out after ${timeoutText(updateTimeoutMs)}"
+                YtDlpUpdateOutcome(false, trigger, chosen, before, after, "FAILED", ms, text.take(ERROR_LIMIT))
             }
+        } catch (e: CancellationException) {
+            install.cancel()
+            throw e
+        } catch (t: Throwable) {
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            val text = (t::class.java.simpleName.ifEmpty { "Throwable" }) + ": " + Resolver.redactUrls(t.message.orEmpty())
+            YtDlpUpdateOutcome(false, trigger, chosen, before, before, "FAILED", ms, text.take(ERROR_LIMIT))
         }
         deliver(outcome.toEvent())
         return outcome
     }
+
+    /**
+     * The installed version after a timed out update, read detached on [Dispatchers.IO] (the updater's own dispatcher may be
+     * held by the abandoned install) and bounded; null when it does not answer in time or cannot be read.
+     */
+    private suspend fun rereadVersion(): String? {
+        val read = updateScope.async(Dispatchers.IO) { runCatching { gateway.version() }.getOrNull() }
+        return try {
+            withTimeoutOrNull(VERSION_REREAD_TIMEOUT_MS) { read.await() }
+        } finally {
+            read.cancel()
+        }
+    }
+
+    private fun timeoutText(ms: Long): String = if (ms >= 1000L && ms % 1000L == 0L) "${ms / 1000} s" else "$ms ms"
 
     /**
      * Asks whether a newer yt-dlp is published on the chosen channel, installing nothing. It is allowed while casting, and it
@@ -179,9 +223,9 @@ class YtDlpUpdater(
     /**
      * One update on the chosen channel because the author asked for it. It refuses with status
      * [YTDLP_STATUS_CASTING], without touching the gateway or the record, while a renderer is being cast to; then with
-     * status BUSY while a lookup runs ([busy]) or a scheduled update holds [dueMutex], so two updates never
-     * overlap. A successful one writes the record and moves the next scheduled run a full [intervalMs] away once [run]
-     * has begun. The outcome (a refusal included) was also delivered to the event sink.
+     * status BUSY while a lookup runs ([busy]) or another update of this updater is in flight (the claim), so two updates
+     * never overlap. A successful one writes the record and moves the next scheduled run a full [intervalMs] away once
+     * [run] has begun. The outcome (a refusal included) was also delivered to the event sink.
      */
     suspend fun updateNow(trigger: String = "manual"): YtDlpUpdateOutcome {
         if (isCasting()) {
@@ -189,37 +233,39 @@ class YtDlpUpdater(
             deliver(outcome.toEvent())
             return outcome
         }
-        if (isBusy() || !dueMutex.tryLock()) {
-            val outcome = YtDlpUpdateOutcome(false, trigger, chosenChannel(), null, null, "BUSY", 0)
-            deliver(outcome.toEvent())
-            return outcome
-        }
+        if (isBusy() || !updating.compareAndSet(false, true)) return busyOutcome(trigger)
         try {
             val outcome = updateOnce(trigger)
             if (outcome.ok) {
-                val wall = wall()
-                saveRecord((loadRecord() ?: YtDlpRecord()).copy(lastSuccessWallMs = wall, lastAttemptWallMs = wall))
-                if (nextDueAt != null) nextDueAt = now() + intervalMs
+                withContext(NonCancellable) {
+                    dueMutex.withLock {
+                        val wall = wall()
+                        saveRecord((loadRecord() ?: YtDlpRecord()).copy(lastSuccessWallMs = wall, lastAttemptWallMs = wall))
+                        if (nextDueAt != null) nextDueAt = now() + intervalMs
+                    }
+                }
             }
             return outcome
         } finally {
-            dueMutex.unlock()
+            updating.set(false)
         }
+    }
+
+    private fun busyOutcome(trigger: String): YtDlpUpdateOutcome {
+        val outcome = YtDlpUpdateOutcome(false, trigger, chosenChannel(), null, null, "BUSY", 0)
+        deliver(outcome.toEvent())
+        return outcome
     }
 
     /**
      * For the daily job: one update with [trigger], but only when it is due by the record and nothing is cast or in
      * flight. Null (and a SKIPPED event) when the record says it is not due; a POSTPONED outcome (and event, no gateway
-     * call) while casting or busy; a BUSY outcome while a scheduled or manual update holds [dueMutex]. After a success it
-     * moves [run]'s next deadline a full [intervalMs] away.
+     * call) while casting or busy; a BUSY outcome while another update of this updater is in flight. The schedule lock is
+     * held for the decisions only. After a success it moves [run]'s next deadline a full [intervalMs] away.
      */
     suspend fun updateIfDue(trigger: String): YtDlpUpdateOutcome? {
-        if (!dueMutex.tryLock()) {
-            val outcome = YtDlpUpdateOutcome(false, trigger, chosenChannel(), null, null, "BUSY", 0)
-            deliver(outcome.toEvent())
-            return outcome
-        }
-        try {
+        val tried = dueMutex.withLock {
+            if (updating.get()) return busyOutcome(trigger)
             if (!isAutoEnabled()) {
                 deliver(skippedEvent(trigger, "off"))
                 return null
@@ -238,12 +284,13 @@ class YtDlpUpdater(
                 deliver(LinkedHashMap(outcome.toEvent()).apply { put("reason", why) })
                 return outcome
             }
-            val outcome = attempt(trigger, rec)
-            if (outcome.ok && nextDueAt != null) nextDueAt = now() + intervalMs
-            return outcome
-        } finally {
-            dueMutex.unlock()
+            beginAttempt(rec) ?: return busyOutcome(trigger)
         }
+        val outcome = finishAttempt(trigger, tried)
+        if (outcome.ok) {
+            withContext(NonCancellable) { dueMutex.withLock { if (nextDueAt != null) nextDueAt = now() + intervalMs } }
+        }
+        return outcome
     }
 
     /** The installed yt-dlp version, read on the updater's own dispatcher; null when it cannot be read. */
@@ -257,8 +304,14 @@ class YtDlpUpdater(
         }
     }
 
-    /** Guards the due run: the loop and an alarm tick ([runIfDue]) for one deadline run one update. */
+    /** Guards the schedule decisions, held briefly and never across an update: the loop and an alarm tick ([runIfDue]) for one deadline decide once. */
     private val dueMutex = Mutex()
+
+    /** An update of this updater is in flight (from the decision to the end of the install); a second one is answered BUSY. */
+    private val updating = AtomicBoolean(false)
+
+    /** Detached from every caller, so the 5 minute bound holds for an install that ignores a thread interrupt. */
+    private val updateScope = CoroutineScope(SupervisorJob() + dispatcher)
 
     /** Virtual clock for when no [elapsedMs] is given: advanced by every pause this class makes. */
     private var virtualNow = 0L
@@ -362,14 +415,34 @@ class YtDlpUpdater(
     private fun skippedEvent(trigger: String, reason: String): Map<String, Any?> =
         linkedMapOf("status" to "SKIPPED", "trigger" to trigger, "channel" to chosenChannel(), "reason" to reason)
 
-    /** Saves the attempt time, updates, and saves the success time when it worked (a failure keeps the old success). */
-    private suspend fun attempt(trigger: String, loaded: YtDlpRecord?): YtDlpUpdateOutcome {
-        val base = loaded ?: loadRecord() ?: YtDlpRecord()
-        val tried = base.copy(lastAttemptWallMs = wall())
-        saveRecord(tried)
-        val outcome = updateOnce(trigger)
-        if (outcome.ok) saveRecord(tried.copy(lastSuccessWallMs = wall()))
-        return outcome
+    /**
+     * Under [dueMutex]: takes the update claim and saves the attempt time. Returns the saved record, or null when an update
+     * of this updater is in flight already (nothing was saved).
+     */
+    private fun beginAttempt(loaded: YtDlpRecord?): YtDlpRecord? {
+        if (!updating.compareAndSet(false, true)) return null
+        try {
+            val base = loaded ?: loadRecord() ?: YtDlpRecord()
+            val tried = base.copy(lastAttemptWallMs = wall())
+            saveRecord(tried)
+            return tried
+        } catch (t: Throwable) {
+            updating.set(false)
+            throw t
+        }
+    }
+
+    /** Outside [dueMutex]: updates, saves the success time when it worked (a failure keeps the old success), frees the claim. */
+    private suspend fun finishAttempt(trigger: String, tried: YtDlpRecord): YtDlpUpdateOutcome {
+        try {
+            val outcome = updateOnce(trigger)
+            if (outcome.ok) {
+                withContext(NonCancellable) { dueMutex.withLock { saveRecord(tried.copy(lastSuccessWallMs = wall())) } }
+            }
+            return outcome
+        } finally {
+            updating.set(false)
+        }
     }
 
     /**
@@ -404,48 +477,62 @@ class YtDlpUpdater(
     /**
      * Under the mutex, re-checks that the deadline has passed. When the record says an update is not due it announces
      * SKIPPED once and moves the deadline to when it will be (at least [busyWaitMs] away); while something is cast or in
-     * flight it announces POSTPONED once per deadline and re-checks after [busyWaitMs], with no maximum wait; otherwise it
-     * saves the attempt, updates, saves the success and sets the next deadline.
+     * flight it announces POSTPONED once per deadline and re-checks after [busyWaitMs], with no maximum wait, and so it does
+     * while another update of this updater runs (no queueing on the mutex); otherwise it saves the attempt, leaves the mutex,
+     * updates, and takes it again to save the success and set the next deadline.
      */
-    private suspend fun dueRun(): YtDlpUpdateOutcome? = dueMutex.withLock {
-        val due = nextDueAt ?: return@withLock null
-        if (now() < due) return@withLock null
-        val trigger = if (firstRun) "start" else "scheduled"
-        if (!isAutoEnabled()) {
-            if (!offAnnounced) {
-                offAnnounced = true
-                deliver(skippedEvent(trigger, "off"))
+    private suspend fun dueRun(): YtDlpUpdateOutcome? {
+        val trigger: String
+        val tried = dueMutex.withLock {
+            val due = nextDueAt ?: return null
+            if (now() < due) return null
+            trigger = if (firstRun) "start" else "scheduled"
+            if (!isAutoEnabled()) {
+                if (!offAnnounced) {
+                    offAnnounced = true
+                    deliver(skippedEvent(trigger, "off"))
+                }
+                nextDueAt = now() + offRecheckMs
+                return null
             }
-            nextDueAt = now() + offRecheckMs
-            return@withLock null
+            offAnnounced = false
+            val rec = loadRecord()
+            if (rec != null) {
+                val nowWall = wall()
+                val reason = notDueReason(rec, nowWall)
+                if (reason != null) {
+                    deliver(skippedEvent(trigger, reason))
+                    nextDueAt = now() + maxOf(busyWaitMs, msUntilDue(rec, nowWall))
+                    firstRun = false
+                    postponedAnnounced = false
+                    return null
+                }
+            }
+            val why = postponeReason()
+            if (why != null) {
+                if (!postponedAnnounced) {
+                    postponedAnnounced = true
+                    deliver(linkedMapOf("status" to "POSTPONED", "trigger" to trigger, "channel" to chosenChannel(), "reason" to why))
+                }
+                nextDueAt = now() + busyWaitMs
+                return null
+            }
+            val begun = beginAttempt(rec)
+            if (begun == null) {
+                nextDueAt = now() + busyWaitMs
+                return null
+            }
+            postponedAnnounced = false
+            begun
         }
-        offAnnounced = false
-        val rec = loadRecord()
-        if (rec != null) {
-            val nowWall = wall()
-            val reason = notDueReason(rec, nowWall)
-            if (reason != null) {
-                deliver(skippedEvent(trigger, reason))
-                nextDueAt = now() + maxOf(busyWaitMs, msUntilDue(rec, nowWall))
+        val outcome = finishAttempt(trigger, tried)
+        withContext(NonCancellable) {
+            dueMutex.withLock {
                 firstRun = false
-                postponedAnnounced = false
-                return@withLock null
+                nextDueAt = now() + (if (outcome.ok) intervalMs else minOf(retryMs, intervalMs))
             }
         }
-        val why = postponeReason()
-        if (why != null) {
-            if (!postponedAnnounced) {
-                postponedAnnounced = true
-                deliver(linkedMapOf("status" to "POSTPONED", "trigger" to trigger, "channel" to chosenChannel(), "reason" to why))
-            }
-            nextDueAt = now() + busyWaitMs
-            return@withLock null
-        }
-        postponedAnnounced = false
-        val outcome = attempt(trigger, rec)
-        firstRun = false
-        nextDueAt = now() + (if (outcome.ok) intervalMs else minOf(retryMs, intervalMs))
-        outcome
+        return outcome
     }
 
     private fun chosenChannel(): String = try {

@@ -38,6 +38,23 @@ object LogArchive {
         return files.size
     }
 
+    /**
+     * The whole of Share log up to the share sheet: runs [flush] (so the file is complete), lists the log files in [dir] and
+     * builds the zip at `dir/ZIP_NAME`. Returns the zip, or null when there is no log (an old zip is deleted then, so nothing
+     * stale is ever offered). Blocking file work (the flush waits up to 2 s): call it off the main thread.
+     */
+    fun prepare(dir: File, flush: () -> Unit): File? {
+        flush()
+        val zip = File(dir, ZIP_NAME)
+        val logs = logFiles(dir)
+        if (logs.isEmpty()) {
+            zip.delete()
+            return null
+        }
+        build(logs, zip)
+        return zip
+    }
+
     /** One line per file, oldest first: name, size and the `ts` of its first and last line. */
     fun summary(files: List<File>): String = buildString {
         appendLine("DialUP event log. Files are listed oldest first; the file without a number is the newest.")

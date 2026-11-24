@@ -16,6 +16,7 @@ package dev.t2u.renderer
 
 import dev.t2u.upnp.AtomicWriteOptions
 import dev.t2u.upnp.writeTextAtomic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -25,7 +26,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.IOException
 import java.nio.file.NoSuchFileException
 
 private const val MAX_PORT = 65535
@@ -36,13 +36,15 @@ private val prettyJson = Json { prettyPrint = true }
  * [warn] receives one line per problem (unreadable file, wrong shape, dropped entries,
  * failed write). It is never used for control flow and nothing here throws on bad files.
  *
- * [maxSaved] bounds the remembered entries; [Int.MAX_VALUE] never drops one. [clock] is epoch ms (a test seam).
+ * [maxSaved] bounds the remembered entries; [Int.MAX_VALUE] never drops one. [clock] is epoch ms and [writeText] writes the
+ * file (both test seams; [writeText] sits before [warn] so a trailing lambda at a call site still binds [warn]).
  */
 class PortRegistry(
     private val dataDir: File,
     private val basePort: Int = 3000,
     private val maxSaved: Int = MAX_SAVED,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val writeText: (File, String) -> Unit = { f, text -> writeTextAtomic(f, text, AtomicWriteOptions.RENDERER) },
     private val warn: (String) -> Unit = {},
 ) {
     companion object {
@@ -186,6 +188,11 @@ class PortRegistry(
         if (write) writeFile()
     }
 
+    /**
+     * Writes the file. Any failure of the write (an IOException or a RuntimeException from the atomic writer) is warned and
+     * leaves the order marked dirty, so the next write retries it, like upstream's #save (src/ports.js lines 58-66); only a
+     * cancellation propagates.
+     */
     private suspend fun writeFile() {
         // Several speakers come up at once; writes share one temp file, so run them one at a time.
         // The snapshot is taken inside the mutex, so the last writer always writes every entry.
@@ -198,9 +205,11 @@ class PortRegistry(
             try {
                 withContext(Dispatchers.IO) {
                     val json = JsonObject(snapshot.mapValues { JsonPrimitive(it.value) })
-                    writeTextAtomic(file, prettyJson.encodeToString(JsonObject.serializer(), json), AtomicWriteOptions.RENDERER)
+                    writeText(file, prettyJson.encodeToString(JsonObject.serializer(), json))
                 }
-            } catch (e: IOException) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 synchronized(lock) { orderDirty = true }
                 warn("Could not save $file: ${e.message}")
             }

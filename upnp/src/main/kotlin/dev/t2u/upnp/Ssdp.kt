@@ -18,6 +18,15 @@ import java.util.concurrent.CopyOnWriteArrayList
 /** The device type the app searches for (index.js RENDERER_ST). */
 const val RENDERER_ST = "urn:schemas-upnp-org:device:MediaRenderer:1"
 
+/** First back-off after a failed receive; doubles per failure of a run up to [MAX_RECEIVE_BACKOFF_MS]. */
+internal const val RECEIVE_BACKOFF_MS = 50L
+
+/** No sleep in the receive loop is longer than this, so stop()'s 3 s join always covers a back-off. */
+internal const val MAX_RECEIVE_BACKOFF_MS = 1000L
+
+/** Consecutive receive failures after which a search socket gives up (about 15 s at the full back-off). */
+internal const val MAX_RECEIVE_FAILURES = 20
+
 private val UDN_RE = Regex("uuid:([^:]+)", RegexOption.IGNORE_CASE)
 private val MAX_AGE_RE = Regex("max-age\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
@@ -51,10 +60,20 @@ interface SsdpClientEvents {
     fun onError(where: String, t: Throwable) {}
 }
 
+/**
+ * The SSDP search client. A receive error that is not a timeout does not end the search: the loop waits a short
+ * back-off and listens again, and reports only the first failure of a run (ssdp.js line 80 only logs it and keeps its socket).
+ */
 class Ssdp(
     private val searchBinds: List<InetAddress>,
     private val events: SsdpClientEvents,
     private val searchTarget: InetSocketAddress = InetSocketAddress(SsdpConstants.GROUP, SsdpConstants.PORT),
+    /** Test seam: builds the search socket for one bind address. */
+    internal val socketFactory: (InetAddress) -> MulticastSocket = { MulticastSocket(InetSocketAddress(it, 0)) },
+    /** First wait after a receive failure, in ms; doubled per failure of the run, never above [MAX_RECEIVE_BACKOFF_MS]. */
+    internal val receiveBackoffMs: Long = RECEIVE_BACKOFF_MS,
+    /** Failures in a row after which the loop closes its socket, reports it and ends. */
+    internal val maxReceiveFailures: Int = MAX_RECEIVE_FAILURES,
 ) {
     private class SearchSocket(val bind: InetAddress, val socket: MulticastSocket) {
         lateinit var thread: Thread
@@ -70,7 +89,7 @@ class Ssdp(
         running = true
         for (bind in searchBinds) {
             try {
-                val sock = MulticastSocket(InetSocketAddress(bind, 0))
+                val sock = socketFactory(bind)
                 sock.setupOrClose {
                     timeToLive = 4
                     soTimeout = 1000
@@ -90,10 +109,14 @@ class Ssdp(
     }
 
     /**
-     * True while the client is started and at least one search socket is open. [start] reports a failed bind through
-     * `onError` and does not throw, so a client whose every bind failed is running but deaf: this tells them apart.
+     * True while the client is started and at least one search socket is open and its receive thread is alive (or not
+     * started yet: [start] adds the socket before it starts the thread). [start] reports a failed bind through
+     * `onError` and does not throw, so a client whose every bind failed is running but deaf; a client whose receive
+     * thread gave up is deaf too: this tells them apart from a working one.
      */
-    fun isBound(): Boolean = running && sockets.any { !it.socket.isClosed }
+    fun isBound(): Boolean = running && sockets.any {
+        !it.socket.isClosed && (it.thread.isAlive || it.thread.state == Thread.State.NEW)
+    }
 
     /** Sends an M-SEARCH from every search socket. A loopback socket never sends to a multicast target (JVM tests). */
     fun search(st: String, mx: Int = 3) {
@@ -152,15 +175,34 @@ class Ssdp(
 
     private fun receiveLoop(s: SearchSocket) {
         val buf = ByteArray(8192)
+        var failures = 0
         while (running && !s.socket.isClosed) {
             val packet = DatagramPacket(buf, buf.size)
             try {
                 s.socket.receive(packet)
+                failures = 0
             } catch (_: SocketTimeoutException) {
+                failures = 0
                 continue
             } catch (t: Throwable) {
-                if (running && !s.socket.isClosed) events.onError("receive:${s.bind.hostAddress}", t)
-                break
+                // a stop is in progress: leave without a report
+                if (!running || s.socket.isClosed) break
+                failures++
+                // one report per run of failures, so a flapping socket cannot flood the event log
+                if (failures == 1) events.onError("receive:${s.bind.hostAddress}", t)
+                if (failures >= maxReceiveFailures) {
+                    // a socket that never recovers ends visibly: the thread ends, isBound() turns false and the
+                    // housekeeping pass rebuilds the client (BridgeRepair.repairClient)
+                    runCatching { s.socket.close() }
+                    events.onError("receive-gave-up:${s.bind.hostAddress}", t)
+                    break
+                }
+                try {
+                    Thread.sleep(backoffFor(failures))
+                } catch (_: InterruptedException) {
+                    break
+                }
+                continue
             }
             try {
                 val src = InetSocketAddress(packet.address, packet.port)
@@ -172,5 +214,12 @@ class Ssdp(
                 events.onError("handle:${s.bind.hostAddress}", t)
             }
         }
+    }
+
+    /** [receiveBackoffMs] doubled per failure of the run, never above [MAX_RECEIVE_BACKOFF_MS]. */
+    private fun backoffFor(failures: Int): Long {
+        var wait = receiveBackoffMs.coerceAtLeast(1)
+        repeat(failures - 1) { if (wait < MAX_RECEIVE_BACKOFF_MS) wait *= 2 }
+        return wait.coerceAtMost(MAX_RECEIVE_BACKOFF_MS)
     }
 }

@@ -59,6 +59,13 @@ fun confirmText(casting: Int, clearOnCastEnd: Boolean): String {
  */
 fun shouldStartService(enabled: Boolean, exempt: Boolean, running: Boolean): Boolean = enabled && exempt && !running
 
+/**
+ * The one rule every start path uses (service bootstrap, boot, app open, Wi-Fi back, the deferred start, the daily yt-dlp
+ * job). The saved switch ([bridgeEnabled]) stays on during a restart or update; the [maintenance] marker holds the bridge off
+ * meanwhile, so a process killed in the middle leaves the switch on.
+ */
+fun startWanted(bridgeEnabled: Boolean, maintenance: Boolean): Boolean = bridgeEnabled && !maintenance
+
 /** What a start path does: start the service, wait for Wi-Fi, or nothing. */
 enum class StartDecision { START, WAIT_FOR_WIFI, NONE }
 
@@ -80,18 +87,23 @@ enum class RestartStep { RESTART_NOW, CONFIRM_FIRST }
 fun restartStep(casting: Int): RestartStep = if (casting > 0) RestartStep.CONFIRM_FIRST else RestartStep.RESTART_NOW
 
 /**
- * Off, wait for the service to be gone, then on. Switching on is guaranteed: it runs when the wait timed out and also when
- * the caller is cancelled during the wait (the screen closed mid-restart), under [NonCancellable], so a restart never leaves
- * the bridge off by its own doing. Returns whether the old service stopped in time; a cancellation during the
- * wait is rethrown after the switch-on.
+ * Stop, wait for the service to be gone, then resume. The saved switch is never written: [stop] begins the maintenance marker
+ * and stops the service, [resume] ends it and makes the start decision again. The resume runs in every case: when the wait
+ * timed out and also when the caller is cancelled during the wait (the screen closed mid-restart), under [NonCancellable], so
+ * a restart never leaves the bridge off by its own doing. Returns whether the old service stopped in time; a cancellation
+ * during the wait is rethrown after the resume.
  */
-suspend fun restartSequence(setEnabled: (Boolean) -> Unit, awaitStopped: suspend () -> Boolean): Boolean {
-    setEnabled(false)
+suspend fun restartSequence(
+    stop: suspend () -> Unit,
+    awaitStopped: suspend () -> Boolean,
+    resume: suspend () -> Unit,
+): Boolean {
+    stop()
     var stopped = false
     try {
         stopped = awaitStopped()
     } finally {
-        withContext(NonCancellable) { setEnabled(true) }
+        withContext(NonCancellable) { resume() }
     }
     return stopped
 }
@@ -107,6 +119,38 @@ class SingleFlight<T> {
     fun launch(scope: CoroutineScope, block: suspend () -> T): Deferred<T> = synchronized(this) {
         current?.takeIf { it.isActive }
             ?: scope.async { block() }.also { current = it }
+    }
+
+    /** Whether a flight is running now. */
+    val active: Boolean get() = synchronized(this) { current?.isActive == true }
+}
+
+/**
+ * One stop-work-resume flight at a time on [scope], for work that cannot run while the bridge does (the yt-dlp update).
+ *
+ * A caller that finds a flight running joins it and returns that flight's result: its own block is not run (there is one
+ * production caller with one result type, so the joiner's value type is the first caller's) and the bridge is stopped once.
+ * When the first flight's bridge did not stop in time, every caller gets IllegalStateException("the bridge did not stop");
+ * when its block throws, every caller gets that exception. The bridge resumes in every case (see [restartSequence]).
+ */
+class StoppedWork(private val scope: CoroutineScope) {
+    private val flight = SingleFlight<Result<Any?>>()
+
+    /** A flight is running now. */
+    val active: Boolean get() = flight.active
+
+    /**
+     * [around] stops the bridge, calls its body only when the bridge stopped, resumes it, and returns whether it stopped.
+     * [block] is the work, run as that body.
+     */
+    suspend fun <T> run(around: suspend (body: suspend () -> Unit) -> Boolean, block: suspend () -> T): T {
+        val result = flight.launch(scope) {
+            var outcome: Result<Any?>? = null
+            around { outcome = runCatching { block() } }
+            outcome ?: Result.failure(IllegalStateException("the bridge did not stop"))
+        }.await()
+        @Suppress("UNCHECKED_CAST")
+        return (result as Result<T>).getOrThrow()
     }
 }
 

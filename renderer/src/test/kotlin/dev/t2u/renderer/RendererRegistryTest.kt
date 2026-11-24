@@ -180,9 +180,15 @@ class RendererRegistryTest {
         hidden: (String) -> Boolean = { false },
         maxRunning: Int = RendererRegistry.MAX_RUNNING,
         maxSaved: Int = PortRegistry.MAX_SAVED,
+        portWrite: ((File, String) -> Unit)? = null,
+        val portWarnings: MutableList<String> = CopyOnWriteArrayList(),
     ) {
         val events = Events()
-        val ports = PortRegistry(dataDir, 3000, maxSaved, clock = { now.get() }).load()
+        val ports = if (portWrite == null) {
+            PortRegistry(dataDir, 3000, maxSaved, clock = { now.get() }, warn = { portWarnings += it }).load()
+        } else {
+            PortRegistry(dataDir, 3000, maxSaved, clock = { now.get() }, writeText = portWrite, warn = { portWarnings += it }).load()
+        }
         val created = CopyOnWriteArrayList<FakeManagedRenderer>()
         val registry = RendererRegistry(
             Config(dataDir = dataDir),
@@ -227,6 +233,20 @@ class RendererRegistryTest {
                 mapOf("USN" to "uuid:$udn::$RENDERER_ST", "NTS" to "ssdp:byebye"),
                 InetSocketAddress(InetAddress.getByName(src), 1900),
             )
+    }
+
+    @Test
+    @DisplayName("a port write that throws leaves the new speaker registered")
+    fun aPortWriteThatThrowsLeavesTheNewSpeakerRegistered() = runBlocking {
+        val h = Harness(portWrite = { _, _ -> throw IllegalStateException("disk") })
+        h.alive()
+        val r = h.created.single()
+        assertEquals(1, h.registry.count.value)
+        assertEquals(listOf<ManagedRenderer>(r), h.registry.renderers())
+        assertEquals(0, r.destroyCalls.get())
+        assertEquals(1, h.events.named("added").size)
+        assertTrue(h.portWarnings.isNotEmpty())
+        assertEquals(mapOf("kitchen" to 3000), h.ports.saved())
     }
 
     @Test

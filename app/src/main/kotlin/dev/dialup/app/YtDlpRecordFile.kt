@@ -55,3 +55,16 @@ object YtDlpRecords {
         }
     }
 }
+
+/**
+ * A [YtDlpRecordStore] that asks [resolve] for the real one on its first load or save, not when it is built. The service builds
+ * the updater on its main thread, and [YtDlpRecords.of] looks up `filesDir` (a disk read); the updater loads and saves on its own
+ * coroutine, so the lookup moves there. [resolve] returns the one shared store, so every user still shares one monitor.
+ */
+class LazyYtDlpRecordStore(resolve: () -> YtDlpRecordStore) : YtDlpRecordStore {
+    private val store by lazy(resolve)
+
+    override fun load(): YtDlpRecord = store.load()
+
+    override fun save(record: YtDlpRecord) = store.save(record)
+}

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <application>
+    <!-- Debug builds only: StrictMode reports main-thread disk and network work; release has no Application class. -->
+    <application android:name=".DebugApplication">
 
         <!-- Debug builds only (CR-02). Exported so `adb shell am broadcast` can reach it, but guarded by DUMP, which
              only the adb shell holds (threat T-01-01). Never remove the permission; if the shell is refused, switch
