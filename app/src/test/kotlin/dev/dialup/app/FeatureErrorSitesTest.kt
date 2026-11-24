@@ -12,9 +12,7 @@ import kotlin.test.assertTrue
  */
 class FeatureErrorSitesTest {
     /** Files still to be routed; the plan ends with this empty. */
-    private val PENDING_FILES: Set<String> = setOf(
-        "BridgeService.kt", "CastFeature.kt",
-    )
+    private val PENDING_FILES: Set<String> = emptySet()
 
     private fun mainSources(): File {
         val candidates = listOf(File("src/main/kotlin"), File("app/src/main/kotlin"))
@@ -56,6 +54,11 @@ class FeatureErrorSitesTest {
         }
         assertTrue(sites > 0, "the sweep found no feature-error site, so it looks in the wrong place")
         assertEquals(emptyList(), offenders, "feature-error events built by hand (use featureErrorFields or featureErrorLine)")
+    }
+
+    @Test
+    fun theProcessedFilesAreTheOnlyExceptions() {
+        assertTrue(PENDING_FILES.isEmpty(), "PENDING_FILES must be empty: $PENDING_FILES")
     }
 
     @Test
