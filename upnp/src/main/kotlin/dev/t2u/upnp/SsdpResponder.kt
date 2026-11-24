@@ -213,7 +213,8 @@ class SsdpResponder(
     fun withdraw(uuid: String) {
         val device = devices[uuid] ?: return
         sendNotifies("ssdp:byebye", listOf(device))
-        devices.remove(uuid)
+        // only the device the byebye was sent for: a register of this uuid during the send must survive
+        devices.remove(uuid, device)
     }
 
     private fun sendNotifies(nts: String, targets: List<SsdpDevice>) {
