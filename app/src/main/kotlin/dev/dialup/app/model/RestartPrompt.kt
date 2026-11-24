@@ -2,6 +2,7 @@
 // Original Kotlin code for DialUP (Android port of Tube2U[PnP]).
 package dev.dialup.app.model
 
+import dev.dialup.app.Failures
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -16,6 +17,9 @@ const val RESTART_SOURCE = "restart"
 
 /** The source of a restart the app made on its own when it was opened (T-dcg-06): the event log tells it from the author's. */
 const val AUTO_RESTART_SOURCE = "auto-restart"
+
+/** The `where` a failed restart from the prompt is reported under. */
+private const val REPORT_WHERE = "restart-prompt"
 
 /** How long the info card after a name change stays. */
 const val NOTICE_MS = 10_000L
@@ -52,7 +56,9 @@ fun autoRestartOnOpen(running: RestartFields?, saved: RestartFields, switchedOn:
  * hides: the timer never runs [action]. Pressing Restart goes through [restartStep]: with nothing loading, playing or paused the
  * action runs at once, otherwise [confirmPending] asks first and [confirmRestart] runs it. The action runs once at a time, so a
  * double tap cannot restart twice.
- * The action gets the source of the restart ([RESTART_SOURCE], or [AUTO_RESTART_SOURCE] for [restartNow]).
+ * The action gets the source of the restart ([RESTART_SOURCE], or [AUTO_RESTART_SOURCE] for [restartNow]). A thrown exception
+ * and a false result (the old service did not stop in time) are each reported through [report] as `restart-prompt`; neither
+ * takes the screen down.
  *
  * Opening the app with a restart owed: [restartNow] runs the action at once, and [showUntilCastEnds]
  * keeps the card up with no timer until [onCastingChanged] says nothing is cast any more.
@@ -60,6 +66,7 @@ fun autoRestartOnOpen(running: RestartFields?, saved: RestartFields, switchedOn:
 class RestartPrompt(
     private val scope: CoroutineScope,
     private val visibleMs: Long = 6_000L,
+    private val report: (where: String, t: Throwable) -> Unit = { where, t -> Failures.report(where, t) },
     private val action: suspend (source: String) -> Boolean,
 ) {
     private val card = MutableStateFlow(false)
@@ -187,11 +194,12 @@ class RestartPrompt(
         names.value = false
         scope.launch {
             try {
-                action(source)
+                if (!action(source)) report(REPORT_WHERE, IllegalStateException("restart did not complete"))
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                // the bridge control reports its own failures; a failed restart must not take the screen down
+            } catch (e: Exception) {
+                // the bridge control does not report a restart that failed (it only returns false or throws), so it is reported here
+                report(REPORT_WHERE, e)
             } finally {
                 synchronized(this@RestartPrompt) { running = false }
             }
