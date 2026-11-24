@@ -535,4 +535,43 @@ class YouTubeCastReceiverTest {
         r.start()
         assertEquals(1, advertiser.advertised.size)
     }
+
+    /** A store whose mdxContext reads wait for [gate] while it is set (the lounge connect of a start). */
+    private class HangingConnectStore(private val inner: DataStore) : DataStore {
+        @Volatile var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val waiting = java.util.concurrent.atomic.AtomicInteger(0)
+
+        override suspend fun get(key: String): kotlinx.serialization.json.JsonElement? {
+            val g = gate
+            if (g != null && key.startsWith("mdxContext.")) {
+                waiting.incrementAndGet()
+                g.await()
+            }
+            return inner.get(key)
+        }
+
+        override suspend fun set(key: String, value: kotlinx.serialization.json.JsonElement?) = inner.set(key, value)
+    }
+
+    @Test
+    fun aReceiverStartCancelledDuringTheConnectLeavesTheAppStoppedAndTheNextStartWorks() = run<Unit> {
+        val hanging = HangingConnectStore(store)
+        hanging.gate = kotlinx.coroutines.CompletableDeferred()
+        val r = receiver(dataStore = hanging)
+
+        val job = scope.launch { r.start() }
+        awaitUntil { hanging.waiting.get() >= 2 }
+        job.cancel()
+        job.join()
+
+        assertEquals("stopped", r.status)
+        assertTrue(advertiser.advertised.isEmpty())
+
+        hanging.gate = null
+        r.start()
+        assertEquals("running", r.status)
+        // a start that was a no-op against an app stuck in STARTING would leave both sessions unbound
+        awaitUntil { fake.rpcOpen("cl") == 1 && fake.rpcOpen("m") == 1 }
+        assertEquals(1, advertiser.advertised.size)
+    }
 }

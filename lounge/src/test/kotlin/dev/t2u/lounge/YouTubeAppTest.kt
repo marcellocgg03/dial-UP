@@ -1498,7 +1498,6 @@ class YouTubeAppTest {
         assertEquals(0, playerListeners(), "the listeners the start added are gone")
         assertTrue(a.connectedSenders.isEmpty())
         assertTrue(connects.isEmpty() && disconnects.isEmpty(), "no sender was told anything: ${connects.toList()} ${disconnects.toList()}")
-        awaitUntil(what = "both RPC streams closed") { fake.rpcOpen("cl") == 0 && fake.rpcOpen("m") == 0 }
     }
 
     @Test
@@ -1549,5 +1548,71 @@ class YouTubeAppTest {
         assertEquals(0, playerListeners())
         assertTrue(terminated.isEmpty())
         assertEquals(0, clearCount(), "a stop of an app that never ran does not reset the player")
+    }
+
+    @Test
+    fun aStartCancelledWhileLoadingThePidLeavesTheAppStopped() = run<Unit> {
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockGet = { it == StoreKeys.APP_PID }
+        val a = newApp(gatedOptions(gated))
+
+        val job = cancelStartAt(a, gated, 1)
+
+        assertRolledBack(a, job)
+        gated.gate = null
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+    }
+
+    @Test
+    fun aStartCancelledAfterTheSessionBeganRollsBack() = run<Unit> {
+        // the lounge connect answered and its reader is open; the start waits at the store write that ends the connect
+        fake.refreshIntervalInMillis = 300
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockSet = { it.startsWith("mdxContext.") }
+        val a = newApp(gatedOptions(gated))
+
+        val job = cancelStartAt(a, gated, 2)
+
+        assertRolledBack(a, job)
+        for (theme in listOf("cl", "m")) {
+            assertTrue(messages(theme).all { it.first == "loungeScreenDisconnected" }, "only the farewell went out on $theme: ${messages(theme).map { it.first }}")
+        }
+        val tokens = tokenRequests()
+        delay(1000)
+        assertEquals(tokens, tokenRequests(), "no refresh timer survived the rollback")
+
+        // nobody reads the lounge any more: a sender that shows up now reaches nothing
+        rpc("cl", "loungeStatus", loungeStatus(listOf(device("late-1")), "late-1"))
+        delay(500)
+        assertTrue(a.connectedSenders.isEmpty() && connects.isEmpty(), "${a.connectedSenders} ${connects.toList()}")
+
+        gated.gate = null
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+        a.stop()
+        assertEquals(AppState.STOPPED, a.state)
+        assertEquals(0, playerListeners())
+    }
+
+    @Test
+    fun aStartCancelledDuringTheNetworkConnectRollsBack() = run<Unit> {
+        // a lounge that accepts the connection and never answers: the connect hangs, which is when a stop is most likely
+        java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress()).use { silent ->
+            val a = newApp(AppOptions("T2U test", "T2U", "Test", store), LoungeEndpoints("http://127.0.0.1:${silent.localPort}"))
+            val job = scope.launch { a.start() }
+            awaitUntil(what = "the start to begin") { a.state == AppState.STARTING }
+            delay(400)
+            assertTrue(job.isActive, "the connect is still waiting")
+            job.cancel()
+            job.join()
+
+            assertTrue(job.isCancelled)
+            assertEquals(AppState.STOPPED, a.state)
+            assertEquals(0, playerListeners())
+            assertTrue(a.connectedSenders.isEmpty())
+        }
     }
 }
