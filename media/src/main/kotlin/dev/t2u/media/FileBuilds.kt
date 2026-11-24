@@ -142,6 +142,9 @@ class FileBuilder(
     /** Pins [file] for as long as a response reads it; call the returned release when done (one-shot). */
     fun pin(file: File): () -> Unit = cache.pin(file)
 
+    /** Whether [file] is pinned now; for tests. */
+    internal fun isPinned(file: File): Boolean = cache.isPinned(file.name)
+
     fun sourcePin(videoId: String): () -> Unit = cache.pin(sourcePath(videoId))
 
     fun discardSourceWhenUnused(videoId: String) = cache.discardWhenUnused(sourcePath(videoId))
