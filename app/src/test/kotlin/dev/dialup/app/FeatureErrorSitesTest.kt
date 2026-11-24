@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
 class FeatureErrorSitesTest {
     /** Files still to be routed; the plan ends with this empty. */
     private val PENDING_FILES: Set<String> = setOf(
-        "ShareLogActivity.kt", "HeldLocks.kt", "CastNotifier.kt", "SpeakerStores.kt", "BridgeService.kt", "CastFeature.kt",
+        "BridgeService.kt", "CastFeature.kt",
     )
 
     private fun mainSources(): File {
@@ -56,5 +56,12 @@ class FeatureErrorSitesTest {
         }
         assertTrue(sites > 0, "the sweep found no feature-error site, so it looks in the wrong place")
         assertEquals(emptyList(), offenders, "feature-error events built by hand (use featureErrorFields or featureErrorLine)")
+    }
+
+    @Test
+    fun theNativePayloadsFailureMessageIsCapped() {
+        val text = File(mainSources(), "dev/dialup/app/NativePayloads.kt").readText()
+        assertTrue(!text.contains("\"message\" to t.message"), "NativePayloads writes the raw exception message")
+        assertTrue(text.contains("cappedMessage(t.message)"), "NativePayloads must cut its message with cappedMessage")
     }
 }
