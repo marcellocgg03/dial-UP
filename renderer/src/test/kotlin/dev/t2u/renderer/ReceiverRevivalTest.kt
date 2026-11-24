@@ -14,11 +14,15 @@ import dev.t2u.media.VideoResolver
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.FakeRenderer
 import dev.t2u.upnp.lanHttpClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -27,13 +31,20 @@ import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ReceiverRevivalTest {
     /** A receiver that remembers the callback its owner registered and whether it was started. */
-    private class RecordingReceiver(val options: ReceiverOptions, private val failStart: Boolean) : CastReceiver {
+    private class RecordingReceiver(
+        val options: ReceiverOptions,
+        private val failStart: Boolean,
+        /** When set, [start] tells [entered] and then waits for this before it returns. */
+        private val hold: CompletableDeferred<Unit>? = null,
+        private val entered: CompletableDeferred<Unit>? = null,
+    ) : CastReceiver {
         @Volatile override var status: String = "stopped"
         @Volatile var terminate: ((Throwable) -> Unit)? = null
         @Volatile var autoplay: Boolean? = null
@@ -41,6 +52,8 @@ class ReceiverRevivalTest {
         @Volatile var stopped = false
 
         override suspend fun start() {
+            entered?.complete(Unit)
+            hold?.await()
             if (failStart) throw IOException("dial port busy")
             started = true
             status = "running"
@@ -70,6 +83,10 @@ class ReceiverRevivalTest {
 
         /** Whether the next receivers created fail to start. */
         @Volatile var failStart = false
+
+        /** When set, the next receiver created waits in start() for [startHold]; [startEntered] says it got there. */
+        @Volatile var startHold: CompletableDeferred<Unit>? = null
+        @Volatile var startEntered: CompletableDeferred<Unit>? = null
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         private val resolver = object : VideoResolver {
@@ -92,7 +109,7 @@ class ReceiverRevivalTest {
                 media = media,
                 http = lanHttpClient(),
                 createReceiver = ReceiverFactory { _, options ->
-                    RecordingReceiver(options, failStart).also { receivers.add(it) }
+                    RecordingReceiver(options, failStart, startHold, startEntered).also { receivers.add(it) }
                 },
                 scope = scope,
                 events = EventSink { kind, fields -> events.add(kind to fields) },
@@ -202,6 +219,41 @@ class ReceiverRevivalTest {
         first.terminate!!(IOException("late"))
         assertNull(rig.renderer.reviveIfDue(t + 3_600_000))
         assertEquals(1, rig.receivers.size)
+    }
+
+    @Test
+    @DisplayName("a revive racing destroy leaves the renderer destroyed and nothing revived running")
+    fun aReviveRacingDestroyLeavesTheRendererDestroyed() = withRig { rig ->
+        assertTrue(rig.renderer.init())
+        val t = rig.now.get()
+        rig.receivers.single().terminate!!(IOException("lounge down"))
+        val hold = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        rig.startHold = hold
+        rig.startEntered = entered
+        val calls = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            // the revive is inside its lock, its new receiver half started
+            val revive = calls.async { rig.renderer.reviveIfDue(t + 10_000) }
+            withTimeout(5_000) { entered.await() }
+            val destroy = calls.async { rig.renderer.destroy() }
+            delay(300)
+            assertFalse(destroy.isCompleted, "destroy waits for the revive that is starting a receiver")
+
+            hold.complete(Unit)
+            withTimeout(5_000) {
+                revive.await()
+                destroy.await()
+            }
+            val revived = rig.receivers[1]
+            assertEquals("stopped", revived.status, "the receiver the revive started does not outlive the destroy")
+            assertTrue(revived.stopped)
+            assertNull(rig.renderer.reviveIfDue(t + 3_600_000))
+            assertEquals(2, rig.receivers.size, "nothing new after the destroy")
+        } finally {
+            hold.complete(Unit)
+            calls.cancel()
+        }
     }
 
     @Test

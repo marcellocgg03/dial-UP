@@ -62,7 +62,7 @@ internal class HeldLocks(
         try {
             if (lock.isHeld) lock.release()
         } catch (t: Throwable) {
-            event("feature-error", mapOf("where" to "release:${lock.name}", "error" to t.javaClass.name, "message" to t.message))
+            event("feature-error", featureErrorFields("release:${lock.name}", t))
         }
         event("lock", mapOf("name" to lock.name, "isHeld" to lock.isHeld, "reason" to reason))
     }

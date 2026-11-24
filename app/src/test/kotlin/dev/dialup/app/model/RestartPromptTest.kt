@@ -206,4 +206,51 @@ class RestartPromptTest {
         runCurrent()
         assertEquals(listOf("auto-restart", "restart"), sources)
     }
+
+    @Test
+    fun `aThrowingRestartIsReported`() = runTest {
+        val reports = mutableListOf<Pair<String, Throwable>>()
+        var runs = 0
+        val prompt = RestartPrompt(backgroundScope, report = { where, t -> reports.add(where to t) }) {
+            runs++
+            throw IllegalStateException("x")
+        }
+
+        prompt.requestRestart(casting = 0)
+        runCurrent()
+        assertEquals(1, reports.size)
+        assertEquals("restart-prompt", reports[0].first)
+        assertEquals(IllegalStateException::class, reports[0].second::class)
+
+        prompt.requestRestart(casting = 0)
+        runCurrent()
+        assertEquals(2, runs, "running was reset, so the next restart runs")
+    }
+
+    @Test
+    fun `aRestartThatReturnsFalseIsReported`() = runTest {
+        val reports = mutableListOf<Pair<String, Throwable>>()
+        val prompt = RestartPrompt(backgroundScope, report = { where, t -> reports.add(where to t) }) { false }
+
+        prompt.requestRestart(casting = 0)
+        runCurrent()
+        assertEquals(1, reports.size)
+        assertEquals("restart-prompt", reports[0].first)
+    }
+
+    @Test
+    fun `a successful or a cancelled restart reports nothing`() = runTest {
+        val reports = mutableListOf<Pair<String, Throwable>>()
+        val ok = RestartPrompt(backgroundScope, report = { where, t -> reports.add(where to t) }) { true }
+        ok.requestRestart(casting = 0)
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Job())
+        val cancelled = RestartPrompt(scope, report = { where, t -> reports.add(where to t) }) { gate.await(); true }
+        cancelled.requestRestart(casting = 0)
+        runCurrent()
+        scope.coroutineContext[kotlinx.coroutines.Job]!!.cancel()
+        runCurrent()
+        assertEquals(emptyList(), reports)
+    }
 }

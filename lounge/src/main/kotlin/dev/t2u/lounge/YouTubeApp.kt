@@ -164,7 +164,11 @@ class YouTubeApp(
         synchronized(networkRecoveryLock) { networkSenders = networkSenders - id }
     }
 
-    /** Restores or creates the pid, then begins both sessions at once. On failure both are ended and the error is rethrown. */
+    /**
+     * Restores or creates the pid, then begins both sessions at once. On failure both are ended and the error is rethrown.
+     * A start cancelled while it waits (the lounge connect hangs and a stop or a Wi-Fi rebind cancels it) is rolled back the
+     * same way and the cancellation is rethrown, so the app is STOPPED and startable again (P16-10).
+     */
     suspend fun start() {
         if (state != AppState.STOPPED) return
         stopClaimed.set(false)
@@ -174,43 +178,60 @@ class YouTubeApp(
         state = AppState.STARTING
         player.addStateListener(stateListener)
         player.addFailureListener(failureListener)
-        val failures = coroutineScope {
-            sessions.values.map { session ->
-                session.onMessages = { batch, from -> handleBatch(batch, from) }
-                session.onTerminate = { error -> terminate(error) }
-                async {
-                    try {
-                        session.begin()
-                        null
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        e
+        val failures = try {
+            coroutineScope {
+                sessions.values.map { session ->
+                    session.onMessages = { batch, from -> handleBatch(batch, from) }
+                    session.onTerminate = { error -> terminate(error) }
+                    async {
+                        try {
+                            session.begin()
+                            null
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            e
+                        }
                     }
-                }
-            }.awaitAll()
+                }.awaitAll()
+            }
+        } catch (e: CancellationException) {
+            rollBackStart()
+            throw e
         }
         val failure = failures.firstOrNull { it != null }
         if (failure != null) {
-            player.removeStateListener(stateListener)
-            player.removeFailureListener(failureListener)
-            withContext(NonCancellable) {
-                for (session in sessions.values) {
-                    session.onMessages = { _, _ -> }
-                    session.onTerminate = {}
-                    try {
-                        session.end()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // already failing
-                    }
-                }
-            }
-            state = AppState.STOPPED
+            rollBackStart()
             throw AppException("Failed to start YouTubeApp", failure)
         }
         state = AppState.RUNNING
+    }
+
+    /**
+     * Undoes what [start] added, whether it failed or was cancelled: the player listeners go, each session is ended (its
+     * timer and RPC stream stop; the farewell is the same one [stop] sends, and no sender is told anything because none
+     * was reported as connected yet), the senders a session took over are forgotten, and the state is STOPPED. Runs under
+     * NonCancellable, takes no lock, and a step that throws is noted by class and does not stop the rest.
+     */
+    private suspend fun rollBackStart() {
+        withContext(NonCancellable) {
+            player.removeStateListener(stateListener)
+            player.removeFailureListener(failureListener)
+            for (session in sessions.values) {
+                session.onMessages = { _, _ -> }
+                session.onTerminate = {}
+                try {
+                    session.end()
+                } catch (e: Exception) {
+                    problem("startRollback", e)
+                }
+            }
+            connected.clear()
+            implicitlyDisconnected.clear()
+            activeSession = null
+            lastNav = null
+            state = AppState.STOPPED
+        }
     }
 
     /**

@@ -192,6 +192,33 @@ class MediaServerPipeTest {
     }
 
     @Test
+    fun aStopEndsTheBufferedHttp10WaitPromptly() {
+        val endless = listOf("-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "sine=frequency=440:duration=600", "-vn")
+        val path = register("mp3", "audio/mpeg", endless)
+        Socket("127.0.0.1", server.resolvedPort()).use { s ->
+            s.soTimeout = 20_000
+            s.getOutputStream().apply {
+                write(RawHttp.requestBytes("GET", path, "HTTP/1.0", emptyMap()))
+                flush()
+            }
+            val started = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (launcher.inner.liveCount() == 0 && System.nanoTime() < started) Thread.sleep(20)
+            assertEquals(1, launcher.inner.liveCount(), "ffmpeg should run while the buffered request waits")
+            assertEquals(1, server.ffmpegInUse(), "the request holds the ffmpeg permit")
+            server.stop()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while ((launcher.inner.liveCount() > 0 || server.ffmpegInUse() > 0 || bufferDir.list().orEmpty().isNotEmpty()) &&
+                System.nanoTime() < deadline
+            ) {
+                Thread.sleep(50)
+            }
+            assertEquals(0, launcher.inner.liveCount(), "ffmpeg survived the stop")
+            assertEquals(0, server.ffmpegInUse(), "the permit was not released")
+            assertEquals(emptyList(), bufferDir.list().orEmpty().toList(), "the temp file was not deleted")
+        }
+    }
+
+    @Test
     fun anHttp10ClientCanUseRangeOnTheBufferedFile() {
         val path = register("mp3", "audio/mpeg")
         val r = req("GET", path, headers = mapOf("Range" to "bytes=0-99"), version = "HTTP/1.0")

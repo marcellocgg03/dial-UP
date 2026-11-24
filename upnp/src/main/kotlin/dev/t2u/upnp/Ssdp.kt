@@ -33,9 +33,18 @@ private val MAX_AGE_RE = Regex("max-age\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE
 /** "uuid:abcd::urn:..." gives "abcd" (lower case), null when there is no uuid. */
 fun udnFromUsn(usn: String?): String? = UDN_RE.find(usn.orEmpty())?.groupValues?.get(1)?.lowercase()
 
-/** "max-age=1800, no-cache" gives 1800; [def] when absent or not a number. */
-fun maxAge(cacheControl: String?, def: Int): Int =
-    MAX_AGE_RE.find(cacheControl.orEmpty())?.groupValues?.get(1)?.toIntOrNull() ?: def
+/** The longest max-age a speaker may announce: one day. A larger number, however large, counts as this. */
+const val MAX_SSDP_MAX_AGE_S = 86_400
+
+/**
+ * "max-age=1800, no-cache" gives 1800; [def] when absent or not a number. A number above [MAX_SSDP_MAX_AGE_S] (including one
+ * too long for a Long) gives [MAX_SSDP_MAX_AGE_S], so a LAN host cannot hold a UDN for years.
+ */
+fun maxAge(cacheControl: String?, def: Int): Int {
+    val digits = MAX_AGE_RE.find(cacheControl.orEmpty())?.groupValues?.get(1) ?: return def
+    val seconds = digits.toLongOrNull() ?: return MAX_SSDP_MAX_AGE_S
+    return seconds.coerceAtMost(MAX_SSDP_MAX_AGE_S.toLong()).toInt()
+}
 
 /** The ssdp.js M-SEARCH text, CRLF line ends and a blank line at the end. */
 fun buildSearch(st: String, mx: Int = 3): ByteArray =

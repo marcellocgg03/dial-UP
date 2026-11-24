@@ -565,4 +565,25 @@ class FileCacheTest {
         migrateCacheDir(old2, new2)
         assertEquals(listOf("good.m4a"), File(new2, ".uncached").readLines())
     }
+
+    @Test
+    fun aReleaseThatHitsAnIoErrorDoesNotThrow() {
+        val src = File(dir, "$idA.source")
+        val part = put("$idA.source.download", 10, 1_000)
+        assertFalse(cache.publish(part, src, eligible = false))
+        assertTrue(cache.isTransient(src))
+        // a non-empty directory under the name: deleting the transient file when the pin drops throws an IOException
+        assertTrue(src.delete())
+        assertTrue(src.mkdirs())
+        File(src, "child").writeText("x")
+        val release = cache.pin(src)
+        cache.discardWhenUnused(src)
+        assertTrue(cache.isPinned(src.name))
+        release()
+        assertFalse(cache.isPinned(src.name), "the pin count dropped")
+        val logged = events.filter { it["event"] == "cache-unpin-failed" }
+        assertEquals(1, logged.size, events.toString())
+        assertEquals("DirectoryNotEmptyException", logged.single()["error"])
+        assertFalse(logged.single().toString().contains(root.name), "no path in the log: ${logged.single()}")
+    }
 }

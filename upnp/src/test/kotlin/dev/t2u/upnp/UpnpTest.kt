@@ -236,6 +236,58 @@ class UpnpTest {
     }
 
     @Test
+    fun `everyDescriptionTextFieldIsCleaned`() {
+        val longAvt = "<service><serviceType>urn:schemas-upnp-org:service:AVTransport:1\u0007" + "s".repeat(300) +
+            "</serviceType><serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>" +
+            "<SCPDURL>/scpd/a.xml</SCPDURL><controlURL>/ctl/a</controlURL><eventSubURL>/evt/a</eventSubURL></service>"
+        val xml = root(
+            "<device><deviceType>$mr\u0007</deviceType><friendlyName>R</friendlyName><UDN>uuid:R</UDN>" +
+                "<manufacturer>Acme\n\u0001Corp" + "m".repeat(300) + "</manufacturer>" +
+                "<modelName>Mod\u0002el</modelName><modelNumber>No\u00031</modelNumber>" +
+                "<serviceList>$longAvt</serviceList></device>",
+        )
+        val d = parseDescription(xml, "http://10.0.0.2/d.xml")
+        val svc = d.services.getValue("urn:upnp-org:serviceId:AVTransport")
+        val fields = mapOf(
+            "manufacturer" to d.manufacturer,
+            "modelName" to d.modelName,
+            "modelNumber" to d.modelNumber,
+            "deviceType" to d.deviceType,
+            "serviceType" to svc.serviceType,
+        )
+        for ((name, value) in fields) {
+            assertTrue(value.none { Character.isISOControl(it) }, "$name has a control character")
+            assertTrue(value.length <= 200, "$name has ${value.length} characters")
+        }
+        assertEquals(mr, d.deviceType)
+        assertEquals("Mod el", d.modelName)
+        assertEquals("No 1", d.modelNumber)
+        assertTrue(d.manufacturer.startsWith("Acme"), d.manufacturer)
+    }
+
+    @Test
+    fun `aFieldThatCleansToEmptyIsEmpty`() {
+        val xml = root(
+            "<device><deviceType>$mr</deviceType><friendlyName>R</friendlyName><UDN>uuid:R</UDN>" +
+                "<manufacturer>\u0001\u0002\u0007</manufacturer><modelName>\u0003</modelName></device>",
+        )
+        val d = parseDescription(xml, "http://10.0.0.2/d.xml")
+        assertEquals("", d.manufacturer)
+        assertEquals("", d.modelName)
+    }
+
+    @Test
+    fun `didlHmsIgnoresTheDefaultLocale`() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("th-TH-u-nu-thai"))
+            assertEquals("1:02:05", didlHms(3725.0))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
     fun `a failed description fetch names the LOCATION in at most 200 characters`() = runBlocking {
         FakeRenderer().use { fake ->
             fake.start()

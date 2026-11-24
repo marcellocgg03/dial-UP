@@ -90,7 +90,7 @@ object NativePayloads {
                     "ok" to false,
                     "ms" to SystemClock.elapsedRealtime() - t0,
                     "error" to t.javaClass.name,
-                    "message" to t.message,
+                    "message" to cappedMessage(t.message),
                 ),
             )
             throw t

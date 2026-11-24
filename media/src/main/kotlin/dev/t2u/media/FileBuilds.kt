@@ -142,6 +142,9 @@ class FileBuilder(
     /** Pins [file] for as long as a response reads it; call the returned release when done (one-shot). */
     fun pin(file: File): () -> Unit = cache.pin(file)
 
+    /** Whether [file] is pinned now; for tests. */
+    internal fun isPinned(file: File): Boolean = cache.isPinned(file.name)
+
     fun sourcePin(videoId: String): () -> Unit = cache.pin(sourcePath(videoId))
 
     fun discardSourceWhenUnused(videoId: String) = cache.discardWhenUnused(sourcePath(videoId))
@@ -208,12 +211,22 @@ class FileBuilder(
             throw e
         } finally {
             proc?.let { p -> withContext(NonCancellable + Dispatchers.IO) { if (p.isAlive) p.destroyForcibly() } }
-            if (!sourceReleased) {
-                cache.discardWhenUnused(src)
-                unpinSrc()
+            // separate try/finally: whatever the source release does, the final file's pin is released
+            try {
+                if (!sourceReleased) {
+                    try {
+                        cache.discardWhenUnused(src)
+                    } finally {
+                        unpinSrc()
+                    }
+                }
+            } finally {
+                try {
+                    unpinFinal()
+                } finally {
+                    cache.forgetDiscardIfMissing(final)
+                }
             }
-            unpinFinal()
-            cache.forgetDiscardIfMissing(final)
         }
         emit("built", videoId, format, startAt)
         return final

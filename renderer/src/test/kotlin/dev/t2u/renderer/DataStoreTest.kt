@@ -97,6 +97,28 @@ class DataStoreTest {
     }
 
     @Test
+    fun aUdnNamedLikeADataFileGetsItsOwnStoreDir() {
+        for (id in listOf("ports.json", "hidden.json", "manual.json", "names.json", "pinned.json", "speaker.json", "PORTS.JSON", "ports.json.tmp")) {
+            val name = storeDirName(id)
+            assertTrue(name.contains('~'), "a data file name gets the altered form: $name")
+            assertNotEquals(id, name)
+        }
+        val sonos = legacyStoreDirName("uuid:RINCON_000E58A0B1C2_MR")
+        assertEquals(sonos, storeDirName(sonos), "a sanitised Sonos id keeps its exact name")
+    }
+
+    @Test
+    fun aStoreForADataFileUdnLeavesThatFileAlone() = runBlocking {
+        val base = tempDir()
+        val ports = File(base, "ports.json")
+        ports.writeText("{\"uuid:RINCON_A\":8100}")
+        RendererDataStore(base, "ports.json").set("dial.uuid", JsonPrimitive("u1"))
+        assertTrue(ports.isFile, "ports.json is still a file")
+        assertEquals("{\"uuid:RINCON_A\":8100}", ports.readText())
+        assertEquals(JsonPrimitive("u1"), RendererDataStore(base, "ports.json").get("dial.uuid"))
+    }
+
+    @Test
     fun anAlteredIdNameIsStableAndCarriesAHash() {
         val name = storeDirName("speaker/1")
         assertTrue(Regex("^speaker_1~[0-9a-f]{16}$").matches(name), name)

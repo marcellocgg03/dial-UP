@@ -384,10 +384,21 @@ class RendererRegistry(
                     if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
                 }
             } else {
-                ports.release(port)
+                // A renderer whose init said no still holds its scope (and, when it was destroyed mid-start, a receiver).
+                var destroyFailure: String? = null
+                withContext(NonCancellable) {
+                    try {
+                        renderer.destroy()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        destroyFailure = e.javaClass.simpleName
+                    }
+                    ports.release(port)
+                }
                 holdsPort = false
                 lock.withLock { putSkip(udn, Skip(location, clock() + RETRY_FAILED_MS)) }
-                log("skipped", udn, renderer.name, location, reason = "not a usable renderer")
+                log("skipped", udn, renderer.name, location, reason = "not a usable renderer" + (destroyFailure?.let { " (destroy failed: $it)" } ?: ""))
                 if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
             }
         } catch (e: Exception) {

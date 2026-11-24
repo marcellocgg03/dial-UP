@@ -13,9 +13,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -1427,5 +1429,190 @@ class YouTubeAppTest {
         assertEquals(listOf("music-1", "app-3"), a.connectedSenders.map { it.id })
         assertTrue(disconnects.isEmpty(), "${disconnects.toList()}")
         assertEquals(Client.YT, a.activeClient)
+    }
+
+    // ---- a cancelled start rolls back (P16-10, D-05)
+
+    /** A store whose reads or writes of chosen keys wait for [gate]; [blocked] counts the calls that are waiting. */
+    private class GateStore(private val inner: MemoryDataStore) : DataStore {
+        @Volatile var gate: CompletableDeferred<Unit>? = null
+        @Volatile var blockGet: (String) -> Boolean = { false }
+        @Volatile var blockSet: (String) -> Boolean = { false }
+        val blocked = AtomicInteger(0)
+
+        override suspend fun get(key: String): JsonElement? {
+            val g = gate
+            if (g != null && blockGet(key)) {
+                blocked.incrementAndGet()
+                g.await()
+            }
+            return inner.get(key)
+        }
+
+        override suspend fun set(key: String, value: JsonElement?) {
+            val g = gate
+            if (g != null && blockSet(key)) {
+                blocked.incrementAndGet()
+                g.await()
+            }
+            inner.set(key, value)
+        }
+    }
+
+    private fun gatedOptions(gated: GateStore) = AppOptions("T2U test", "T2U", "Test", gated)
+
+    private fun newApp(
+        options: AppOptions,
+        endpoints: LoungeEndpoints = fake.endpoints,
+    ): YouTubeApp {
+        val a = YouTubeApp(player, options, lanHttpClient(), endpoints, sink, scope)
+        a.onSenderConnect = { connects.add(it.id) }
+        a.onSenderDisconnect = { s, implicit -> disconnects.add(s.id to implicit) }
+        apps.add(a)
+        return a
+    }
+
+    private fun playerListeners(): Int {
+        fun size(name: String): Int {
+            val f = Player::class.java.getDeclaredField(name)
+            f.isAccessible = true
+            return (f.get(player) as List<*>).size
+        }
+        return size("listeners") + size("failureListeners")
+    }
+
+    private fun tokenRequests() = fake.requests.count { it.path.endsWith("get_lounge_token_batch") }
+
+    /** Starts [a] in its own job, waits until [blockedCalls] of the gate's calls are waiting, cancels the job and joins it. */
+    private suspend fun cancelStartAt(a: YouTubeApp, gated: GateStore, blockedCalls: Int): kotlinx.coroutines.Job {
+        val job = scope.launch { a.start() }
+        awaitUntil(what = "the start to wait at the gate") { gated.blocked.get() >= blockedCalls }
+        job.cancel()
+        job.join()
+        return job
+    }
+
+    private suspend fun assertRolledBack(a: YouTubeApp, job: kotlinx.coroutines.Job) {
+        assertTrue(job.isCancelled, "the start ends as cancelled")
+        assertEquals(AppState.STOPPED, a.state)
+        assertEquals(0, playerListeners(), "the listeners the start added are gone")
+        assertTrue(a.connectedSenders.isEmpty())
+        assertTrue(connects.isEmpty() && disconnects.isEmpty(), "no sender was told anything: ${connects.toList()} ${disconnects.toList()}")
+    }
+
+    @Test
+    fun aCancelledStartRollsBack() = run<Unit> {
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockGet = { it.startsWith("mdxContext.") }
+        val a = newApp(gatedOptions(gated))
+
+        val job = cancelStartAt(a, gated, 2)
+
+        assertRolledBack(a, job)
+        assertTrue(fake.sent.values.all { it.isEmpty() }, "nothing reached the lounge: ${fake.sent}")
+    }
+
+    @Test
+    fun aStartAfterACancelledStartRuns() = run<Unit> {
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockGet = { it.startsWith("mdxContext.") }
+        val a = newApp(gatedOptions(gated))
+        cancelStartAt(a, gated, 2)
+
+        gated.gate = null
+        a.start()
+
+        assertEquals(AppState.RUNNING, a.state, "the second start is not a no-op")
+        assertEquals(2, playerListeners(), "one state and one failure listener")
+        a.stop()
+        assertEquals(AppState.STOPPED, a.state)
+        assertEquals(0, playerListeners())
+        assertTrue("loungeScreenDisconnected" in messages("cl").map { it.first }, "stop ended the session it began")
+    }
+
+    @Test
+    fun stopAfterACancelledStartIsHarmless() = run<Unit> {
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockGet = { it.startsWith("mdxContext.") }
+        val a = newApp(gatedOptions(gated))
+        val terminated = CopyOnWriteArrayList<Throwable>()
+        a.onTerminate = { terminated += it }
+        cancelStartAt(a, gated, 2)
+
+        a.stop()
+
+        assertEquals(AppState.STOPPED, a.state)
+        assertEquals(0, playerListeners())
+        assertTrue(terminated.isEmpty())
+        assertEquals(0, clearCount(), "a stop of an app that never ran does not reset the player")
+    }
+
+    @Test
+    fun aStartCancelledWhileLoadingThePidLeavesTheAppStopped() = run<Unit> {
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockGet = { it == StoreKeys.APP_PID }
+        val a = newApp(gatedOptions(gated))
+
+        val job = cancelStartAt(a, gated, 1)
+
+        assertRolledBack(a, job)
+        gated.gate = null
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+    }
+
+    @Test
+    fun aStartCancelledAfterTheSessionBeganRollsBack() = run<Unit> {
+        // the lounge connect answered and its reader is open; the start waits at the store write that ends the connect
+        fake.refreshIntervalInMillis = 300
+        val gated = GateStore(store)
+        gated.gate = CompletableDeferred()
+        gated.blockSet = { it.startsWith("mdxContext.") }
+        val a = newApp(gatedOptions(gated))
+
+        val job = cancelStartAt(a, gated, 2)
+
+        assertRolledBack(a, job)
+        for (theme in listOf("cl", "m")) {
+            assertTrue(messages(theme).all { it.first == "loungeScreenDisconnected" }, "only the farewell went out on $theme: ${messages(theme).map { it.first }}")
+        }
+        val tokens = tokenRequests()
+        delay(1000)
+        assertEquals(tokens, tokenRequests(), "no refresh timer survived the rollback")
+
+        // nobody reads the lounge any more: a sender that shows up now reaches nothing
+        rpc("cl", "loungeStatus", loungeStatus(listOf(device("late-1")), "late-1"))
+        delay(500)
+        assertTrue(a.connectedSenders.isEmpty() && connects.isEmpty(), "${a.connectedSenders} ${connects.toList()}")
+
+        gated.gate = null
+        a.start()
+        assertEquals(AppState.RUNNING, a.state)
+        a.stop()
+        assertEquals(AppState.STOPPED, a.state)
+        assertEquals(0, playerListeners())
+    }
+
+    @Test
+    fun aStartCancelledDuringTheNetworkConnectRollsBack() = run<Unit> {
+        // a lounge that accepts the connection and never answers: the connect hangs, which is when a stop is most likely
+        java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress()).use { silent ->
+            val a = newApp(AppOptions("T2U test", "T2U", "Test", store), LoungeEndpoints("http://127.0.0.1:${silent.localPort}"))
+            val job = scope.launch { a.start() }
+            awaitUntil(what = "the start to begin") { a.state == AppState.STARTING }
+            delay(400)
+            assertTrue(job.isActive, "the connect is still waiting")
+            job.cancel()
+            job.join()
+
+            assertTrue(job.isCancelled)
+            assertEquals(AppState.STOPPED, a.state)
+            assertEquals(0, playerListeners())
+            assertTrue(a.connectedSenders.isEmpty())
+        }
     }
 }

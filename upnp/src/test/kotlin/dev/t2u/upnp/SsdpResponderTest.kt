@@ -484,4 +484,103 @@ class SsdpResponderTest {
         )
         assertEquals(5, ProbeResult.values().size, "no entry outside the five codes")
     }
+
+    @Test
+    fun restartingTheListenersReportsNoErrorForTheOldReplySocket() {
+        // The reply socket only sends, so the spurious error is a reply that goes out through a socket the restart has
+        // already closed but not yet replaced. Hold the restart inside the factory call for the new socket and search then.
+        val events = ErrorEvents()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val responder = responderWith(events) { b, i ->
+            if (calls.getAndIncrement() == 0) {
+                realReplySocket(b, i)
+            } else {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                realReplySocket(b, i)
+            }
+        }
+        responder.register(SsdpDevice("x", uuidA, "s", "http://127.0.0.1/"))
+        responder.start()
+        val restart = Thread { responder.restartListeners() }.apply { isDaemon = true }
+        try {
+            restart.start()
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "the restart reached the factory")
+            // the listener port is ephemeral, so it is read at each search: the restart reopens it elsewhere
+            fun searchOnce(): List<SsdpMessage> = DatagramSocket(0, loopback).use { client ->
+                val port = responder.boundPorts().getValue("loop")
+                val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $dialSt\r\n\r\n"
+                val bytes = msg.toByteArray()
+                client.send(DatagramPacket(bytes, bytes.size, loopback, port))
+                receiveAll(client, 700)
+            }
+            val during = searchOnce()
+            release.countDown()
+            restart.join(10_000)
+            assertEquals(emptyList(), events.errors.toList(), "no error from the old reply socket while the restart runs")
+            assertEquals(1, during.size, "a search during the restart is still answered: $during")
+
+            val after = searchOnce()
+            assertEquals(1, after.size, "the new reply socket answers")
+            assertEquals(emptyList(), events.errors.toList())
+        } finally {
+            release.countDown()
+            responder.stop()
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------ one device per uuid (16-07)
+
+    @Test
+    fun concurrentRegistersOfOneUuidLeaveOneDevice() {
+        Harness().use { h ->
+            h.responder.start()
+            val threads = 8
+            val rounds = 40
+            val barrier = java.util.concurrent.CyclicBarrier(threads)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+            try {
+                repeat(rounds) { round ->
+                    // every thread registers the one uuid at the same moment; what is left must be one device
+                    val done = (0 until threads).map { t ->
+                        pool.submit {
+                            barrier.await()
+                            h.responder.register(h.device(uuidA, name = "dev-$round-$t"))
+                        }
+                    }
+                    done.forEach { it.get(30, java.util.concurrent.TimeUnit.SECONDS) }
+                    val replies = h.search(dialSt, waitMs = 100)
+                    assertEquals(1, replies.size, "round $round: one device for the one uuid, so one answer: $replies")
+                    h.responder.withdraw(uuidA)
+                }
+            } finally {
+                pool.shutdownNow()
+            }
+        }
+    }
+
+    @Test
+    fun aWithdrawAfterConcurrentRegistersLeavesNoDevice() {
+        Harness().use { h ->
+            h.responder.start()
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+            try {
+                val done = (0 until 4).map { t ->
+                    pool.submit {
+                        for (i in 0 until 100) {
+                            h.responder.register(h.device(uuidA, name = "dev-$t-$i"))
+                            if (i % 10 == 0) h.responder.withdraw(uuidA)
+                        }
+                    }
+                }
+                done.forEach { it.get(30, java.util.concurrent.TimeUnit.SECONDS) }
+            } finally {
+                pool.shutdownNow()
+            }
+            h.responder.withdraw(uuidA)
+            assertEquals(0, h.search(dialSt, waitMs = 400).size, "no stale device after the last withdraw")
+        }
+    }
 }

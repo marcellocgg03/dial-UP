@@ -17,6 +17,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.parser.Parser
 import java.io.IOException
 import java.net.URI
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 data class DeviceDescription(
@@ -84,7 +85,7 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
             val scpd = abs(s.childText("SCPDURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             val event = abs(s.childText("eventSubURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             services["urn:upnp-org:serviceId:$short"] = UpnpService(
-                serviceType = s.childText("serviceType"),
+                serviceType = cleanSpeakerText(s.childText("serviceType")),
                 scpdURL = scpd,
                 controlURL = control,
                 eventSubURL = event,
@@ -93,11 +94,11 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
     }
 
     return DeviceDescription(
-        deviceType = dev.childText("deviceType"),
+        deviceType = cleanSpeakerText(dev.childText("deviceType")),
         friendlyName = cleanSpeakerText(dev.childText("friendlyName")).ifEmpty { "Unknown renderer" },
-        manufacturer = dev.childText("manufacturer"),
-        modelName = dev.childText("modelName"),
-        modelNumber = dev.childText("modelNumber"),
+        manufacturer = cleanSpeakerText(dev.childText("manufacturer")),
+        modelName = cleanSpeakerText(dev.childText("modelName")),
+        modelNumber = cleanSpeakerText(dev.childText("modelNumber")),
         modelDescription = dev.childText("modelDescription"),
         udn = dev.childText("UDN"),
         services = services,
@@ -171,7 +172,7 @@ private fun esc(s: String): String = xmlEsc(stripInvalidXmlChars(s))
 /** H:MM:SS with unpadded hours, floored, never negative (the DIDL duration form; Seek uses HH:MM:SS elsewhere). */
 fun didlHms(sec: Double): String {
     val s = maxOf(0L, Math.floor(sec).toLong())
-    return "%d:%02d:%02d".format(s / 3600, (s / 60) % 60, s % 60)
+    return "%d:%02d:%02d".format(Locale.ROOT, s / 3600, (s / 60) % 60, s % 60)
 }
 
 data class DidlItem(

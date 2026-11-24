@@ -137,6 +137,9 @@ class DialServer(
      */
     internal val failureHandler = CoroutineExceptionHandler { _, e -> asyncFailure.compareAndSet(null, e) }
 
+    /** How [startSuspending] reads the bound port once the engine is started; a seam so a test can hold the start there. */
+    internal var resolveBoundPort: suspend (EmbeddedServer<*, *>) -> Int = { it.engine.resolvedConnectors().first().port }
+
     /** How [stop] stops the engine; a seam so a test can make Ktor's stop throw. */
     internal var engineStop: (EmbeddedServer<*, *>) -> Unit = { it.stop(200, 1000) }
 
@@ -190,9 +193,11 @@ class DialServer(
         }
         try {
             s.start(wait = false)
-            boundPort = s.engine.resolvedConnectors().first().port
+            boundPort = resolveBoundPort(s)
         } catch (e: Throwable) {
             runCatching { s.stop(0, 0) }
+            // A cancelled start is not a bind failure: the engine is stopped above, the cancellation goes on as is.
+            if (e is CancellationException) throw e
             val cause = asyncFailure.get() ?: e
             throw cause as? BindException
                 ?: BindException("DIAL server cannot bind ${config.bindHost}:${config.port}: ${cause.message}").also { it.initCause(cause) }

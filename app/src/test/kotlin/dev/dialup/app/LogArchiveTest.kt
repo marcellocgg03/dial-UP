@@ -76,4 +76,52 @@ class LogArchiveTest {
             assertTrue(flushedLine in body, "the flush ran before the files were read")
         }
     }
+
+    @Test
+    fun `concurrentBuildsLeaveOneCompleteZip`() {
+        val dir = File(tmp, "e5").also { it.mkdirs() }
+        File(dir, "dialup-events.jsonl.1").writeText(line("2026-11-18T08:00:00.000-05:00").repeat(2000))
+        File(dir, "dialup-events.jsonl").writeText(line("2026-11-19T00:00:00.000-05:00").repeat(2000))
+        val expected = listOf("SUMMARY.txt", "dialup-events.jsonl.1", "dialup-events.jsonl")
+        val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val workers = (1..2).map {
+            Thread {
+                start.await()
+                repeat(20) {
+                    try {
+                        val zip = LogArchive.prepare(dir) {}
+                        val names = ZipFile(zip!!).use { z -> z.entries().toList().map { e -> e.name } }
+                        if (names != expected) failures.add("entries $names")
+                    } catch (e: Exception) {
+                        failures.add(e::class.simpleName ?: "?")
+                    }
+                }
+            }.also { it.start() }
+        }
+        start.countDown()
+        workers.forEach { it.join() }
+        assertEquals(emptyList(), failures.toList())
+        val left = dir.list()!!.sorted()
+        assertEquals(listOf("dialup-events.jsonl", "dialup-events.jsonl.1", LogArchive.ZIP_NAME), left)
+    }
+
+    @Test
+    fun `aFailedBuildKeepsThePreviousZip`() {
+        val dir = File(tmp, "e6").also { it.mkdirs() }
+        val log = File(dir, "dialup-events.jsonl").apply { writeText(line("2026-11-19T10:00:00.000-05:00")) }
+        val zip = File(dir, LogArchive.ZIP_NAME)
+        LogArchive.build(listOf(log), zip)
+        val before = zip.readBytes()
+        val missing = File(dir, "gone.jsonl")
+        var threw = false
+        try {
+            LogArchive.build(listOf(log, missing), zip)
+        } catch (_: java.io.IOException) {
+            threw = true
+        }
+        assertTrue(threw, "an unreadable input fails the build")
+        assertTrue(before.contentEquals(zip.readBytes()), "the previous zip is intact")
+        assertEquals(listOf("dialup-events.jsonl", LogArchive.ZIP_NAME), dir.list()!!.sorted())
+    }
 }

@@ -1,3 +1,7 @@
+// SSDP responder (M-SEARCH answers, NOTIFY, device registry) ported from peer-dial (@patrickkfkan/peer-dial, a fork of the original).
+// Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS, All rights reserved.
+// peer-dial is licensed under the GNU Lesser General Public License, version 3.0 or later;
+// fork by Patrick Kan; ported to Kotlin for Tube2U[PnP] and conveyed under GPL-3.0-only.
 package dev.t2u.upnp
 
 import java.io.IOException
@@ -109,7 +113,8 @@ class SsdpResponder(
         lateinit var thread: Thread
     }
 
-    private val devices = CopyOnWriteArrayList<SsdpDevice>()
+    /** The registered devices by uuid: a register or a withdraw of one uuid is one atomic map operation. */
+    private val devices = ConcurrentHashMap<String, SsdpDevice>()
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val bound = ConcurrentHashMap<String, Int>()
 
@@ -129,12 +134,11 @@ class SsdpResponder(
     private val random = SecureRandom()
 
     fun register(device: SsdpDevice) {
-        devices.removeIf { it.uuid == device.uuid }
-        devices.add(device)
+        devices[device.uuid] = device
     }
 
     fun unregister(uuid: String) {
-        devices.removeIf { it.uuid == uuid }
+        devices.remove(uuid)
     }
 
     fun boundPorts(): Map<String, Int> = bound.toMap()
@@ -199,7 +203,7 @@ class SsdpResponder(
      */
     fun announce() {
         if (!announcePolicy()) return
-        sendNotifies("ssdp:alive", devices)
+        sendNotifies("ssdp:alive", devices.values.toList())
     }
 
     /**
@@ -207,9 +211,10 @@ class SsdpResponder(
      * [announcePolicy] says: a byebye only removes cache entries.
      */
     fun withdraw(uuid: String) {
-        val device = devices.firstOrNull { it.uuid == uuid } ?: return
+        val device = devices[uuid] ?: return
         sendNotifies("ssdp:byebye", listOf(device))
-        devices.removeIf { it.uuid == uuid }
+        // only the device the byebye was sent for: a register of this uuid during the send must survive
+        devices.remove(uuid, device)
     }
 
     private fun sendNotifies(nts: String, targets: List<SsdpDevice>) {
@@ -232,7 +237,7 @@ class SsdpResponder(
 
     fun stop() = synchronized(lifecycle) {
         if (!running) return@synchronized
-        sendNotifies("ssdp:byebye", devices)
+        sendNotifies("ssdp:byebye", devices.values.toList())
         running = false
         closeListeners()
         runCatching { replySocket?.close() }
@@ -255,8 +260,10 @@ class SsdpResponder(
      */
     fun restartListeners(): Int = synchronized(lifecycle) {
         if (!running) return@synchronized 0
-        runCatching { replySocket?.close() }
+        // swap first, close after: a reply sent meanwhile uses the old socket while it is open, then the new one
+        val old = replySocket
         replySocket = createReplySocket()
+        runCatching { old?.close() }
         closeListeners()
         openListeners()
         listeners.size
@@ -347,13 +354,13 @@ class SsdpResponder(
             // a note about who is searching never changes the answer
         }
         // searches for types none of our devices answers are not ours to refuse or log
-        if (devices.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return
+        if (devices.values.none { st in SsdpConstants.dialServiceTypes(it.uuid) }) return
         if (!replyPolicy(src.address)) {
             // a refused source never reaches the rate limiter
             events.onDrop(src, "access")
             return
         }
-        for (device in devices) {
+        for (device in devices.values) {
             if (st !in SsdpConstants.dialServiceTypes(device.uuid)) continue
             if (!allowReply(src)) {
                 events.onDrop(src, "rate")

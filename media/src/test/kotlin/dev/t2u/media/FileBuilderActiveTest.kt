@@ -9,6 +9,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** WR-03: the file builder reports running source downloads, which the yt-dlp updater counts as busy. */
@@ -52,6 +53,33 @@ class FileBuilderActiveTest {
             assertEquals(0, builder.activeCount())
         } finally {
             release.countDown()
+            builder.close()
+        }
+    }
+
+    @Test
+    fun theFinalPinIsReleasedWhenTheSourceUnpinThrows() = runBlocking<Unit> {
+        val build = File(dir, "build").also { it.mkdirs() }
+        // the source name is a transient file whose disposal fails: a non-empty directory under that name
+        File(build, ".transient").writeText("$videoId.source\n")
+        File(build, "$videoId.source").also { it.mkdirs() }.let { File(it, "child").writeText("x") }
+        val builder = FileBuilder(
+            dir = build,
+            launcher = PipeLauncher { error("ffmpeg must not start") },
+            resolver = object : VideoResolver {
+                override suspend fun resolve(videoId: String): ResolvedInfo = throw IllegalStateException("resolve failed")
+
+                override fun invalidate(videoId: String) {}
+            },
+            downloader = SourceDownloader { _, _, _ -> },
+            retryDelaysMs = emptyList(),
+        )
+        try {
+            val failure = runCatching { builder.ensure(videoId, "mp4", 0) }.exceptionOrNull()
+            assertTrue(failure != null, "the build fails")
+            assertFalse(builder.isPinned(builder.pathFor(videoId, "mp4", 0)), "the final file must not stay pinned")
+        } finally {
+            File(build, "$videoId.source").deleteRecursively()
             builder.close()
         }
     }

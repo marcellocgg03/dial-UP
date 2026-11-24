@@ -198,7 +198,12 @@ class FileCache(
                     released = true
                     val left = (pins[name] ?: 1) - 1
                     if (left <= 0) pins.remove(name) else pins[name] = left
-                    disposeIfUnused(name)
+                    try {
+                        disposeIfUnused(name)
+                    } catch (e: IOException) {
+                        // the pin is already dropped; the disposal stays requested and runs at the next chance
+                        emit(mapOf("event" to "cache-unpin-failed", "error" to e.javaClass.simpleName))
+                    }
                 }
             }
         }

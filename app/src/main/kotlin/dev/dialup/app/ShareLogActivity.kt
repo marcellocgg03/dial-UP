@@ -31,10 +31,7 @@ class ShareLogActivity : Activity() {
                 val uri = file?.let { FileProvider.getUriForFile(this, authority, it) }
                 runOnUiThread { if (usable()) offer(uri) else finish() }
             } catch (t: Throwable) {
-                ServiceHub.service?.evidence?.event(
-                    "feature-error",
-                    mapOf("where" to "share-log", "error" to t.javaClass.name, "message" to t.message),
-                )
+                ServiceHub.service?.evidence?.event("feature-error", featureErrorFields("share-log", t))
                 runOnUiThread {
                     if (usable()) Toast.makeText(this, "Could not share the log", Toast.LENGTH_SHORT).show()
                     finish()
@@ -64,10 +61,7 @@ class ShareLogActivity : Activity() {
                 startActivity(chooser)
             }
         } catch (t: Throwable) {
-            ServiceHub.service?.evidence?.event(
-                "feature-error",
-                mapOf("where" to "share-log", "error" to t.javaClass.name, "message" to t.message),
-            )
+            ServiceHub.service?.evidence?.event("feature-error", featureErrorFields("share-log", t))
             Toast.makeText(this, "Could not share the log", Toast.LENGTH_SHORT).show()
         }
         finish()
