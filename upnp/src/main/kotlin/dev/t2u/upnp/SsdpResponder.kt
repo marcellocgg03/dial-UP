@@ -255,8 +255,10 @@ class SsdpResponder(
      */
     fun restartListeners(): Int = synchronized(lifecycle) {
         if (!running) return@synchronized 0
-        runCatching { replySocket?.close() }
+        // swap first, close after: a reply sent meanwhile uses the old socket while it is open, then the new one
+        val old = replySocket
         replySocket = createReplySocket()
+        runCatching { old?.close() }
         closeListeners()
         openListeners()
         listeners.size

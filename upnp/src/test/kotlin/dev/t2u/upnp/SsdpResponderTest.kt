@@ -508,8 +508,9 @@ class SsdpResponderTest {
         try {
             restart.start()
             assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "the restart reached the factory")
-            val port = responder.boundPorts().getValue("loop")
+            // the listener port is ephemeral, so it is read at each search: the restart reopens it elsewhere
             fun searchOnce(): List<SsdpMessage> = DatagramSocket(0, loopback).use { client ->
+                val port = responder.boundPorts().getValue("loop")
                 val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $dialSt\r\n\r\n"
                 val bytes = msg.toByteArray()
                 client.send(DatagramPacket(bytes, bytes.size, loopback, port))
