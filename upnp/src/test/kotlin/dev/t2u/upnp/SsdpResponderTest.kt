@@ -484,4 +484,57 @@ class SsdpResponderTest {
         )
         assertEquals(5, ProbeResult.values().size, "no entry outside the five codes")
     }
+
+    // ------------------------------------------------------------------------------------------ one device per uuid (16-07)
+
+    @Test
+    fun concurrentRegistersOfOneUuidLeaveOneDevice() {
+        Harness().use { h ->
+            h.responder.start()
+            val threads = 8
+            val rounds = 40
+            val barrier = java.util.concurrent.CyclicBarrier(threads)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+            try {
+                repeat(rounds) { round ->
+                    // every thread registers the one uuid at the same moment; what is left must be one device
+                    val done = (0 until threads).map { t ->
+                        pool.submit {
+                            barrier.await()
+                            h.responder.register(h.device(uuidA, name = "dev-$round-$t"))
+                        }
+                    }
+                    done.forEach { it.get(30, java.util.concurrent.TimeUnit.SECONDS) }
+                    val replies = h.search(dialSt, waitMs = 100)
+                    assertEquals(1, replies.size, "round $round: one device for the one uuid, so one answer: $replies")
+                    h.responder.withdraw(uuidA)
+                }
+            } finally {
+                pool.shutdownNow()
+            }
+        }
+    }
+
+    @Test
+    fun aWithdrawAfterConcurrentRegistersLeavesNoDevice() {
+        Harness().use { h ->
+            h.responder.start()
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+            try {
+                val done = (0 until 4).map { t ->
+                    pool.submit {
+                        for (i in 0 until 100) {
+                            h.responder.register(h.device(uuidA, name = "dev-$t-$i"))
+                            if (i % 10 == 0) h.responder.withdraw(uuidA)
+                        }
+                    }
+                }
+                done.forEach { it.get(30, java.util.concurrent.TimeUnit.SECONDS) }
+            } finally {
+                pool.shutdownNow()
+            }
+            h.responder.withdraw(uuidA)
+            assertEquals(0, h.search(dialSt, waitMs = 400).size, "no stale device after the last withdraw")
+        }
+    }
 }
