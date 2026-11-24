@@ -16,9 +16,16 @@ const val START_RETRY_MS = 30_000L
 /** Longest exception message that goes into the evidence log (it can carry paths, URLs or device names). */
 private const val MAX_MESSAGE_CHARS = 200
 
+/** [message] cut to 200 characters: the one cut every `feature-error` message and failure message goes through. */
+fun cappedMessage(message: String?): String? = message?.take(MAX_MESSAGE_CHARS)
+
 /** The fields of a `feature-error` event: where it happened, the exception class and the message cut to 200 characters. */
 fun featureErrorFields(where: String, t: Throwable): Map<String, Any?> =
-    mapOf("where" to where, "error" to t.javaClass.name, "message" to t.message?.take(MAX_MESSAGE_CHARS))
+    mapOf("where" to where, "error" to t.javaClass.name, "message" to cappedMessage(t.message))
+
+/** The fields of a `feature-error` event whose message is a text line (a store's warn callback): where and the line cut to 200 characters. */
+fun featureErrorLine(where: String, line: String?): Map<String, Any?> =
+    mapOf("where" to where, "message" to cappedMessage(line))
 
 /**
  * Runs [block]; true when it completed. A failure is passed to [report] (which may itself fail: that is dropped, logging

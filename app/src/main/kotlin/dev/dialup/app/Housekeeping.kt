@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.os.SystemClock
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -94,13 +95,10 @@ class HousekeepingReceiver : BroadcastReceiver() {
                 val late = if (due > 0L) SystemClock.elapsedRealtime() - due else -1L
                 service.evidence.event("housekeeping-alarm", mapOf("lateMs" to late))
                 withTimeoutOrNull(WORK_TIMEOUT_MS) { cast.housekeeping("alarm") }
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
-                runCatching {
-                    service.evidence.event(
-                        "feature-error",
-                        mapOf("where" to "housekeeping-alarm", "error" to t.javaClass.name, "message" to t.message),
-                    )
-                }
+                runCatching { service.evidence.event("feature-error", featureErrorFields("housekeeping-alarm", t)) }
             } finally {
                 runCatching { if (ServiceHub.service === service && service.scope.isActive) HousekeepingAlarm.schedule(app) }
             }
