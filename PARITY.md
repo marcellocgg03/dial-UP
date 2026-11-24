@@ -281,7 +281,7 @@ Deliberate differences from the Node code, each with its reason. Filled during t
 
 - **tube2upnp** (the Node project this app is ported from): GPL-3.0-only. This repository is a derivative work and is released under GPL-3.0-only.
 - **yt-cast-receiver 2.1.0**: MIT, Copyright (c) Patrick Kan. The notice is kept in every `lounge/` file derived from it.
-- **peer-dial**: LGPL-3.0-or-later, Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS. The header is kept in the DIAL files derived from it (`dial/`, `upnp/SsdpResponder.kt`).
+- **peer-dial**: LGPL-3.0-or-later, Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS. The header is kept in the DIAL and SSDP files derived from it (`dial/`, `upnp/SsdpResponder.kt`, `upnp/SsdpMessage.kt`).
 
 ## (f) Upstream commits
 

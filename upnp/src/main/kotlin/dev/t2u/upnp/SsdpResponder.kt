@@ -1,3 +1,7 @@
+// SSDP responder (M-SEARCH answers, NOTIFY, device registry) ported from peer-dial (@patrickkfkan/peer-dial, a fork of the original).
+// Copyright (c) 2015 Louay Bassbouss, Fraunhofer FOKUS, All rights reserved.
+// peer-dial is licensed under the GNU Lesser General Public License, version 3.0 or later;
+// fork by Patrick Kan; ported to Kotlin for Tube2U[PnP] and conveyed under GPL-3.0-only.
 package dev.t2u.upnp
 
 import java.io.IOException
