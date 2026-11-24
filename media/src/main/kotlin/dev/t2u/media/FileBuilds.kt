@@ -211,12 +211,22 @@ class FileBuilder(
             throw e
         } finally {
             proc?.let { p -> withContext(NonCancellable + Dispatchers.IO) { if (p.isAlive) p.destroyForcibly() } }
-            if (!sourceReleased) {
-                cache.discardWhenUnused(src)
-                unpinSrc()
+            // separate try/finally: whatever the source release does, the final file's pin is released
+            try {
+                if (!sourceReleased) {
+                    try {
+                        cache.discardWhenUnused(src)
+                    } finally {
+                        unpinSrc()
+                    }
+                }
+            } finally {
+                try {
+                    unpinFinal()
+                } finally {
+                    cache.forgetDiscardIfMissing(final)
+                }
             }
-            unpinFinal()
-            cache.forgetDiscardIfMissing(final)
         }
         emit("built", videoId, format, startAt)
         return final
