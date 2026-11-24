@@ -292,7 +292,7 @@ class Playlist {
                 }
                 videoId = details?.get("videoId").takeIf { it.isTruthy() }?.text()
             } catch (e: Exception) {
-                emit("eventDetailsParseError", "error" to (e.message ?: e::class.simpleName))
+                emit("eventDetailsParseError", "error" to e::class.simpleName)
                 type = null
             }
         }

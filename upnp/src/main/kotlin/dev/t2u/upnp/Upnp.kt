@@ -17,6 +17,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.parser.Parser
 import java.io.IOException
 import java.net.URI
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 data class DeviceDescription(
@@ -171,7 +172,7 @@ private fun esc(s: String): String = xmlEsc(stripInvalidXmlChars(s))
 /** H:MM:SS with unpadded hours, floored, never negative (the DIDL duration form; Seek uses HH:MM:SS elsewhere). */
 fun didlHms(sec: Double): String {
     val s = maxOf(0L, Math.floor(sec).toLong())
-    return "%d:%02d:%02d".format(s / 3600, (s / 60) % 60, s % 60)
+    return "%d:%02d:%02d".format(Locale.ROOT, s / 3600, (s / 60) % 60, s % 60)
 }
 
 data class DidlItem(
