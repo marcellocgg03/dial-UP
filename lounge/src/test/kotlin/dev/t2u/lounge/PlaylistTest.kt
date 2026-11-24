@@ -208,6 +208,24 @@ class PlaylistTest {
     }
 
     @Test
+    fun aDetailsParseErrorIsLoggedByClassOnly() = runBlocking {
+        val playlist = Playlist()
+        val seen = collectEvents(playlist)
+        playlist.updateByMessage(
+            "setPlaylist",
+            buildJsonObject {
+                put("listId", "RDtest")
+                put("videoIds", "A")
+                put("eventDetails", "{SENDER-TEXT-7f3a")
+            },
+            Client.YT,
+        )
+        val error = seen.first { it["type"] == "eventDetailsParseError" }["error"].toString()
+        assertFalse(error.contains("SENDER-TEXT-7f3a"), error)
+        assertTrue(error.isNotEmpty() && error.none { it.isWhitespace() }, error)
+    }
+
+    @Test
     fun withTheNoOpHandlerNothingIsPreviousOrNext() = runBlocking {
         val playlist = Playlist()
         playlist.updateByMessage("setPlaylist", setPayload(), Client.YT)

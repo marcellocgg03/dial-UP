@@ -277,6 +277,17 @@ class UpnpTest {
     }
 
     @Test
+    fun `didlHmsIgnoresTheDefaultLocale`() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("th-TH-u-nu-thai"))
+            assertEquals("1:02:05", didlHms(3725.0))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
     fun `a failed description fetch names the LOCATION in at most 200 characters`() = runBlocking {
         FakeRenderer().use { fake ->
             fake.start()
