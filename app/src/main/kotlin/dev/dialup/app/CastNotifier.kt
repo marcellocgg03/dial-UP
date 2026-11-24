@@ -106,10 +106,7 @@ internal class CastNotifier(
                 lastNotifiedText = text
                 return
             }
-            events(
-                "feature-error",
-                mapOf("where" to "promote-foreground", "error" to promotionError.javaClass.name, "message" to promotionError.message),
-            )
+            events("feature-error", featureErrorFields("promote-foreground", promotionError))
         }
 
         if (text != lastNotifiedText) {

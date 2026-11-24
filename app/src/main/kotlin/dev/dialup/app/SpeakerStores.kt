@@ -25,19 +25,19 @@ object SpeakerStores {
             instance?.let { return it }
             val dir = File(context.applicationContext.filesDir, "cast")
             val hidden = HiddenSpeakers(dir) { line ->
-                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "hidden", "message" to line))
+                ServiceHub.service?.evidence?.event("feature-error", featureErrorLine("hidden", line))
             }.load()
             // The speakers added by address, probed at every bridge start
             val manual = ManualSpeakers(dir) { line ->
-                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "manual", "message" to line))
+                ServiceHub.service?.evidence?.event("feature-error", featureErrorLine("manual", line))
             }.load()
             // GUI rename (261101-dcg): the names the author gave the renderers, by UDN
             val names = RendererNames(dir) { line ->
-                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "names", "message" to line))
+                ServiceHub.service?.evidence?.event("feature-error", featureErrorLine("names", line))
             }.load()
             // The cards the author pinned to the top of the list
             val pinned = PinnedSpeakers(dir) { line ->
-                ServiceHub.service?.evidence?.event("feature-error", mapOf("where" to "pinned", "message" to line))
+                ServiceHub.service?.evidence?.event("feature-error", featureErrorLine("pinned", line))
             }.load()
             return Instance(hidden, manual, names, pinned).also { instance = it }
         }
