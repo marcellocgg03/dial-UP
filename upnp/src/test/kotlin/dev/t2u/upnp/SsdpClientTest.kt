@@ -52,6 +52,19 @@ class SsdpClientTest {
     }
 
     @Test
+    @DisplayName("an announced max-age is capped at one day")
+    fun maxAgeIsCappedAtOneDay() {
+        assertEquals(86_400, maxAge("max-age=2147483647", 1800))
+        assertEquals(86_400, maxAge("max-age=99999999999", 1800))
+        assertEquals(86_400, maxAge("max-age=99999999999999999999999999", 1800))
+        assertEquals(86_400, maxAge("max-age=86401", 1800))
+        assertEquals(86_400, maxAge("max-age=86400", 1800))
+        assertEquals(1800, maxAge("max-age=1800, no-cache", 0))
+        assertEquals(1800, maxAge(null, 1800))
+        assertEquals(1800, maxAge("no-cache", 1800))
+    }
+
+    @Test
     @DisplayName("buildSearch writes the ssdp.js M-SEARCH text with CRLF line ends")
     fun buildSearchText() {
         val text = String(buildSearch(RENDERER_ST), Charsets.UTF_8)
