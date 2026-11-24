@@ -3,9 +3,13 @@ package dev.t2u.dial
 // Finding 15 (plan 09-34): startSuspending binds like the blocking start() and reads the bound port without runBlocking.
 // GPL-3.0-only.
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
@@ -116,6 +120,37 @@ class DialServerStartSuspendingTest {
             assertNull(server.failure(), "a fresh start forgets the old failure")
         } finally {
             scope.cancel()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun aCancelledStartIsRethrownAsCancellation() = runBlocking<Unit> {
+        val server = DialServer(DialConfig("cancel", "u-cancel", "127.0.0.1", 0)) {}
+        val reached = CompletableDeferred<Unit>()
+        // the engine is started; the wait for its bound port is where a cancel lands
+        server.resolveBoundPort = {
+            reached.complete(Unit)
+            awaitCancellation()
+        }
+        var seen: Throwable? = null
+        val start = launch {
+            try {
+                server.startSuspending()
+            } catch (e: Throwable) {
+                seen = e
+                throw e
+            }
+        }
+        reached.await()
+        start.cancelAndJoin()
+        assertTrue(seen is CancellationException, "the cancel stays a cancellation, got $seen")
+        // the half-started engine was stopped: its port is free again and the instance starts cleanly
+        server.resolveBoundPort = { it.engine.resolvedConnectors().first().port }
+        server.startSuspending()
+        try {
+            assertEquals(200, describe(server.resolvedPort()).statusCode())
+        } finally {
             server.stop()
         }
     }
