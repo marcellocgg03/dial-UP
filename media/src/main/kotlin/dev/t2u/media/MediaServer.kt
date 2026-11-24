@@ -27,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1000,7 +1001,8 @@ class MediaServer(
                         continue
                     }
                     proc = p
-                    val done = withContext(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
+                    // runInterruptible: a stop or a cancel interrupts the wait, so the finally below runs now instead of after BUFFER_TIMEOUT_SEC
+                    val done = runInterruptible(Dispatchers.IO) { p.waitFor(BUFFER_TIMEOUT_SEC, TimeUnit.SECONDS) }
                     if (!done) {
                         killAndWait(p)
                         failures += failureLine(attempt.name, "ffmpeg did not finish within $BUFFER_TIMEOUT_SEC s", attempts.size > 1)
