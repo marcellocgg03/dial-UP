@@ -363,7 +363,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (t: Throwable) {
-            host?.evidence?.event("feature-error", mapOf("where" to "housekeeping", "error" to t.javaClass.name, "message" to t.message))
+            host?.evidence?.event("feature-error", featureErrorFields("housekeeping", t))
         }
         // a yt-dlp update that came due while the timers stalled in Doze runs now; failures never reach the cast path
         updater?.runIfDue()

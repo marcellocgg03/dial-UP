@@ -135,10 +135,7 @@ class BridgeService : Service(), SpikeHost {
 
     private fun reportForegroundFailure(error: Throwable) {
         startForegroundFailed = true
-        evidence.event(
-            "feature-error",
-            mapOf("where" to "startForeground", "error" to error.javaClass.name, "message" to error.message),
-        )
+        evidence.event("feature-error", featureErrorFields("startForeground", error))
         stopSelf()
     }
 
@@ -253,10 +250,7 @@ class BridgeService : Service(), SpikeHost {
                 feature.start(this)
             } catch (t: Throwable) {
                 // a failing feature must not stop the others or the service
-                evidence.event(
-                    "feature-error",
-                    mapOf("where" to "${feature.name}:start", "error" to t.javaClass.name, "message" to t.message),
-                )
+                evidence.event("feature-error", featureErrorFields("${feature.name}:start", t))
             }
         }
         ServiceHub.cast.value = all.filterIsInstance<CastFeature>().firstOrNull()
@@ -267,10 +261,7 @@ class BridgeService : Service(), SpikeHost {
             try {
                 feature.stop()
             } catch (t: Throwable) {
-                evidence.event(
-                    "feature-error",
-                    mapOf("where" to "${feature.name}:stop", "error" to t.javaClass.name, "message" to t.message),
-                )
+                evidence.event("feature-error", featureErrorFields("${feature.name}:stop", t))
             }
         }
     }
@@ -371,7 +362,7 @@ class BridgeService : Service(), SpikeHost {
                 evidence.event("heartbeat", heartbeatFields(link))
                 writeStateFile(state)
             } catch (t: Throwable) {
-                evidence.event("feature-error", mapOf("where" to "heartbeat", "error" to t.javaClass.name, "message" to t.message))
+                evidence.event("feature-error", featureErrorFields("heartbeat", t))
             }
             delay(HEARTBEAT_MS)
         }
@@ -482,7 +473,7 @@ class BridgeService : Service(), SpikeHost {
                 )
             }
         } catch (t: Throwable) {
-            evidence.event("feature-error", mapOf("where" to "exit-info", "error" to t.javaClass.name, "message" to t.message))
+            evidence.event("feature-error", featureErrorFields("exit-info", t))
         }
     }
 
