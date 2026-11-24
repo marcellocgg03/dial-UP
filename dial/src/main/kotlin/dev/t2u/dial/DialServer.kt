@@ -196,6 +196,8 @@ class DialServer(
             boundPort = resolveBoundPort(s)
         } catch (e: Throwable) {
             runCatching { s.stop(0, 0) }
+            // A cancelled start is not a bind failure: the engine is stopped above, the cancellation goes on as is.
+            if (e is CancellationException) throw e
             val cause = asyncFailure.get() ?: e
             throw cause as? BindException
                 ?: BindException("DIAL server cannot bind ${config.bindHost}:${config.port}: ${cause.message}").also { it.initCause(cause) }
