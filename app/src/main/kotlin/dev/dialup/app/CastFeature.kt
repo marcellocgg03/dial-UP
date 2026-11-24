@@ -261,7 +261,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         // persisted record, so a restart or a Wi-Fi flap within 18 hours of an update causes no further one.
         val u = YtDlpUpdater(
             gateway = AndroidYtDlpGateway(host.context, host.evidence),
-            channel = { loadAppConfig(host.context.filesDir).config.ytdlpChannel },
+            channel = { appSettings.data.value.ytdlpChannel ?: loadAppConfig(host.context.filesDir).config.ytdlpChannel },
             onEvent = { host.evidence.event("ytdlp-update", it) },
             elapsedMs = { SystemClock.elapsedRealtime() },
             maxPauseMs = UPDATE_RECHECK_MS,
@@ -552,6 +552,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val b = bridge
         bridge = null
         startedWith = null
+        // state() has no bridge from here on, so it must not keep reporting the config the last start applied
+        configSummaryJson = null
         countJob?.cancel()
         countJob = null
         try {
