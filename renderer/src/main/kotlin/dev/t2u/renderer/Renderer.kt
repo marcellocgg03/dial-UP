@@ -35,6 +35,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -545,7 +546,8 @@ class Renderer(
     }
 
     override suspend fun destroy() {
-        // A load or poll still in flight must not bring the speaker back to life afterwards.
+        // A load or poll still in flight must not bring the speaker back to life afterwards. Set before the lock is
+        // taken, so a revive that is starting a receiver sees it as soon as its start returns and stops that receiver.
         destroyed = true
         terminatedAt = null
         loadSeq.incrementAndGet()
@@ -557,16 +559,24 @@ class Renderer(
         pollLoop.stop()
         slowClearWatch?.cancel()
         idleWatch?.cancel()
-        try {
-            val rec = receiver
-            if (rec != null && rec.status == "running") rec.stop()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            note("warn", "Error stopping receiver: ${e.message}")
-        } finally {
-            receiver = null
-            scope.cancel()
+        // Reading and clearing the receiver waits for a running [reviveIfDue] (it holds reviveLock from its checks to the
+        // assignment of the new receiver), so the revive cannot hand a destroyed renderer a running receiver after this
+        // read the old one. NonCancellable: a caller that is cancelled while it waits still gets its teardown. Nothing
+        // that runs inside reviveIfDue calls destroy, and the lock is not reentrant.
+        withContext(NonCancellable) {
+            reviveLock.withLock {
+                try {
+                    val rec = receiver
+                    if (rec != null && rec.status == "running") rec.stop()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    note("warn", "Error stopping receiver: ${e.message}")
+                } finally {
+                    receiver = null
+                    scope.cancel()
+                }
+            }
         }
     }
 
