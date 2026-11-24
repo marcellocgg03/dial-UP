@@ -148,4 +148,20 @@ class GuardedRunTest {
         runBlocking { job.join() }
         assertEquals(1, finished.get())
     }
+
+    @Test
+    fun featureErrorLineCutsTheMessageAt200Characters() {
+        val fields = featureErrorLine("hidden", "a".repeat(500))
+        assertEquals("hidden", fields["where"])
+        assertEquals(200, (fields["message"] as String).length)
+        assertEquals("short", featureErrorLine("names", "short")["message"])
+        assertNull(featureErrorLine("names", null)["message"])
+    }
+
+    @Test
+    fun featureErrorFieldsStillCutsAt200() {
+        val fields = featureErrorFields("x", IllegalStateException("b".repeat(500)))
+        assertEquals(200, (fields["message"] as String).length)
+        assertEquals("java.lang.IllegalStateException", fields["error"])
+    }
 }
