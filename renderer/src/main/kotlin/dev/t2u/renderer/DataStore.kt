@@ -21,6 +21,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.Locale
 
 private val UNSAFE_UDN_CHARS = Regex("[^A-Za-z0-9_.-]")
 
@@ -34,14 +35,26 @@ private const val NAME_HASH_HEX_CHARS = 16
 internal fun legacyStoreDirName(rendererId: String): String = rendererId.replace(UNSAFE_UDN_CHARS, "_")
 
 /**
+ * True when [name] could be a file the data directory itself holds: every such file ends `.json` (ports.json, hidden.json,
+ * manual.json, names.json, pinned.json) and its atomic-write temp file ends `.json.tmp`. Compared ignoring case, so a
+ * case-insensitive file system cannot map a store directory onto one either.
+ */
+private fun namesADataFile(name: String): Boolean {
+    val lower = name.lowercase(Locale.ROOT)
+    return lower.endsWith(".json") || lower.endsWith(".json.tmp")
+}
+
+/**
  * The directory name of [rendererId]'s store. An id the replacement did not change (every real Sonos id, the fake renderer)
- * keeps its exact name. A changed id gets its sanitised prefix (at most 100 characters), `~` and 16 lowercase hex digits of
+ * keeps its exact name, unless that name could be a data file of the data directory (it ends `.json` or `.json.tmp`, ignoring
+ * case): such an id gets the altered form so a LAN-supplied UDN of `ports.json` can never turn that file into a directory.
+ * Directories already on disk are not moved. A changed id gets its sanitised prefix (at most 100 characters), `~` and 16 lowercase hex digits of
  * the SHA-256 of the id, so two ids that differ only in unsafe characters never share a directory. The `~` is outside the
  * safe class, so no safe id can ever equal an altered id's name.
  */
 internal fun storeDirName(rendererId: String): String {
     val legacy = legacyStoreDirName(rendererId)
-    if (legacy == rendererId) return legacy
+    if (legacy == rendererId && !namesADataFile(legacy)) return legacy
     val digest = MessageDigest.getInstance("SHA-256").digest(rendererId.toByteArray(Charsets.UTF_8))
     val hash = digest.take(NAME_HASH_HEX_CHARS / 2).joinToString("") { "%02x".format(it) }
     return legacy.take(ALTERED_PREFIX_MAX_CHARS) + "~" + hash
