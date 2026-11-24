@@ -485,6 +485,51 @@ class SsdpResponderTest {
         assertEquals(5, ProbeResult.values().size, "no entry outside the five codes")
     }
 
+    @Test
+    fun restartingTheListenersReportsNoErrorForTheOldReplySocket() {
+        // The reply socket only sends, so the spurious error is a reply that goes out through a socket the restart has
+        // already closed but not yet replaced. Hold the restart inside the factory call for the new socket and search then.
+        val events = ErrorEvents()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val responder = responderWith(events) { b, i ->
+            if (calls.getAndIncrement() == 0) {
+                realReplySocket(b, i)
+            } else {
+                entered.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                realReplySocket(b, i)
+            }
+        }
+        responder.register(SsdpDevice("x", uuidA, "s", "http://127.0.0.1/"))
+        responder.start()
+        val restart = Thread { responder.restartListeners() }.apply { isDaemon = true }
+        try {
+            restart.start()
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "the restart reached the factory")
+            val port = responder.boundPorts().getValue("loop")
+            fun searchOnce(): List<SsdpMessage> = DatagramSocket(0, loopback).use { client ->
+                val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $dialSt\r\n\r\n"
+                val bytes = msg.toByteArray()
+                client.send(DatagramPacket(bytes, bytes.size, loopback, port))
+                receiveAll(client, 700)
+            }
+            val during = searchOnce()
+            release.countDown()
+            restart.join(10_000)
+            assertEquals(emptyList(), events.errors.toList(), "no error from the old reply socket while the restart runs")
+            assertEquals(1, during.size, "a search during the restart is still answered: $during")
+
+            val after = searchOnce()
+            assertEquals(1, after.size, "the new reply socket answers")
+            assertEquals(emptyList(), events.errors.toList())
+        } finally {
+            release.countDown()
+            responder.stop()
+        }
+    }
+
     // ------------------------------------------------------------------------------------------ one device per uuid (16-07)
 
     @Test
