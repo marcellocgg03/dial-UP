@@ -243,7 +243,7 @@ class UpnpTest {
         val xml = root(
             "<device><deviceType>$mr\u0007</deviceType><friendlyName>R</friendlyName><UDN>uuid:R</UDN>" +
                 "<manufacturer>Acme\n\u0001Corp" + "m".repeat(300) + "</manufacturer>" +
-                "<modelName>Mod\u0002el</modelName><modelNumber>No\u0003 1</modelNumber>" +
+                "<modelName>Mod\u0002el</modelName><modelNumber>No\u00031</modelNumber>" +
                 "<serviceList>$longAvt</serviceList></device>",
         )
         val d = parseDescription(xml, "http://10.0.0.2/d.xml")

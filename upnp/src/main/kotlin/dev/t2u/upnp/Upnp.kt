@@ -84,7 +84,7 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
             val scpd = abs(s.childText("SCPDURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             val event = abs(s.childText("eventSubURL")).let { if (it.isEmpty() || sameAuthority(it, location)) it else "" }
             services["urn:upnp-org:serviceId:$short"] = UpnpService(
-                serviceType = s.childText("serviceType"),
+                serviceType = cleanSpeakerText(s.childText("serviceType")),
                 scpdURL = scpd,
                 controlURL = control,
                 eventSubURL = event,
@@ -93,11 +93,11 @@ fun parseDescription(xml: String, location: String): DeviceDescription {
     }
 
     return DeviceDescription(
-        deviceType = dev.childText("deviceType"),
+        deviceType = cleanSpeakerText(dev.childText("deviceType")),
         friendlyName = cleanSpeakerText(dev.childText("friendlyName")).ifEmpty { "Unknown renderer" },
-        manufacturer = dev.childText("manufacturer"),
-        modelName = dev.childText("modelName"),
-        modelNumber = dev.childText("modelNumber"),
+        manufacturer = cleanSpeakerText(dev.childText("manufacturer")),
+        modelName = cleanSpeakerText(dev.childText("modelName")),
+        modelNumber = cleanSpeakerText(dev.childText("modelNumber")),
         modelDescription = dev.childText("modelDescription"),
         udn = dev.childText("UDN"),
         services = services,
