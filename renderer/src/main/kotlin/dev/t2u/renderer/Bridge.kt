@@ -522,8 +522,14 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         if (settle > 0) delay(settle)
         startDiscovery(reg)
         launchWatchers(reg)
-        // what still failed is tried again once, instead of waiting for the hold
-        if (settle > 0) handlerScope.launch { delay(settle); reg.retryFailedNow() }
+        // what still failed is tried again at +3 s and +6 s after every start (a cold start right after Wi-Fi returns fails the
+        // same way), instead of waiting out the hold
+        handlerScope.launch {
+            repeat(2) {
+                delay(NETWORK_SETTLE_MS)
+                reg.retryFailedNow()
+            }
+        }
         emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
     }
 
