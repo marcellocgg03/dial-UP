@@ -141,4 +141,9 @@ data class BridgeDeps(
      * each delay (so [Bridge.rebindNetwork] makes up to one more attempt than there are delays); an empty list tries once.
      */
     val mediaRebindBackoffMs: List<Long> = MEDIA_REBIND_BACKOFF_MS,
+    /**
+     * How long a start waits before discovery begins, so the connects it triggers are not aborted by a network that is still
+     * settling (PARITY 97). The app passes [NETWORK_SETTLE_MS] for a start that a network change caused and 0 for the first.
+     */
+    val startSettleMs: Long = 0L,
 )

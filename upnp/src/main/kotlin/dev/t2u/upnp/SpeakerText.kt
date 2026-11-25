@@ -28,6 +28,10 @@ fun cleanSpeakerText(raw: String, max: Int = MAX_SPEAKER_TEXT): String {
     return cleaned.substring(0, cut).trimEnd() + "…"
 }
 
-/** [cleanSpeakerText] of an exception's message, or of its class simple name when it has none (or only blanks). */
-fun speakerFailureText(e: Throwable): String =
-    cleanSpeakerText(e.message ?: "").ifEmpty { cleanSpeakerText(e.javaClass.simpleName) }
+/** [cleanSpeakerText] of an exception's message, or of its class simple name when it has none (or only blanks), followed by its cause's. */
+fun speakerFailureText(e: Throwable): String {
+    val own = cleanSpeakerText(e.message ?: "").ifEmpty { cleanSpeakerText(e.javaClass.simpleName) }
+    val cause = e.cause?.takeIf { it !== e } ?: return own
+    val why = cleanSpeakerText(cause.message ?: "").ifEmpty { cleanSpeakerText(cause.javaClass.simpleName) }
+    return cleanSpeakerText("$own: $why")
+}

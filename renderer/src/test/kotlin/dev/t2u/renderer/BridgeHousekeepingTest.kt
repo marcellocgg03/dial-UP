@@ -81,6 +81,15 @@ class BridgeHousekeepingTest {
     }
 
     @Test
+    fun aSettleWaitHoldsTheStartBeforeDiscoveryAndNoSearchGoesOutMeanwhile() = h.run {
+        val bridge = h.newBridge(startSettleMs = 600)
+        val began = System.nanoTime()
+        bridge.start()
+        val tookMs = (System.nanoTime() - began) / 1_000_000L
+        assertTrue(tookMs >= 600, "start waited the settle time, took $tookMs ms")
+    }
+
+    @Test
     fun theTimerRunsHousekeepingByItselfAndEachRunSearchesForSpeakers() = h.run {
         val bridge = h.newBridge(housekeepingIntervalMs = 300)
         bridge.start()

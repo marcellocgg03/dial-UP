@@ -269,6 +269,7 @@ internal class BridgeHarness(
         names: RendererNames? = null,
         // null: leave BridgeDeps' own default (1 s, 2 s, 4 s) in place
         mediaRebindBackoffMs: List<Long>? = null,
+        startSettleMs: Long = 0L,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -298,6 +299,7 @@ internal class BridgeHarness(
             manualSsdpGraceMs = manualSsdpGraceMs ?: MANUAL_SSDP_GRACE_MS,
             names = names,
             mediaRebindBackoffMs = mediaRebindBackoffMs ?: MEDIA_REBIND_BACKOFF_MS,
+            startSettleMs = startSettleMs,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

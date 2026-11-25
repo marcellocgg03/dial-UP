@@ -72,4 +72,11 @@ class SpeakerTextTest {
         assertEquals("RuntimeException", speakerFailureText(RuntimeException()))
         assertEquals("RuntimeException", speakerFailureText(RuntimeException("\u0007")))
     }
+
+    @Test
+    fun `speakerFailureText names the cause when there is one`() {
+        val out = speakerFailureText(java.io.IOException("Failed to connect to /10.0.0.5:1400", java.net.SocketException("Software caused connection abort")))
+        assertTrue(out.contains("Failed to connect to /10.0.0.5:1400"), out)
+        assertTrue(out.contains("Software caused connection abort"), out)
+    }
 }
