@@ -116,9 +116,15 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     @OptIn(ExperimentalCoroutinesApi::class)
     val speakers: Flow<List<SpeakerUi>> = bridgeState.flatMapLatest { it?.speakers ?: flowOf(emptyList()) }
 
-    /** True while the bridge is inside a multicast renderer-search reply window. */
+    /** True while a start waits for the network to settle: the bridge does not exist yet, but the list is about to be searched. */
+    private val settling = MutableStateFlow(false)
+
+    /** True while the bridge is inside a multicast renderer-search reply window, and during a start's settle wait (no gap in the spinner). */
     @OptIn(ExperimentalCoroutinesApi::class)
-    val searching: Flow<Boolean> = bridgeState.flatMapLatest { it?.searching ?: flowOf(false) }
+    val searching: Flow<Boolean> = combine(
+        bridgeState.flatMapLatest { it?.searching ?: flowOf(false) },
+        settling,
+    ) { searchingNow, waiting -> searchingNow || waiting }
 
     /** The bridge now, for the controls that act on one speaker; null while there is none. */
     fun currentBridge(): Bridge? = bridgeState.value
@@ -539,8 +545,13 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
                 currentNetwork = { runCatching { bridgeNetwork(h) }.getOrNull() },
             ),
         )
-        b.startSuspending()
-        bridge = b
+        settling.value = startSettleMs > 0
+        try {
+            b.startSuspending()
+            bridge = b
+        } finally {
+            settling.value = false
+        }
         startedWith = RestartFields(loaded.config.gapless, loaded.config.outputFormat, loaded.config.prefetch)
         countJob = h.scope.launch {
             combine(b.visibleCastCount, b.castCount) { visible, active -> visible to active }.collect { (visible, active) ->
