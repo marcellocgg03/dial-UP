@@ -15,6 +15,9 @@ internal const val SSDP_REPLY_LOG_WINDOW_MS = 5 * 60_000L
  */
 const val HOUSEKEEPING_INTERVAL_MS = 300_000L
 
+/** The wait before discovery after a network-triggered start, and (again) before speakers that still failed are retried. */
+const val NETWORK_SETTLE_MS = 3_000L
+
 /** SSDP M-SEARCH advertises MX=3, so speakers may defer their replies for up to three seconds. */
 const val SSDP_SEARCH_REPLY_WINDOW_MS = 3_000L
 

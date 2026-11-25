@@ -517,8 +517,13 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         responder = buildResponder(net, policy)
 
         val reg = buildRegistry(config, media, policy)
+        val settle = deps.startSettleMs
+        // after a network change the first connects can be aborted by the OS, and a failed speaker is then held for minutes
+        if (settle > 0) delay(settle)
         startDiscovery(reg)
         launchWatchers(reg)
+        // what still failed is tried again once, instead of waiting for the hold
+        if (settle > 0) handlerScope.launch { delay(settle); reg.retryFailedNow() }
         emit("bridge", "event" to "started", "wifi" to wifi, "mediaPort" to config.mediaPort)
     }
 

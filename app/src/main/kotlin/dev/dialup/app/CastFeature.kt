@@ -18,6 +18,7 @@ import dev.t2u.media.YtDlpSourceDownloader
 import dev.t2u.renderer.Bridge
 import dev.t2u.renderer.BridgeDeps
 import dev.t2u.renderer.BridgeNetwork
+import dev.t2u.renderer.NETWORK_SETTLE_MS
 import dev.t2u.renderer.SpeakerUi
 import dev.t2u.upnp.EventSink
 import dev.t2u.upnp.ListenSpec
@@ -81,6 +82,9 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      */
     @Volatile private var lastStartBindFailure = false
     private var consecutiveBindFailures = 0
+
+    /** The settle wait the next [startBridge] passes to the bridge; set by [startBridgeGuarded]. */
+    private var startSettleMs = 0L
 
     /** The last start ended on a thrown exception (not on a missing Wi-Fi address); set by [startBridgeGuarded]. */
     @Volatile private var lastStartThrew = false
@@ -396,6 +400,8 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
      * a bridge exists afterwards, so a start that found no Wi-Fi is false too. Call with the lifecycle lock held.
      */
     private suspend fun startBridgeGuarded(h: SpikeHost, reason: String): Boolean {
+        // a start that a network change caused waits for the network to settle (PARITY 97); the first start does not
+        startSettleMs = if (reason == "available" || reason == "linkPropertiesChanged" || reason == "lost") NETWORK_SETTLE_MS else 0L
         lastStartBindFailure = false
         lastStartThrew = false
         val completed = runGuarded("start-bridge", { where, t ->
@@ -492,6 +498,7 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
         val b = Bridge(
             network,
             BridgeDeps(
+                startSettleMs = startSettleMs,
                 config = loaded.config,
                 resolver = resolver,
                 launcher = FfmpegRunner(payloads, h.context.cacheDir, h.evidence),
