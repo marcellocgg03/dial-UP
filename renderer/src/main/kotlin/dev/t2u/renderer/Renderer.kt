@@ -344,12 +344,26 @@ class Renderer(
             note("info", "paused for ${ms / 60_000} min: ending the cast")
             // the reset below reports IDLE, which cancels the watch: let go of it first so it does not cancel this very run
             synchronized(idleLock) { idleWatch = null }
+            val startedAt = deps.clock()
             try {
                 receiver?.endCast("paused for ${ms / 60_000} min")
+                note("info", "idle endCast returned after ${deps.clock() - startedAt} ms, status $status")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 note("warn", "Ending an idle cast failed (${e.javaClass.simpleName})")
+            }
+            // endCast can return without ending anything (receiver not running, no session) and nothing re-arms this watch:
+            // a cast left paused would count as casting, and keep its notification, for good
+            if (!destroyed && status == PlayerStatus.PAUSED) {
+                note("warn", "the idle cast was still paused after ending it: resetting the player")
+                try {
+                    reset()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    note("warn", "Resetting an idle cast failed (${e.javaClass.simpleName})")
+                }
             }
         }
     }
