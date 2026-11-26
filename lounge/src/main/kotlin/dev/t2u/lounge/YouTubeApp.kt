@@ -87,6 +87,17 @@ class YouTubeApp(
     @Volatile
     private var activeSession: Session? = null
 
+    /**
+     * Diagnostic: refreshes the lounge token of the session for [theme] now, the call a failed re-bind (HTTP 410) makes.
+     * Returns false when there is no such session or it is not running.
+     */
+    suspend fun refreshSessionNow(theme: String): Boolean {
+        val session = Client.fromTheme(theme)?.let { sessions[it] } ?: return false
+        if (session.status != SessionStatus.RUNNING) return false
+        session.refreshLoungeToken()
+        return true
+    }
+
     /** The previous/next availability last sent to the senders; null when nothing was sent since a start or a session switch. */
     @Volatile
     private var lastNav: NavInfo? = null

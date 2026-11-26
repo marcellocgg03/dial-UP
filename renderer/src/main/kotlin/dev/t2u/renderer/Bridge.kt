@@ -863,6 +863,19 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         if (mode == DialAccessMode.LAN) responder?.announce()
     }
 
+    /**
+     * Diagnostic: refreshes the lounge session of every receiver whose name contains [speaker] (case-insensitive) for the
+     * lounge [theme] (`m` YouTube Music, `cl` YouTube). Returns how many sessions were refreshed.
+     */
+    suspend fun refreshLounge(speaker: String, theme: String): Int {
+        var n = 0
+        for (t in receiverList.toList()) {
+            if (!t.receiver.name.contains(speaker, ignoreCase = true)) continue
+            if (t.receiver.refreshLounge(theme)) n++
+        }
+        return n
+    }
+
     /** Sends ssdp:alive for every receiver again (a no-op in phone mode, where announcing is not allowed). */
     fun reannounce() {
         responder?.announce()

@@ -86,7 +86,7 @@ class Session(
 
     private val bind = BindParams(UUID.randomUUID().toString(), screenName, LoungeConstants.SCREEN_APP, client.theme, brand, model, random)
 
-    private val log = LoungeLog(sink, client.theme)
+    private val log = LoungeLog(sink, client.theme, screenName)
 
     private val formType = "application/x-www-form-urlencoded;charset=UTF-8".toMediaType()
 
