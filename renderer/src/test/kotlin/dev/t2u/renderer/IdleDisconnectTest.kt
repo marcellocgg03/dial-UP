@@ -125,4 +125,22 @@ internal class IdleDisconnectTest {
             assertEquals(listOf(THIRTY_MIN, THIRTY_MIN), g.waits.toList())
         }
     }
+
+    @Test
+    @DisplayName("an endCast that ends nothing does not leave the cast paused for good")
+    fun aNoOpEndCastStillResets() = withFake { fake ->
+        val g = Gate()
+        RendererHarness(fake, pause = g::pause, idleDisconnectMs = { THIRTY_MIN }).use { h ->
+            val r = h.renderer
+            r.init()
+            assertTrue(r.play(Video(A), 0.0))
+            assertTrue(r.pause())
+            waitUntil { g.waits.isNotEmpty() }
+
+            // the harness receiver only records the call, like a receiver that returned without ending anything
+            g.open.complete(Unit)
+            waitUntil { h.receiver.endedCasts.isNotEmpty() }
+            waitUntil { r.status != dev.t2u.lounge.PlayerStatus.PAUSED }
+        }
+    }
 }
