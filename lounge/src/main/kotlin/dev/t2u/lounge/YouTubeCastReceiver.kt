@@ -140,6 +140,12 @@ class YouTubeCastReceiver(
 
     override fun connectedSenders(): List<Sender> = app.connectedSenders
 
+    /** The DIAL friendly name this receiver advertises. */
+    val name: String get() = friendlyName
+
+    /** Diagnostic (see [YouTubeApp.refreshSessionNow]). */
+    suspend fun refreshLounge(theme: String): Boolean = app.refreshSessionNow(theme)
+
     fun onNetworkLost() = app.onNetworkLost()
 
     fun onNetworkReturned() = app.onNetworkReturned()

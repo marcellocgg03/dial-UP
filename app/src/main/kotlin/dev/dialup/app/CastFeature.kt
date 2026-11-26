@@ -69,7 +69,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
     override val name = "cast"
-    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "housekeeping")
+    override val commands: Set<String> = setOf("reannounce", "cast-state", "reload-config", "housekeeping", "lounge-refresh")
 
     private var host: SpikeHost? = null
     private var monitor: NetworkMonitor? = null
@@ -354,6 +354,19 @@ class CastFeature : SpikeFeature, CastCountSource, NetworkStateSource {
             host?.evidence?.event("reload-config", emptyMap())
             scheduleRebind("config")
             CommandReply(true, """{"ok":true,"note":"restarting the bridge; playback is interrupted"}""")
+        }
+        "lounge-refresh" -> {
+            // adb only (the command channel is debug-only): forces the token refresh a failed re-bind (HTTP 410) takes
+            val b = bridge
+            val speaker = args["speaker"].orEmpty()
+            val theme = args["theme"] ?: "m"
+            if (b == null || speaker.isBlank()) {
+                CommandReply(false, """{"error":"needs a running bridge and speaker=<name part> [theme=m|cl]"}""")
+            } else {
+                host?.evidence?.event("lounge-refresh", mapOf("speaker" to speaker, "theme" to theme))
+                host?.scope?.launch { b.refreshLounge(speaker, theme) }
+                CommandReply(true, """{"started":true}""")
+            }
         }
         "housekeeping" -> {
             // trigger adb is never deduped; the reply does not wait for the run

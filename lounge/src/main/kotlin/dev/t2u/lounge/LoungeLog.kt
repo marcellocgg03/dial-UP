@@ -93,10 +93,11 @@ object Redact {
 /**
  * Reports lounge traffic to an [EventSink] for one client [theme]. Kinds: `lounge` (one per message, fields theme, dir
  * rx|tx, aid, name, payload), `lounge-raw` (redacted chunk payloads in pieces of at most 1800 characters: theme, seq,
- * part, parts, data), `lounge-http`, `lounge-session` and `lounge-error`. The session registers its own secrets with
+ * part, parts, data), `lounge-http`, `lounge-session` and `lounge-error`. Every event also carries `speaker`, the screen name
+ * of the receiver (a log of several speakers is otherwise unreadable). The session registers its own secrets with
  * [addSecret] as a last line of defence: any literal occurrence is replaced before an event leaves.
  */
-class LoungeLog(private val sink: EventSink, private val theme: String) {
+class LoungeLog(private val sink: EventSink, private val theme: String, private val speaker: String? = null) {
     private val secrets = ConcurrentHashMap.newKeySet<String>()
     private val rawSeq = AtomicInteger(0)
 
@@ -112,7 +113,7 @@ class LoungeLog(private val sink: EventSink, private val theme: String) {
 
     private fun emit(kind: String, fields: Map<String, Any?>) {
         try {
-            sink.event(kind, fields)
+            sink.event(kind, if (speaker == null) fields else fields + ("speaker" to speaker))
         } catch (_: Exception) {
             // logging must never break the session
         }
