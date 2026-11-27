@@ -125,7 +125,7 @@ fun SpeakerCard(
                     Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("audio-format-$udn"))
                 }
             }
-            // the overflow menu: Rename on every card. Hide is offered while the speaker answers and on the greyed card of a saved one;
+            // the overflow menu: Rename on every card but a Sonos group's (its name comes from its speakers'). Hide is offered while the speaker answers and on the greyed card of a saved one;
             // Delete only on a renderer saved by address.
             var menuOpen by remember { mutableStateOf(false) }
             Box {
@@ -134,14 +134,16 @@ fun SpeakerCard(
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     // GUI rename: on every card, answering or not (the name is kept per UDN)
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        onClick = {
-                            menuOpen = false
-                            onRename()
-                        },
-                        modifier = Modifier.testTag("menu-rename-$udn"),
-                    )
+                    if (!speaker.grouped) {
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            onClick = {
+                                menuOpen = false
+                                onRename()
+                            },
+                            modifier = Modifier.testTag("menu-rename-$udn"),
+                        )
+                    }
                     // pairing needs a running receiver, so only a live card gets the item
                     if (onPair != null) {
                         DropdownMenuItem(

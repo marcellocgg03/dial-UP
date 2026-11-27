@@ -80,6 +80,9 @@ class Renderer(
 
     private val _name = MutableStateFlow<String?>(null)
 
+    /** The Sonos group name in the shown name; null for a speaker on its own. */
+    private val shownGroup = MutableStateFlow<String?>(null)
+
     override var name: String?
         get() = _name.value
         private set(value) {
@@ -129,6 +132,7 @@ class Renderer(
         hasNext = live.hasNext,
         queueHasCurrent = live.queueHasCurrent,
         position = live.position,
+        grouped = shownGroup.value != null,
     )
 
     /**
@@ -154,6 +158,8 @@ class Renderer(
         note = { level, message -> note(level, message) },
         allowLoopback = deps.allowLoopbackSpeakers,
     )
+
+    private val speakerVolume = SpeakerVolume(soap) { deps.groupName(udn) != null }
 
     private val formats = FormatLearner(
         outputFormat = { config.outputFormat },
@@ -484,12 +490,20 @@ class Renderer(
     }
 
     /**
-     * The name the speaker shows: the author's [userName] goes through the name template like the speaker's own name does, so
+     * The name the speaker shows: the name of the Sonos group it coordinates, else the author's [userName], goes through the name template like the speaker's own name does, so
      * the prefix stays in front of it; without a usable one, or before the description is read, the [described] name.
      */
     private fun shownName(userName: String?, described: String, desc: DeviceDescription?): String {
-        val own = userName?.let { cleanRendererName(it) }
+        val group = deps.groupName(udn)
+        shownGroup.value = group
+        val own = group ?: userName?.let { cleanRendererName(it) }
         return if (own != null && desc != null) receiverName(deps.nameTemplate(), own, desc.manufacturer, desc.modelName) else described
+    }
+
+    /** The speaker's Sonos group changed: when its group name differs from the one shown, the rename path runs. */
+    suspend fun refreshGroupName() {
+        if (describedName == null || destroyed) return
+        if (deps.groupName(udn) != shownGroup.value) rename(deps.userName(udn))
     }
 
     /**
@@ -1528,26 +1542,10 @@ class Renderer(
      */
     override suspend fun doSetVolume(volume: Volume): Boolean {
         if (destroyed) return false
-        val levelSet = soap.ok(
-            RENDERING_CONTROL,
-            "SetVolume",
-            "InstanceID" to 0,
-            "Channel" to "Master",
-            "DesiredVolume" to volume.level,
-        )
-        // SetMute is optional in RenderingControl; do not fail the whole call if it is absent.
-        soap.safeCall(RENDERING_CONTROL, "SetMute", "InstanceID" to 0, "Channel" to "Master", "DesiredMute" to if (volume.muted) 1 else 0)
-        return levelSet
+        return speakerVolume.set(volume)
     }
 
-    override suspend fun doGetVolume(): Volume {
-        val level = soap.safeCall(RENDERING_CONTROL, "GetVolume", "InstanceID" to 0, "Channel" to "Master")
-        val mute = soap.safeCall(RENDERING_CONTROL, "GetMute", "InstanceID" to 0, "Channel" to "Master")
-        return Volume(
-            level = if (level != null) level["CurrentVolume"]?.trim()?.toIntOrNull() ?: 0 else 50,
-            muted = mute?.get("CurrentMute")?.trim()?.lowercase() in listOf("1", "true"),
-        )
-    }
+    override suspend fun doGetVolume(): Volume = speakerVolume.get()
 
     /**
      * The position told to the sender. Normally the speaker's own RelTime plus the offset our ffmpeg started at. While

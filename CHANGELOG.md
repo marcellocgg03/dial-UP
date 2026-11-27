@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Grouped Sonos speakers show as one cast target.** When speakers are grouped in the Sonos app, the group is listed once, on its lead speaker, under a name like "Lamp + Deck", and the other speakers leave the cast menu until the group is split. A change shows within about 15 seconds. The volume and mute from the phone apply to the whole group. YouTube and YouTube Music may keep showing the old name. Tested with JVM tests, and on a phone with two speakers: the group listing, a split, group volume and unmuting. Muting from the phone was not checked, because the YouTube app tested says it does not support mute.
+
 ### Fixed
 
 - **A cast of a long track that starts partway in no longer fails with "Renderer fetched the stream but never started playing".** For a track larger than about 10 MiB, YouTube sends the audio slowly (about 30 KB/s) when it is asked for the whole file. A resume at 0:40 made ffmpeg read the first 650 KB through that slow response instead of asking YouTube for the part it needed, took about 21 s, and was ended by the 20 s start limit before the speaker got any audio. ffmpeg now asks for the position it needs directly. Tested with real ffmpeg against a deliberately slow server (the test fails without the change). On a Sonos One a seek to 0:43 of the failing track fetched the needed part in about 140 ms and played; a cast that starts at 0:40 was not run on the phone.

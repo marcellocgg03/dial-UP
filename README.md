@@ -36,6 +36,7 @@ app and the next stable release installs over it.
 - **Caching** (Cached mode): renderer-ready audio files are cached locally so they aren't downloaded with yt-dlp again. Newly downloaded sources are temporary and removed when no longer in use; sources retained by older versions can be removed with "Clear cache". Oldest entries are purged automatically to make space, and tracks too big for the cache aren't kept. Android's "Clear cache" also empties it
 - **Playback modes**: Streaming, Direct or Cached, chosen in Settings; see [Playback modes](#playback-modes) below.
 - **Audio format display**: Optionally show the format currently loaded on each renderer's card. It updates if playback falls back to another format.
+- **Sonos groups**: speakers grouped in the Sonos app are listed as one cast target (for example "Lamp + Deck") on the group's lead speaker. Volume from the phone applies to the whole group.
 - **Hidden renderers**: Renderers can be hidden and will be removed as DIAL targets from the cast menu. Useful for TVs or other devices you don't want listed
 - **Full casting control**: Native casting control from YouTube and YouTube Music, including seeking, synced buffering, volume controls, next/previous track controls, autoplay, shuffle, repeat, and track metadata
 - **Manual code pairing**: if your network blocks YouTube and YouTube Music from discovering renderers, a card's menu has *Pair manually with code*, which shows a code to type under Link with TV code in the app.

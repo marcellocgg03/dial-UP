@@ -146,4 +146,6 @@ data class BridgeDeps(
      * settling (PARITY 97). The app passes [NETWORK_SETTLE_MS] for a start that a network change caused and 0 for the first.
      */
     val startSettleMs: Long = 0L,
+    /** How often the Sonos speakers are asked about their groups. Tests shorten it. */
+    val sonosGroupPollMs: Long = SONOS_GROUP_POLL_MS,
 )

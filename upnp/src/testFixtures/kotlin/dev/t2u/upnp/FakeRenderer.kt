@@ -68,6 +68,14 @@ class FakeState {
 
     /** What GetPositionInfo answers as TrackMetaData instead of [currentMetaData], when not null. */
     @Volatile var trackMetaData: String? = null
+
+    /** The ZoneGroupState document a Sonos-like fake answers GetZoneGroupState with; null: it has no such service (404). */
+    @Volatile var zoneGroupState: String? = null
+
+    /** The group volume and mute of a Sonos-like fake (listed in its description while [zoneGroupState] is set). */
+    @Volatile var groupVolume: Int = 20
+
+    @Volatile var groupMute: Boolean = false
 }
 
 class FakeRenderer(
@@ -180,6 +188,17 @@ class FakeRenderer(
                 if (svc in ACTIONS) call.respondText(scpd(svc), ContentType.Text.Xml) else call.respondText("", status = HttpStatusCode.NotFound)
             }
             post("/ctl/{svc}") { control(call.parameters["svc"] ?: "") }
+            post("/ZoneGroupTopology/Control") {
+                val groups = state.zoneGroupState
+                if (groups == null) {
+                    call.respondText("", status = HttpStatusCode.NotFound)
+                } else {
+                    val body = """<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>""" +
+                        """<u:GetZoneGroupStateResponse xmlns:u="urn:schemas-upnp-org:service:ZoneGroupTopology:1">""" +
+                        "<ZoneGroupState>${xmlEsc(groups)}</ZoneGroupState></u:GetZoneGroupStateResponse></s:Body></s:Envelope>"
+                    call.respondText(body, ContentType.Text.Xml)
+                }
+            }
         }
     }
 
@@ -247,6 +266,10 @@ class FakeRenderer(
             }
             "SetVolume" -> tag(body, "DesiredVolume").toIntOrNull()?.let { state.volume = it }
             "SetMute" -> state.mute = tag(body, "DesiredMute").let { it == "1" || it.equals("true", ignoreCase = true) }
+            "SetGroupVolume" -> tag(body, "DesiredVolume").toIntOrNull()?.let { state.groupVolume = it }
+            "SetGroupMute" -> state.groupMute = tag(body, "DesiredMute") == "1"
+            "GetGroupVolume" -> out = "<CurrentVolume>${state.groupVolume}</CurrentVolume>"
+            "GetGroupMute" -> out = "<CurrentMute>${if (state.groupMute) 1 else 0}</CurrentMute>"
             "GetTransportInfo" ->
                 out = "<CurrentTransportState>${state.transport}</CurrentTransportState>" +
                     "<CurrentTransportStatus>OK</CurrentTransportStatus><CurrentSpeed>1</CurrentSpeed>"
@@ -360,7 +383,8 @@ class FakeRenderer(
             "<manufacturer>Acme</manufacturer><modelName>Box</modelName><UDN>$rootUdn</UDN>" +
             "<deviceList><device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>" +
             "<friendlyName>$rendererName</friendlyName><manufacturer>Acme</manufacturer><modelName>Speaker 1</modelName>" +
-            "<UDN>$rendererUdn</UDN><serviceList>${svc("AVTransport")}${svc("RenderingControl")}${svc("ConnectionManager")}</serviceList>" +
+            "<UDN>$rendererUdn</UDN><serviceList>${svc("AVTransport")}${svc("RenderingControl")}${svc("ConnectionManager")}" +
+            (if (state.zoneGroupState != null) svc("GroupRenderingControl") else "") + "</serviceList>" +
             "</device></deviceList></device></root>"
     }
 

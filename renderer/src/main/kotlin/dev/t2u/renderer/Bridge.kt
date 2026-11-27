@@ -25,12 +25,14 @@ import dev.t2u.media.FileBuilder
 import dev.t2u.media.MediaServer
 import dev.t2u.upnp.RENDERER_ST
 import dev.t2u.upnp.RecentLanSources
+import dev.t2u.upnp.SoapClient
 import dev.t2u.upnp.Ssdp
 import dev.t2u.upnp.SsdpClientEvents
 import dev.t2u.upnp.SsdpDevice
 import dev.t2u.upnp.SsdpEvents
 import dev.t2u.upnp.SsdpMessage
 import dev.t2u.upnp.SsdpResponder
+import dev.t2u.upnp.sonosGroups
 import dev.t2u.upnp.udnFromUsn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +58,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -189,6 +193,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
 
     /** Adding, probing, watching and removing the renderers saved by address. */
     private val manual = ManualSpeakerCoordinator(manualHost, deps)
+
+    /** Which Sonos speakers are grouped; a member is no cast target of its own while its coordinator is one. */
+    private val sonos: SonosGroups = SonosGroups(
+        read = { location -> SoapClient(deps.http, deps.allowLoopbackSpeakers).sonosGroups(location) },
+        present = { udn -> registry?.isRunning(udn) == true || deps.hidden?.contains(udn) == true },
+    )
 
     /**
      * What the receivers advertised, by uuid. The bridge owns this list so a responder built later (a housekeeping repair
@@ -599,13 +609,18 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
                     idleDisconnectMs = deps.idleDisconnectMs ?: { 0L },
                     nameTemplate = deps.namePrefix?.let { prefix -> { nameTemplateFor(prefix()) } } ?: { config.nameTemplate },
                     userName = { deps.names?.get(it) },
+                    groupName = { udn -> sonos.groupName(udn) { deps.names?.get(it) } },
                     allowLoopbackSpeakers = deps.allowLoopbackSpeakers,
                     // one handler per renderer: each speaker keeps its own visitorData and recently-asked ring
                     playlistRequestHandlerFactory = { InnerTubePlaylistRequestHandler(deps.http, deps.innerTubeEndpoints, deps.events) },
                 ),
             )
         }
-        val reg = RendererRegistry(config, ports, factory, deps.events, hidden = { deps.hidden?.contains(it) == true })
+        val reg = RendererRegistry(
+            config, ports, factory, deps.events,
+            hidden = { deps.hidden?.contains(it) == true },
+            grouped = sonos::isMember,
+        )
         registry = reg
         return reg
     }
@@ -671,12 +686,43 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         handlerScope.launch { speakersFlow(reg).collect { _speakers.value = it } }
         // reads the field, so a later replacement of the client is followed
         reg.launchSchedules(handlerScope) { multicastSearch("schedule", markRegistrySearched = false) }
+        launchGroupWatch(reg)
         handlerScope.launch {
             while (true) {
                 delay(deps.housekeepingIntervalMs)
                 housekeeping("timer")
             }
         }
+    }
+
+    /** Reads the Sonos groups at every change of the speaker list and every [BridgeDeps.sonosGroupPollMs]. */
+    private fun launchGroupWatch(reg: RendererRegistry) {
+        val changed = Channel<Unit>(Channel.CONFLATED)
+        handlerScope.launch { reg.renderersFlow.collect { changed.trySend(Unit) } }
+        handlerScope.launch {
+            while (true) {
+                withTimeoutOrNull(deps.sonosGroupPollMs) { changed.receive() }
+                if (networkDown) continue
+                try {
+                    applyGroups(reg)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failure("sonos groups", e)
+                }
+            }
+        }
+    }
+
+    /** Takes group members out of the registry, renames the coordinators and searches for speakers a split released. */
+    private suspend fun applyGroups(reg: RendererRegistry) {
+        val search = sonos.refresh(reg.renderers().associate { it.udn to it.location })
+        // decided first: removing a coordinator changes who counts as a member
+        for (udn in reg.renderers().map { it.udn }.filter { sonos.isMember(it) }) {
+            reg.remove(udn, "grouped", "in the Sonos group of ${sonos.coordinatorOf(udn)}")
+        }
+        reg.renderers().filterIsInstance<Renderer>().forEach { it.refreshGroupName() }
+        if (search) multicastSearch("ungroup")
     }
 
     // ------------------------------------------------------------------------------------------ SSDP wiring
@@ -847,12 +893,12 @@ class Bridge(net: BridgeNetwork, private val deps: BridgeDeps) {
         val saved = deps.manual?.entries ?: return running.distinctUntilChanged()
         val hidden = deps.hidden?.entries ?: flowOf(emptyList())
         val names = deps.names?.entries ?: flowOf(emptyMap())
-        return combine(running, saved, hidden, names) { live, entries, hiddenEntries, namesMap ->
+        return combine(running, saved, hidden, names, sonos.members) { live, entries, hiddenEntries, namesMap, grouped ->
             val savedUdns = entries.mapTo(HashSet()) { it.udn }
             val liveUdns = live.mapTo(HashSet()) { it.udn }
             val hiddenUdns = hiddenEntries.mapTo(HashSet()) { it.udn }
             live.map { if (it.udn in savedUdns) it.copy(manual = true) else it } +
-                savedSpeakerCards(entries.filter { it.udn !in liveUdns }, hiddenUdns, namesMap)
+                savedSpeakerCards(entries.filter { it.udn !in liveUdns }, hiddenUdns + grouped, namesMap)
         }.distinctUntilChanged()
     }
 
