@@ -270,6 +270,8 @@ internal class BridgeHarness(
         // null: leave BridgeDeps' own default (1 s, 2 s, 4 s) in place
         mediaRebindBackoffMs: List<Long>? = null,
         startSettleMs: Long = 0L,
+        // null: leave BridgeDeps' own default (15 s) in place
+        sonosGroupPollMs: Long? = null,
     ): Bridge {
         val network = network(loopback, searchTarget)
         val sink = EventSink { kind, fields -> events.add(kind to fields) }
@@ -300,6 +302,7 @@ internal class BridgeHarness(
             names = names,
             mediaRebindBackoffMs = mediaRebindBackoffMs ?: MEDIA_REBIND_BACKOFF_MS,
             startSettleMs = startSettleMs,
+            sonosGroupPollMs = sonosGroupPollMs ?: SONOS_GROUP_POLL_MS,
         )
         val bridge = Bridge(network, deps)
         bridges.add(bridge)

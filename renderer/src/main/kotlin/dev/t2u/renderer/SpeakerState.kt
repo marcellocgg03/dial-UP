@@ -25,6 +25,8 @@ data class SpeakerUi(
     val position: SpeakerPosition?,
     val online: Boolean = true,
     val manual: Boolean = false,
+    /** The card stands for a Sonos group and shows the group's name. */
+    val grouped: Boolean = false,
 )
 
 /** What a speaker card's buttons can ask of a speaker. There is deliberately no volume action. */

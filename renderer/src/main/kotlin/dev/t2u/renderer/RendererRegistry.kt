@@ -59,6 +59,11 @@ class RendererRegistry(
     private val destroyBudgetMs: Long = DESTROY_BUDGET_MS,
     /** True for a speaker the author hid. Read from any thread; a hidden speaker is never set up, retried or kept. */
     private val hidden: (String) -> Boolean = { false },
+    /**
+     * True for a speaker that is a member of another speaker's Sonos group. Read from any thread; like a hidden one it is
+     * never set up or retried, and [Bridge] takes a running one out.
+     */
+    private val grouped: (String) -> Boolean = { false },
     /** The running-speaker bound: a test seam, production uses the default [MAX_RUNNING]. */
     private val maxRunning: Int = MAX_RUNNING,
 ) {
@@ -308,6 +313,10 @@ class RendererRegistry(
             logGuardOnce(udn, "hidden", location)
             return
         }
+        if (grouped(udn)) {
+            logGuardOnce(udn, "grouped", location)
+            return
+        }
 
         val age = maxAge(headers["CACHECONTROL"], config.defaultMaxAge)
 
@@ -363,7 +372,7 @@ class RendererRegistry(
             if (renderer.init()) {
                 // The author may have hidden the speaker while it was coming up: checked under the lock that registers it.
                 lock.withLock {
-                    if (!hidden(udn)) {
+                    if (!hidden(udn) && !grouped(udn)) {
                         running[udn] = renderer
                         skipped.remove(udn)
                         publish()
@@ -380,7 +389,7 @@ class RendererRegistry(
                         ports.release(port)
                     }
                     holdsPort = false
-                    log("skipped", udn, renderer.name, location, reason = "hidden")
+                    log("skipped", udn, renderer.name, location, reason = if (hidden(udn)) "hidden" else "grouped")
                     if (retryAttempt != null) logRetry("failed", udn, renderer.name, location, null, retryAttempt, "skipped")
                 }
             } else {
@@ -442,7 +451,7 @@ class RendererRegistry(
             val candidates = skipped.entries
                 .filter { (udn, skip) ->
                     !isWaiting(skip, now) && skip.src != null &&
-                        udn !in pending && udn !in running && !hidden(udn)
+                        udn !in pending && udn !in running && !hidden(udn) && !grouped(udn)
                 }
                 .map { (udn, skip) -> Triple(udn, skip, skip.attempts + 1) }
             // Only as many as there is room for, in the order found; the rest stay in [skipped] for a later pass.

@@ -6,6 +6,7 @@ import dev.t2u.lounge.PlayerStatus
 
 internal const val AV_TRANSPORT = "AVTransport"
 internal const val RENDERING_CONTROL = "RenderingControl"
+internal const val GROUP_RENDERING_CONTROL = "GroupRenderingControl"
 internal const val CONNECTION_MANAGER = "ConnectionManager"
 internal const val SERVICE_ID_PREFIX = "urn:upnp-org:serviceId:"
 

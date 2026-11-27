@@ -43,6 +43,11 @@ data class RendererDeps(
      * Matching (hide, manual, ports, the name filter) never uses it.
      */
     val userName: (String) -> String? = { null },
+    /**
+     * The name of the Sonos group the speaker with this UDN coordinates, or null when it is on its own. It replaces the
+     * speaker's own and the author's name; read at setup and on [Renderer.refreshGroupName].
+     */
+    val groupName: (String) -> String? = { null },
     /** The template of a name shown in the cast menu ({name} {manufacturer} {model}), read at setup and on [Renderer.refreshName]. */
     val nameTemplate: () -> String = { config.nameTemplate },
     /** Test seam: speakers on 127/8 are the fakes of the tests. Production refuses a control URL on the phone's own loopback. */
