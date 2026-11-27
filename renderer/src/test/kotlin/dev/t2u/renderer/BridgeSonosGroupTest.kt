@@ -77,7 +77,8 @@ class BridgeSonosGroupTest {
 
         h.fakeRenderer.state.zoneGroupState = state(OTHER, member(OTHER, "Deck"), member(SELF, "Lamp"))
         h.awaitUntil("the member gone") { bridge.speakers.value.isEmpty() }
-        assertTrue(h.events.any { it.second["event"] == "grouped" && it.second["udn"] == udn })
+        // the card goes before the removal is logged: the speaker is destroyed in between
+        h.awaitUntil("the grouped event") { h.events.any { it.second["event"] == "grouped" && it.second["udn"] == udn } }
 
         h.fakeRenderer.state.zoneGroupState = alone
         h.awaitUntil("the speaker back") { bridge.speakers.value.singleOrNull()?.udn == udn }
