@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 ### Added
 
@@ -29,6 +29,29 @@
 - **Only one yt-dlp update runs at a time, and a stuck one gives up after 5 minutes.** The daily update, the bridge's update and Update now could install at the same moment, and an update that never finished blocked every later one. A second install at the same moment is now refused and tried again later, and an update that takes more than 5 minutes counts as failed. Tested with JVM tests that fail without the change.
 - **The Wi-Fi lock is no longer kept after the bridge stops right after a cast.** A background tick could take the Wi-Fi lock again after the bridge had released it, so a stop right after a cast could leave it held. The lock is now released only after the bridge's work has stopped, and cannot be taken again after that. Tested with JVM tests that fail without the change. Checked on a phone with the VPN off: a Stop from the notification during a cast released the Wi-Fi lock right after the service stopped and none was taken after it.
 - **Closing Settings during Check now no longer breaks the other update check.** Two checks that shared one request failed together when the screen that started it closed. The check now finishes on its own and every waiting check gets its result. Tested with JVM tests that fail without the change.
+- **Speakers no longer go missing for five minutes after a Wi-Fi change.** When the bridge started right after the phone joined a network, the system cut off the first connections to some speakers, and each of them was left out of the cast menu until the next five minute check or a Refresh. A start caused by a network change now waits 3 seconds before it searches, speakers that still failed are tried again 3 and 6 seconds after any start, and the log says why a speaker failed. Tested with JVM tests, and on a phone in six app restarts around switching Wi-Fi off and on: the Sonos speakers that failed at first came back within a few seconds. An LG TV on the same network can still fail in the first seconds, sometimes past both tries; the cause is not known.
+- **Moving to another network removes the old network's speakers.** When the phone went straight from home Wi-Fi to another network, such as a car's wireless Android Auto link, the home speakers stayed listed and every command to them timed out. They are now removed and the search starts again on the new network. A move inside the same network works as before. Two networks with the same address range and netmask are still taken for one. Tested with JVM tests; not tried on a phone or in a car.
+- **A Wi-Fi network without an IPv4 address no longer hides the other connections.** The bridge now uses the first Wi-Fi network that has one, and otherwise the phone's hotspot. Tested with JVM tests, and on a phone: with Wi-Fi off the bridge moved to the hotspot and back again. A Wi-Fi network without an IPv4 address was not tried on the phone.
+- **A temporary network error no longer unpairs the phone from the speakers.** A timeout or a server error while a speaker's cast target started replaced its saved identity, so phones no longer recognized it. The identity is now replaced only when YouTube refuses it. Tested with JVM tests, and on a phone: cutting Wi-Fi during a start left every identity unchanged.
+- **A bad cast request no longer interrupts the cast that is playing.** A launch with a missing or malformed pairing code, or one YouTube does not accept, now changes nothing on the speaker. Tested with JVM tests, and on a phone with a malformed code during a cast.
+- **A paused cast that the idle limit could not end is now reset.** If ending it did nothing, because the cast target was not running or had no session left, the cast stayed counted as casting and the notification stayed up. This is a safeguard found by reading the code: the problem was not reproduced, and the change was tested with JVM tests only.
+- **A cast stopped while it was still connecting no longer leaves the speaker unusable until the app restarts.** Switching the bridge off, or a Wi-Fi change, during the connect is now undone completely. Tested with JVM tests, and on a phone by switching the bridge off and Wi-Fi off and on around the start of a cast: the next cast worked each time. The log does not show that the connect itself was interrupted.
+- **The "never started playing" error no longer blames the speaker when no audio was sent.** When the speaker asked for the stream and the media server had nothing to send, the error now says so. Tested with JVM tests.
+- **Smaller fixes.** A phone set to a language with its own digits sends the track length to the speaker in ordinary digits. Two quick uses of Share log can no longer damage the zip. A bridge restart that fails after a rename or prefix change is now written to the log. Tested with JVM tests.
+
+### Changed
+
+- **The event log records more, for less time.** The default level is now debug, five rotated files are kept (about 48 MiB at most), and files older than 7 days are deleted. The log now shows how long stream lookups and downloads took and which speaker each message from YouTube belongs to. Tested with JVM tests.
+- **Share log sends one zip** with every log file, oldest first, and a summary of the time each one covers. Tested with JVM tests.
+
+### Security
+
+- **Another device on the network can no longer remove a speaker.** A speaker's goodbye message now counts only when it comes from the speaker's own address. Tested with JVM tests, and on a phone with a forged message, which was refused while the speaker kept playing.
+- **Devices on the network can no longer add speakers without limit or take over each other's saved data.** At most 256 speakers run and 256 ports are saved, an announced speaker lifetime is capped at one day, and speakers with similar or file-like names no longer share a storage folder or overwrite the saved speaker lists. Tested with JVM tests; installing over the previous version on a phone kept every real speaker's port and identity.
+- **The app only fetches speaker descriptions and sends commands to private network addresses**, never to the phone itself, a host name or a public address, over HTTPS as well. Tested with JVM tests.
+- **LAN server mode answers cast requests only from devices on the Wi-Fi network**, the same rule as discovery, and no longer puts the address a request names into its replies. Tested with JVM tests, and on a phone: a computer on the same network was served in LAN mode and refused in phone mode, and a forged host name did not appear in the reply.
+- **Text from speakers is cleaned and shortened** before it is shown, logged or sent on, and a volume from a phone outside 0 to 100 is brought into that range. Tested with JVM tests, and on a phone with a software speaker that had a very long name.
+- **Pairing codes are removed from the log** also when a request writes them in an unusual way, and errors from the player are logged without their text, which could hold a private link. Tested with JVM tests; the logs from a phone session held no private link.
 
 ## 1.2.2
 
