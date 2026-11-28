@@ -27,7 +27,7 @@ plugins {
 }
 
 // The last stable release's code; see versionCode in defaultConfig.
-val stableVersionCode = 8
+val stableVersionCode = 9
 
 // F-Droid build (-Pfdroid=true, set by F-Droid's recipe): the app never fetches code or looks for its own updates by itself.
 // The one place the F-Droid differences are decided is BuildConfig.FDROID; nothing is patched in the recipe.
@@ -62,7 +62,7 @@ android {
         // stable release and the next stable release (6000) installs over every nightly. versionName of a stable build
         // follows the git tag v<versionName>.
         versionCode = stableVersionCode * 1000 + (nightlyBuild ?: 0)
-        versionName = "1.2.2"
+        versionName = "1.3.0"
         // A nightly (-PnightlyBuild=N from the nightly workflow) keeps the stable version and adds -nightly.<build date>:
         // SemVer ranks a nightly above the stable release it grew from and below the next one, which is what the update
         // check compares. Two nightlies on one day share a name; versionCode still tells them apart.
